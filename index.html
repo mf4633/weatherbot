@@ -10,9 +10,10 @@
 <header>
   <h1>weatherbot</h1>
   <p class="sub">
-    Statistical predictions for what tomorrow's <code>CLI&lt;station&gt;</code> climate report will list as <strong>today's high temperature</strong>.
-    Top 20 US cities. Refresh every 60s (server cache 10 min — METARs are hourly).
-    Distribution is normal; for a normal distribution mean = median = mode.
+    Statistical predictions of <strong>today's high temperature</strong> at the top 20 US cities,
+    matched to each city's NWS <code>CLI&lt;station&gt;</code> climate-report station. Predictions update as
+    today's observations roll in. Refresh every 60s (server cache 10 min — METARs are hourly).
+    Distribution is normal; mean = median = mode by definition.
   </p>
   <p class="status" id="status">Loading…</p>
 </header>

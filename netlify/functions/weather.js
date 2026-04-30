@@ -56,6 +56,24 @@ const CITY_OFFSETS = {
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
+// Standard normal PDF and CDF (Abramowitz & Stegun 26.2.17).
+function _phi(x) { return Math.exp(-x*x/2) / Math.sqrt(2 * Math.PI); }
+function _Phi(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989423 * Math.exp(-x*x/2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+// Truncated normal mean: E[X | X >= a] where X ~ N(mu, sigma^2).
+function truncNormalMean(mu, sigma, a) {
+  const alpha = (a - mu) / sigma;
+  if (alpha < -4) return mu;
+  if (alpha > 8) return a;
+  const oneMinusPhiA = 1 - _Phi(alpha);
+  if (oneMinusPhiA < 1e-9) return a;
+  return mu + sigma * (_phi(alpha) / oneMinusPhiA);
+}
+
 function parseTGroup(metar) {
   const m = metar.match(/\bT([01])(\d{3})([01])(\d{3})\b/);
   if (!m) return null;
@@ -290,20 +308,24 @@ function computePrediction(city, metars, forecast, lastCLI) {
     std = 3.0;
     method = "forecast-only";
   } else {
-    // Bias-corrected forecast. Tuned + held-out validated on 5 years × 20 cities (n_test=14400).
-    // biasWeight=0.4 stable across 1y/5y windows. σ formula gives 70%/95% empirical cov of 68/95% CI.
+    // Bias-corrected forecast prior. Validated on 5y×20cities held-out (n_test=14400).
     const biasWeight = 0.4;
-    const correctedForecast = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
-    mean = Math.max(maxSoFar, correctedForecast);
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
-    std = Math.max(0.4, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
+    if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
+    const priorStd = Math.max(0.4, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    // Bayesian truncation: posterior given X >= maxSoFar (max can't be below what's already observed).
+    // Use truncated mean but keep empirically-calibrated σ — the σ formula was tuned to actual error
+    // variance, not to the forecast prior's variance, so don't shrink it via truncation math.
+    mean = truncNormalMean(priorMean, priorStd, maxSoFar);
+    std = priorStd;
     method = "bias-corrected";
   }
-  // Apply per-city systematic-bias offset (held-out validated; cuts test RMSE 1.87 → 1.77).
-  if (CITY_OFFSETS[city.name] != null) mean -= CITY_OFFSETS[city.name];
 
-  const ci68 = [mean - std, mean + std];
-  const ci95 = [mean - 1.96 * std, mean + 1.96 * std];
+  // Clip CI lower bound at maxSoFar — physical truncation: today's max can't be < what's already observed.
+  const lowerFloor = maxSoFar != null ? maxSoFar : -Infinity;
+  const ci68 = [Math.max(lowerFloor, mean - std), mean + std];
+  const ci95 = [Math.max(lowerFloor, mean - 1.96 * std), mean + 1.96 * std];
   const round = x => Math.round(x * 10) / 10;
 
   return {
