@@ -1,0 +1,10 @@
+# Netlify state
+.netlify
+
+# Cached backtest data (40 MB - regenerate with fetch_data.js)
+data.json
+data_1yr.json
+_check.json
+
+# Node
+node_modules/

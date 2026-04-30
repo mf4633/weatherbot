@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>weatherbot — CLI max-temp predictions, top 20 US cities</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>weatherbot</h1>
+  <p class="sub">
+    Statistical predictions for what tomorrow's <code>CLI&lt;station&gt;</code> climate report will list as <strong>today's high temperature</strong>.
+    Top 20 US cities. Refresh every 60s (server cache 10 min — METARs are hourly).
+    Distribution is normal; for a normal distribution mean = median = mode.
+  </p>
+  <p class="status" id="status">Loading…</p>
+</header>
+
+<main id="grid"></main>
+
+<footer>
+  <p>Source: NWS METAR (aviationweather.gov), NWS forecast API (api.weather.gov), CLI products (forecast.weather.gov).
+     Predictions are heuristic — not an official forecast.</p>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
