@@ -58,5 +58,35 @@ async function load() {
   }
 }
 
+async function loadKalshi() {
+  const tbody = document.getElementById("kalshi-rows");
+  if (!tbody) return;
+  try {
+    const r = await fetch("/api/kalshi", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const top = (j.topBets || []).slice(0, 15);
+    if (!top.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="muted">No +EV bets above 2¢ edge right now.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = top.map((b, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${b.city}</td>
+        <td>${b.bucket || b.ticker || "—"}</td>
+        <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
+        <td>$${b.price.toFixed(2)}</td>
+        <td>${(b.p_model * 100).toFixed(1)}%</td>
+        <td><strong>+$${b.ev.toFixed(2)}</strong></td>
+        <td>${Math.round(b.volume).toLocaleString()}</td>
+      </tr>`).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="muted">Kalshi load error: ${e.message}</td></tr>`;
+  }
+}
+
 load();
+loadKalshi();
 setInterval(load, 60_000);
+setInterval(loadKalshi, 120_000);

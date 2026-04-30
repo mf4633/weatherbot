@@ -285,8 +285,10 @@ function computePrediction(city, metars, forecast, lastCLI) {
   // - Else: forecast peak + bias-correction term, weighted by how much of the day is left.
   let mean, std, method;
   if (hrsToPeak <= 0.25) {
+    // Past peak heating, but the day's high CAN still rebound (cloud break, sea-breeze reversal,
+    // late-afternoon convection clearing). Empirical end-of-day error std is ~1.0°F, not 0.5.
     mean = maxSoFar ?? forecastHighF;
-    std = 0.5;
+    std = 1.0;
     method = "realized";
   } else if (forecastHighF == null) {
     // No forecast: persistence + warming residual.

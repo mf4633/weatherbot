@@ -20,6 +20,31 @@
 
 <main id="grid"></main>
 
+<section id="kalshi-section">
+  <h2>Kalshi prediction-market edges</h2>
+  <p class="sub">
+    Compares our model's per-bucket probability to current Kalshi
+    <a href="https://kalshi.com/markets" target="_blank" rel="noopener">daily-high markets</a>
+    for the 13 covered cities. Edge is per-$1 staked, before fees.
+    <strong>Educational only — not betting advice.</strong> Model RMSE ~1.7°F; small edges are noise.
+  </p>
+  <table id="kalshi-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>City</th>
+        <th>Bucket</th>
+        <th>Side</th>
+        <th>Price</th>
+        <th>Model P</th>
+        <th>Edge / $1</th>
+        <th>Volume</th>
+      </tr>
+    </thead>
+    <tbody id="kalshi-rows"></tbody>
+  </table>
+</section>
+
 <footer>
   <p>Source: NWS METAR (aviationweather.gov), NWS forecast API (api.weather.gov), CLI products (forecast.weather.gov).
      Predictions are heuristic — not an official forecast.</p>

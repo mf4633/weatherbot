@@ -6,6 +6,8 @@ data.json
 data_1yr.json
 _check.json
 _h.json
+_k.json
+_kseries.json
 
 # Node
 node_modules/

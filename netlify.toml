@@ -14,3 +14,8 @@
   from = "/api/residuals"
   to = "/.netlify/functions/residuals"
   status = 200
+
+[[redirects]]
+  from = "/api/kalshi"
+  to = "/.netlify/functions/kalshi"
+  status = 200
