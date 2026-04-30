@@ -28,31 +28,22 @@ const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
 let CACHE = { ts: 0, data: null };
 const CACHE_MS = 10 * 60 * 1000;
 
-// Per-city mean-bias offsets fit on 5-year (~1640-day) train window, validated on held-out 180 days.
-// Held-out RMSE 1.68°F, 68% cov 70%, 95% cov 95%. Trend-vs-time analysis showed no significant
-// warming-related residual drift (slope -0.04°F/yr); detrending did not improve RMSE.
-const CITY_OFFSETS = {
-  "New York":             0.39,
-  "Los Angeles":          0.24,
-  "Chicago":              0.28,
-  "Houston":              0.86,
-  "Phoenix":              0.15,
-  "Philadelphia":         0.00,
-  "San Antonio":          1.10,
-  "San Diego":            0.21,
-  "Dallas-Fort Worth":    0.39,
-  "Jacksonville":         0.27,
-  "Austin":               0.80,
-  "Tampa":                0.64,
-  "San Jose":            -0.98,
-  "Columbus":             0.88,
-  "Charlotte":            0.09,
-  "Indianapolis":         0.29,
-  "Seattle":              0.02,
-  "Denver":               0.01,
-  "Washington DC":        0.53,
-  "Boston":               0.64
+// Per-city mean-bias offsets — fit on GFS-vs-ERA5 5-year backtest, then HALVED for production
+// because deployed model uses NWS forecasts (forecaster-corrected) not raw GFS.
+// Treat as interim until ≥30 days of NWS-vs-CLI residuals are logged via /api/logger.
+const OFFSET_SCALE = 0.5;
+const CITY_OFFSETS_RAW = {
+  "New York":             0.39, "Los Angeles":          0.24, "Chicago":              0.28,
+  "Houston":              0.86, "Phoenix":              0.15, "Philadelphia":         0.00,
+  "San Antonio":          1.10, "San Diego":            0.21, "Dallas-Fort Worth":    0.39,
+  "Jacksonville":         0.27, "Austin":               0.80, "Tampa":                0.64,
+  "San Jose":            -0.98, "Columbus":             0.88, "Charlotte":            0.09,
+  "Indianapolis":         0.29, "Seattle":              0.02, "Denver":               0.01,
+  "Washington DC":        0.53, "Boston":               0.64
 };
+const CITY_OFFSETS = Object.fromEntries(
+  Object.entries(CITY_OFFSETS_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
+);
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
