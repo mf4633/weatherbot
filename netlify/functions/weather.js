@@ -280,17 +280,11 @@ function computePrediction(city, metars, forecast, lastCLI) {
     };
   }
 
-  // Posterior mean (Bayesian-style blend).
-  // - Past peak: lock to max-so-far (already realized).
-  // - Else: forecast peak + bias-correction term, weighted by how much of the day is left.
+  // Posterior: forecast prior + bias-correction, then truncated at maxSoFar.
+  // σ shrinks smoothly as hrsToPeak → 0; no special "realized" mode (was creating a
+  // discontinuous jump and over-tight CIs at peak).
   let mean, std, method;
-  if (hrsToPeak <= 0.25) {
-    // Past peak heating, but the day's high CAN still rebound (cloud break, sea-breeze reversal,
-    // late-afternoon convection clearing). Empirical end-of-day error std is ~1.0°F, not 0.5.
-    mean = maxSoFar ?? forecastHighF;
-    std = 1.0;
-    method = "realized";
-  } else if (forecastHighF == null) {
+  if (forecastHighF == null) {
     // No forecast: persistence + warming residual.
     mean = (maxSoFar ?? currentTemp) + Math.min(hrsToPeak, 6) * 1.2;
     std = 4.5;
@@ -306,7 +300,9 @@ function computePrediction(city, metars, forecast, lastCLI) {
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
-    const priorStd = Math.max(0.4, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    // σ floor bumped 0.4 → 0.8: empirical end-of-day RMSE is ~1.0°F, so a CI narrower
+    // than ±0.8°F understates remaining uncertainty (cloud break, late convection, etc.)
+    const priorStd = Math.max(0.8, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
     // Bayesian truncation: posterior given X >= maxSoFar (max can't be below what's already observed).
     // Use truncated mean but keep empirically-calibrated σ — the σ formula was tuned to actual error
     // variance, not to the forecast prior's variance, so don't shrink it via truncation math.
