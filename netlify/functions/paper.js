@@ -29,9 +29,10 @@ export default async () => {
 
   const byCity = {};
   for (const s of settled) {
-    if (!byCity[s.targetCli]) byCity[s.targetCli] = { cli: s.targetCli, city: s.city, n: 0, wins: 0, staked: 0, pnl: 0 };
+    if (!byCity[s.targetCli]) byCity[s.targetCli] = { cli: s.targetCli, city: s.city, n: 0, wins: 0, sold: 0, staked: 0, pnl: 0 };
     byCity[s.targetCli].n += 1;
     if (s.outcome === "WIN") byCity[s.targetCli].wins += 1;
+    if (s.outcome === "SOLD") byCity[s.targetCli].sold += 1;
     byCity[s.targetCli].staked += s.stake_dollars;
     byCity[s.targetCli].pnl += s.pnl_dollars;
   }
@@ -41,6 +42,8 @@ export default async () => {
     roi_pct: c.staked ? Math.round(c.pnl / c.staked * 1000) / 10 : 0
   })).sort((a, b) => b.pnl - a.pnl);
 
+  const totalSold = settled.filter(s => s.outcome === "SOLD").length;
+
   return new Response(JSON.stringify({
     state: {
       ...state,
@@ -48,7 +51,8 @@ export default async () => {
       max_concurrent,
       open_count: open.length,
       open_stake_dollars: Math.round(openStake * 100) / 100,
-      cash_free: Math.round((state.bankroll - openStake) * 100) / 100
+      cash_free: Math.round((state.bankroll - openStake) * 100) / 100,
+      n_sold_total: totalSold
     },
     by_city: cityAgg,
     open_bets: open,

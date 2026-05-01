@@ -187,6 +187,14 @@ export default async () => {
       await settledStore.setJSON(`${bet.betId}.json`, result);
       await openStore.delete(`${bet.betId}.json`).catch(() => {});
       openIds.delete(bet.betId);
+      const idx = openBets.findIndex(x => x.betId === bet.betId);
+      if (idx >= 0) openBets.splice(idx, 1);
+      // For settled (natural) outcomes, count the WIN bankroll change as: stake LOSS or stake×(1-p)/p WIN.
+      // We need to ALSO refund the originally-staked $1: in the running bankroll, an open bet was treated
+      // as if the cash was tied up. On settlement, refund stake + add net pnl. Net effect = bankroll +=
+      // stake + pnl (on win) or 0 (on loss, since stake was already "spent" when bet was placed).
+      // But our placement step doesn't actually decrement bankroll — bankroll is only updated at settlement.
+      // So on natural settlement: bankroll += pnl (correct).
       state.bankroll = Math.round((state.bankroll + result.pnl_dollars) * 100) / 100;
       state.n_bets_total += 1;
       if (result.outcome === "WIN") state.n_wins_total += 1;
@@ -196,20 +204,74 @@ export default async () => {
     }
   }
 
+  // ===== (B0) Sell would-be losers =====
+  // For each open bet, look up the same market in the latest /api/kalshi snapshot.
+  // If we're underwater AND our updated model now expects a net loss, sell at current bid.
+  // Never sell winners (sell_proceeds > stake_paid). Never sell underwater positions where
+  // the model still expects to recover.
+  let kalshiData = null;
+  try { kalshiData = await fetchInternal("/api/kalshi"); } catch (e) { kalshiData = null; }
+
+  const sales = [];
+  if (kalshiData?.cities && openBets.length) {
+    const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
+    for (const bet of [...openBets]) {  // copy because we mutate via openIds and openStore
+      const cd = cityIndex[bet.city];
+      if (!cd?.buckets) continue;
+      const bucket = cd.buckets.find(b => b.ticker === bet.ticker);
+      if (!bucket) continue;
+      // Current model P for OUR side.
+      const pNow = bet.side === "YES" ? bucket.p_model : (1 - bucket.p_model);
+      // Current sell price = the bid for our side (what someone will pay us right now).
+      const sellPrice = bet.side === "YES" ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+      if (sellPrice == null || sellPrice <= 0) continue;
+      const contracts = bet.stake_dollars / bet.price;
+      const sellProceeds = contracts * sellPrice;
+      const holdEV = contracts * pNow;  // contracts × $1 × pNow
+      // Holding a winner: don't sell.
+      if (sellProceeds >= bet.stake_dollars) continue;
+      // Underwater but model still recovers: hold.
+      if (holdEV >= bet.stake_dollars) continue;
+      // Underwater AND model expects net loss: sell.
+      const realizedPnl = sellProceeds - bet.stake_dollars;
+      const sale = {
+        ...bet,
+        outcome: "SOLD",
+        sell_price: sellPrice,
+        sell_proceeds_dollars: Math.round(sellProceeds * 100) / 100,
+        pnl_dollars: Math.round(realizedPnl * 100) / 100,
+        modelP_at_sale: Math.round(pNow * 1000) / 1000,
+        soldAtUTC: now.toISOString(),
+        sellReason: `holdEV $${holdEV.toFixed(2)} < stake $${bet.stake_dollars}`
+      };
+      await settledStore.setJSON(`${bet.betId}.json`, sale);
+      await openStore.delete(`${bet.betId}.json`).catch(() => {});
+      openIds.delete(bet.betId);
+      const idx = openBets.findIndex(x => x.betId === bet.betId);
+      if (idx >= 0) openBets.splice(idx, 1);
+      // Bankroll math: bankroll is "total wealth" (open stake counts as part of it).
+      // Placement doesn't decrement bankroll. So on sell, bankroll change = realized P&L.
+      state.bankroll = Math.round((state.bankroll + realizedPnl) * 100) / 100;
+      state.n_sold = (state.n_sold || 0) + 1;
+      // Stake is counted at exit (settlement OR sale), not at placement.
+      state.total_staked = Math.round((state.total_staked + bet.stake_dollars) * 100) / 100;
+      state.total_pnl = Math.round((state.total_pnl + realizedPnl) * 100) / 100;
+      sales.push(`SOLD ${bet.city} ${bet.ticker} ${bet.side}: $${realizedPnl.toFixed(2)} (sell $${sellPrice.toFixed(2)}, modelP ${(pNow*100).toFixed(0)}%)`);
+    }
+  }
+
   // ===== (B) Paper-trading bet placement =====
-  // Compute spare capacity at current bankroll.
+  // openBets has been spliced down by both settlement and sale loops, so openBets.length
+  // is the live count.
   const bankroll = state.bankroll;
   const bet_size = Math.max(1, bankroll / 20);
   const currentOpenStake = openBets.reduce((a, b) => a + (b.stake_dollars || 0), 0);
   const cashAvailable = bankroll - currentOpenStake;
-  const remainingByCount = MAX_CONCURRENT - (openCount - settlements.length);
+  const remainingByCount = MAX_CONCURRENT - openBets.length;
   const remainingByCash = Math.floor(cashAvailable / bet_size);
   const spareCapacity = Math.max(0, Math.min(remainingByCount, remainingByCash));
 
-  let kalshiData = null;
-  if (spareCapacity > 0) {
-    try { kalshiData = await fetchInternal("/api/kalshi"); } catch (e) { kalshiData = null; }
-  }
+  // kalshiData already fetched above for sell-evaluation; reuse here.
   const fr = kalshiData?.freshness || {};
   const skipFresh = !!(fr.cacheStale || fr.forecastStale);
 
