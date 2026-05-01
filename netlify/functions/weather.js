@@ -47,6 +47,34 @@ const CITY_OFFSETS = Object.fromEntries(
   Object.entries(CITY_OFFSETS_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
 );
 
+// LOW-temp per-city offsets — fit on 1y backtest with hrs-to-trough σ formula.
+// Held-out TEST RMSE 0.91°F. Subtract from prediction (positive = model warm-biased on low).
+const CITY_OFFSETS_LOW_RAW = {
+  "New York":             0.24,
+  "Los Angeles":          0.03,
+  "Chicago":              0.24,
+  "Houston":              0.10,
+  "Phoenix":              0.46,
+  "Philadelphia":         0.24,
+  "San Antonio":          0.06,
+  "San Diego":            0.46,
+  "Dallas-Fort Worth":    0.08,
+  "Jacksonville":        -0.21,
+  "Austin":               0.05,
+  "Tampa":               -0.06,
+  "San Jose":             0.21,
+  "Columbus":            -0.19,
+  "Charlotte":           -0.11,
+  "Indianapolis":         0.08,
+  "Seattle":              0.29,
+  "Denver":              -0.10,
+  "Washington DC":        0.24,
+  "Boston":              -0.29
+};
+const CITY_OFFSETS_LOW = Object.fromEntries(
+  Object.entries(CITY_OFFSETS_LOW_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
+);
+
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
 // Standard normal PDF and CDF (Abramowitz & Stegun 26.2.17).
@@ -120,6 +148,14 @@ function hoursToPeak(tz, now = new Date()) {
   const decimalHr = p.hour + p.minute / 60;
   if (decimalHr >= 15) return 0;
   return Math.max(0, 15 - decimalHr);
+}
+// For LOW prediction: hours until typical morning trough (~6 AM local).
+// After 7 AM local, trough is essentially realized — return 0.
+function hoursToTrough(tz, now = new Date()) {
+  const p = localDateParts(tz, now);
+  const decimalHr = p.hour + p.minute / 60;
+  if (decimalHr >= 7) return 0;
+  return Math.max(0, 6 - decimalHr);
 }
 
 async function fetchMetars() {
@@ -397,15 +433,18 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   const ci95 = [Math.max(lowerFloor, mean - 1.96 * std), mean + 1.96 * std];
   const round = x => Math.round(x * 10) / 10;
 
-  // === LOW temperature prediction (mirror of HIGH) ===
-  // The day's low can't be ABOVE today's already-observed minimum (truncation from above).
-  // Same bias correction logic but the σ formula uses the same params (probably similar errors).
+  // === LOW temperature prediction ===
+  // Backtest-tuned (1y, 20 cities, n_test=10800): biasWeight=0.5, tighter σ formula,
+  // separate per-city offsets. TEST RMSE 0.91°F (vs HIGH 1.31 — LOW is easier).
+  // Uses hrsToTrough (~6 AM local) instead of hrsToPeak.
+  const hrsToTrough_ = hoursToTrough(city.tz, now);
   let lowMean = null, lowStd = null, lowMethod = null;
   if (forecastLowF != null && minSoFar != null) {
-    const biasWeight = 0.4;
+    const biasWeight = 0.5;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
-    const priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
-    const priorLowStd = Math.max(0.4, 0.7 + 0.08 * hrsToPeak + 0.10 * biasMag);
+    let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
+    if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
+    const priorLowStd = Math.max(0.4, 0.5 + 0.05 * hrsToTrough_ + 0.05 * biasMag);
     // Truncate from above: low <= minSoFar.
     lowMean = truncNormalMeanUpper(priorLowMean, priorLowStd, minSoFar);
     lowStd = priorLowStd;
@@ -426,12 +465,18 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   const lowCi95 = lowMean != null
     ? [lowMean - 1.96 * lowStd, Math.min(upperFloor, lowMean + 1.96 * lowStd)] : null;
 
+  // Last METAR observation time for staleness diagnostics.
+  const lastMetarTime = todayObs.length ? todayObs[todayObs.length - 1].ts.toISOString() : null;
+  const lastMetarAgeMin = lastMetarTime ? Math.round((Date.now() - new Date(lastMetarTime).getTime()) / 60000) : null;
+
   return {
     name: city.name,
     cli: city.cli,
     station: city.station,
     tz: city.tz,
     currentTemp: currentTemp != null ? round(currentTemp) : null,
+    lastMetarTime,
+    lastMetarAgeMin,
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     forecastHighF,
@@ -449,6 +494,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     minSoFar: minSoFar != null ? round(minSoFar) : null,
     forecastLowF,
     lowMethod,
+    hrsToTrough: Math.round(hrsToTrough_ * 10) / 10,
     lowMean: lowMean != null ? round(lowMean) : null,
     lowStd: lowStd != null ? Math.round(lowStd * 100) / 100 : null,
     lowCi68: lowCi68 ? [round(lowCi68[0]), round(lowCi68[1])] : null,

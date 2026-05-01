@@ -31,25 +31,25 @@
   <p id="kalshi-freshness" class="sub"></p>
   <p class="sub" style="margin-top:8px">
     Sorted by <strong>Kelly fraction</strong> — optimal stake as % of bankroll given probability + price.
-    Combines edge and confidence: big edge on a near-50¢ bucket beats huge edge on a 1¢ long-shot.
-    Bet half the Kelly value to protect against model error (RMSE 1.7°F means probabilities have real uncertainty).
+    Bet half the Kelly value to protect against model error.
   </p>
-  <table id="kalshi-table">
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>City</th>
-        <th>Model μ ± σ</th>
-        <th>Bucket</th>
-        <th>Side</th>
-        <th>Price</th>
-        <th>Model P</th>
-        <th>Edge / $1</th>
-        <th>Half-Kelly</th>
-        <th>Volume</th>
-      </tr>
-    </thead>
-    <tbody id="kalshi-rows"></tbody>
+
+  <h3>HIGH temperature bets</h3>
+  <table id="kalshi-table-high" class="kalshi-table">
+    <thead><tr>
+      <th>#</th><th>City</th><th>Model μ±σ</th><th>Bucket</th><th>Side</th>
+      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Half-Kelly</th><th>Volume</th>
+    </tr></thead>
+    <tbody id="kalshi-rows-high"></tbody>
+  </table>
+
+  <h3>LOW temperature bets</h3>
+  <table id="kalshi-table-low" class="kalshi-table">
+    <thead><tr>
+      <th>#</th><th>City</th><th>Model μ±σ</th><th>Bucket</th><th>Side</th>
+      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Half-Kelly</th><th>Volume</th>
+    </tr></thead>
+    <tbody id="kalshi-rows-low"></tbody>
   </table>
 </section>
 

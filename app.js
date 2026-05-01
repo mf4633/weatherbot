@@ -74,22 +74,16 @@ function renderFreshness(f) {
   el.textContent = `${cacheStr} · ${fcStr} · ${note}`;
 }
 
-async function loadKalshi() {
-  const tbody = document.getElementById("kalshi-rows");
+function renderKalshiRows(bets, tbodyId, colspan) {
+  const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
-  try {
-    const r = await fetch("/api/kalshi", { cache: "no-store" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = await r.json();
-    renderFreshness(j.freshness);
-    const top = (j.topBets || []).slice(0, 15);
-    if (!top.length) {
-      tbody.innerHTML = `<tr><td colspan="8" class="muted">No +EV bets above 2¢ edge right now.</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = top.map((b, i) => {
-      const muSig = (b.modelMean != null) ? `${b.modelMean.toFixed(1)} ± ${b.modelStd.toFixed(1)}` : "—";
-      return `
+  if (!bets.length) {
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="muted">No +EV bets above 2¢ edge right now.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = bets.map((b, i) => {
+    const muSig = (b.modelMean != null) ? `${b.modelMean.toFixed(1)} ± ${b.modelStd.toFixed(1)}` : "—";
+    return `
       <tr>
         <td>${i + 1}</td>
         <td>${b.city}</td>
@@ -102,9 +96,25 @@ async function loadKalshi() {
         <td><strong>${(b.halfKelly * 100).toFixed(1)}%</strong></td>
         <td>${Math.round(b.volume).toLocaleString()}</td>
       </tr>`;
-    }).join("");
+  }).join("");
+}
+
+async function loadKalshi() {
+  try {
+    const r = await fetch("/api/kalshi", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    renderFreshness(j.freshness);
+    const top = j.topBets || [];
+    const highBets = top.filter(b => b.variable === "high" || !b.variable).slice(0, 15);
+    const lowBets = top.filter(b => b.variable === "low").slice(0, 15);
+    renderKalshiRows(highBets, "kalshi-rows-high", 10);
+    renderKalshiRows(lowBets, "kalshi-rows-low", 10);
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="8" class="muted">Kalshi load error: ${e.message}</td></tr>`;
+    for (const id of ["kalshi-rows-high", "kalshi-rows-low"]) {
+      const t = document.getElementById(id);
+      if (t) t.innerHTML = `<tr><td colspan="10" class="muted">Kalshi load error: ${e.message}</td></tr>`;
+    }
   }
 }
 
