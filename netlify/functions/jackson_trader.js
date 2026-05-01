@@ -11,6 +11,7 @@
 // No deposits, withdrawals, or transfers under any circumstance.
 
 import { kalshiAuthedFetch, getBalance, getPositions } from "./jackson.js";
+import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const MAX_CONCURRENT = 20;
@@ -78,38 +79,59 @@ export default async () => {
   }
 
   const placements = [], sales = [], errors = [];
+  const ledgerStore = getStore("jackson_open_bets");
   try {
-    // 1. Read live state from Kalshi.
-    const [balance, positionsResp, kalshiData, weatherData] = await Promise.all([
+    // 1. Read live state from Kalshi + bot ledger.
+    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }] = await Promise.all([
       getBalance(),
       getPositions(),
       fetchInternal("/api/kalshi"),
-      fetchInternal("/api/weather")
+      fetchInternal("/api/weather"),
+      ledgerStore.list().catch(() => ({ blobs: [] }))
     ]);
 
     const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
     const cashDollars = cashCents / 100;
     const positions = positionsResp.market_positions || [];
-    const openCount = positions.filter(p => p.position !== 0).length;
+    const allOpenCount = positions.filter(p => p.position !== 0).length;
 
-    // Match paper-trade sizing: stake = max($1, bankroll/20), capped at 20 concurrent.
-    const stake_dollars = Math.max(1, cashDollars / 20);
-    const stake_contracts_at_avg_price = Math.max(1, Math.round(stake_dollars * 2));  // rough; adjusted per-bet below
-    const spareCapacity = Math.max(0, MAX_CONCURRENT - openCount);
+    // Bot ledger: entries we placed. Sell-loser logic ONLY iterates these.
+    // User's pre-existing positions are off-limits.
+    const ledger = (await Promise.all(
+      ledgerBlobs.map(b => ledgerStore.get(b.key, { type: "json" }).catch(() => null))
+    )).filter(Boolean);
+    const botKey = (ticker, side) => `${ticker}-${side}`;
 
-    // Map Kalshi positions by (ticker, side) so we can dedup.
-    const heldKey = new Set();
+    // Reconcile: remove ledger entries for positions Kalshi no longer has (settled/sold).
+    const heldByKalshi = new Set();
     for (const p of positions) {
-      if (p.position > 0) heldKey.add(`${p.ticker}-YES`);
-      if (p.position < 0) heldKey.add(`${p.ticker}-NO`);  // Kalshi negative position = NO holding
+      if (p.position > 0) heldByKalshi.add(botKey(p.ticker, "YES"));
+      if (p.position < 0) heldByKalshi.add(botKey(p.ticker, "NO"));
     }
+    const liveLedger = [];
+    for (const entry of ledger) {
+      const key = botKey(entry.ticker, entry.side);
+      if (heldByKalshi.has(key)) liveLedger.push(entry);
+      else await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+    }
+    const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
+    const botOpenCount = liveLedger.length;
 
-    // 2. Sell would-be losers.
+    // Sizing: stake = max($1, bankroll/20). Bot's max concurrent = 20.
+    const stake_dollars = Math.max(1, cashDollars / 20);
+    const spareCapacity = Math.max(0, MAX_CONCURRENT - botOpenCount);
+
+    // Buy dedup: against ALL Kalshi positions (don't double-down on user's manual ones either).
+    const heldKey = heldByKalshi;
+
+    // 2. Sell would-be losers — ONLY among bot-placed positions.
     if (kalshiData?.cities) {
       const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
       for (const p of positions) {
         if (p.position === 0) continue;
         const ticker = p.ticker;
+        const side = p.position > 0 ? "YES" : "NO";
+        if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
         // Find this market in our Kalshi snapshot to get current bid + model probability.
         let bucket = null, citySide = null;
         for (const c of kalshiData.cities) {
@@ -169,15 +191,31 @@ export default async () => {
         const res = await placeBuyOrder(fullTicker, b.side, contracts, priceCents);
         placements.push({ ticker: fullTicker, side: b.side, count: contracts, priceCents,
                           ev: b.ev, halfKelly: b.halfKelly, ok: res.ok });
-        if (!res.ok) errors.push({ where: "buy", ticker: fullTicker, response: res.body });
-        else placed++;
+        if (!res.ok) {
+          errors.push({ where: "buy", ticker: fullTicker, response: res.body });
+        } else {
+          placed++;
+          // Save to bot ledger so future runs know we own this position.
+          const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
+          await ledgerStore.setJSON(`${betId}.json`, {
+            betId, ticker: fullTicker, side: b.side, contracts,
+            price: b.price, stake_dollars,
+            city: b.city, variable: b.variable || "high",
+            bucket: b.bucket, ev: b.ev, halfKelly: b.halfKelly,
+            modelMean: b.modelMean, modelStd: b.modelStd,
+            placedAtUTC: new Date().toISOString(),
+            kalshiOrderId: res.body?.order?.order_id || null
+          }).catch(err => errors.push({ where: "ledger-write", err: String(err) }));
+        }
       }
     }
 
     return new Response(JSON.stringify({
       ok: true,
       ranAtUTC: new Date().toISOString(),
-      cashDollars, openCount, spareCapacity,
+      cashDollars,
+      botOpenCount, allOpenCount,
+      spareCapacity,
       stake_dollars: Math.round(stake_dollars * 100) / 100,
       sales, placements, errors
     }, null, 2), {
