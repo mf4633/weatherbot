@@ -81,7 +81,9 @@ export async function kalshiAuthedFetch(method, path, body = null) {
     throw new Error(`SAFETY: endpoint matches denylist (transfer-like): ${path}`);
   }
   const ts = Date.now().toString();
-  const sig = kalshiSign(privKey, method, path, ts);
+  // Kalshi signs the path WITHOUT query string (only the path-part of the URL).
+  const pathForSig = path.split("?")[0];
+  const sig = kalshiSign(privKey, method, pathForSig, ts);
   const r = await fetch(`${KALSHI_API_BASE}${path}`, {
     method,
     headers: {
