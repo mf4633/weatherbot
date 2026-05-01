@@ -60,6 +60,15 @@ async function fetchKalshiMarkets(eventTicker) {
   return await r.json();
 }
 
+// Kalshi fee per $1 staked at a given binary contract price.
+// Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
+// Per $1 staked at price P: fee ≈ 0.07 × (1−P) dollars (continuous approximation).
+// Highest near P=0.5 (~3.5¢/$1), lowest near tails (P=0.01: ~7¢; P=0.99: ~0.07¢).
+// Fees apply on BUY only; settlement is free; sell-to-close has separate fee (rare for us).
+function kalshiFeePerDollar(price) {
+  return 0.07 * (1 - price);
+}
+
 // Synthesize a human-readable label for any bucket, even when Kalshi's subtitle is empty.
 function bucketLabel(loInt, hiInt, subtitle) {
   if (subtitle && subtitle.trim()) return subtitle.trim();
@@ -171,9 +180,17 @@ export default async () => {
     const buckets = bucketsRaw.map(b => {
       const rawP = bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor);
       const p_model = probSum > 0 ? rawP / probSum : 0;
-      const evYes = b.yes_ask != null ? p_model - b.yes_ask : null;
-      const evNo  = b.no_ask  != null ? (1 - p_model) - b.no_ask : null;
-      return { ...b, p_model: Math.round(p_model * 1000) / 1000, evYes, evNo };
+      // Gross EV = p_model - price. Net EV = gross - kalshi_fee_per_$_staked.
+      // The trader's qualifying threshold checks NET EV (post-fee), so 5¢ "edge" means
+      // 5¢ realized after Kalshi's take.
+      const grossEvYes = b.yes_ask != null ? p_model - b.yes_ask : null;
+      const grossEvNo  = b.no_ask  != null ? (1 - p_model) - b.no_ask : null;
+      const feeYes = b.yes_ask != null ? kalshiFeePerDollar(b.yes_ask) : null;
+      const feeNo  = b.no_ask  != null ? kalshiFeePerDollar(b.no_ask)  : null;
+      const evYes = grossEvYes != null ? grossEvYes - feeYes : null;
+      const evNo  = grossEvNo  != null ? grossEvNo  - feeNo  : null;
+      return { ...b, p_model: Math.round(p_model * 1000) / 1000,
+               grossEvYes, grossEvNo, feeYes, feeNo, evYes, evNo };
     });
 
     const kelly = (p, price) => Math.max(0, (p - price) / (1 - price));
