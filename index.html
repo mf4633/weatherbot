@@ -29,6 +29,11 @@
     <strong>Educational only — not betting advice.</strong> Model RMSE ~1.7°F; small edges are noise.
   </p>
   <p id="kalshi-freshness" class="sub"></p>
+  <p class="sub" style="margin-top:8px">
+    Sorted by <strong>Kelly fraction</strong> — optimal stake as % of bankroll given probability + price.
+    Combines edge and confidence: big edge on a near-50¢ bucket beats huge edge on a 1¢ long-shot.
+    Bet half the Kelly value to protect against model error (RMSE 1.7°F means probabilities have real uncertainty).
+  </p>
   <table id="kalshi-table">
     <thead>
       <tr>
@@ -39,6 +44,7 @@
         <th>Price</th>
         <th>Model P</th>
         <th>Edge / $1</th>
+        <th>Half-Kelly</th>
         <th>Volume</th>
       </tr>
     </thead>

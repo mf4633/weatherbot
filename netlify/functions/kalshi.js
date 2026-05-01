@@ -189,19 +189,30 @@ export default async () => {
     });
 
     // Collect bets for ranking.
+    // Kelly fraction f* = (p - price) / (1 - price). It's the optimal % of bankroll to stake
+    // given a binary bet at price `price` with model probability `p`. Combines probability and
+    // edge in one number: large edge at low price → big Kelly; small edge at price near 1 → tiny Kelly.
+    // Half-Kelly = f*/2 is the practical recommendation given our model's ~1.7°F RMSE uncertainty.
+    const kelly = (p, price) => Math.max(0, (p - price) / (1 - price));
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
+        const k = kelly(b.p_model, b.yes_ask);
         allBets.push({ city: city.name, bucket: b.subtitle, ticker: b.ticker.split("-").pop(),
-                       side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes, volume: b.volume });
+                       side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
+                       kelly: k, halfKelly: k / 2, volume: b.volume });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
+        const pNo = 1 - b.p_model;
+        const k = kelly(pNo, b.no_ask);
         allBets.push({ city: city.name, bucket: b.subtitle, ticker: b.ticker.split("-").pop(),
-                       side: "NO", price: b.no_ask, p_model: 1 - b.p_model, ev: b.evNo, volume: b.volume });
+                       side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
+                       kelly: k, halfKelly: k / 2, volume: b.volume });
       }
     }
   }
 
-  allBets.sort((a, b) => b.ev - a.ev);
+  // Sort by Kelly fraction (the "wisest choice" combining probability and edge).
+  allBets.sort((a, b) => b.kelly - a.kelly);
 
   return new Response(JSON.stringify({
     ts: now.toISOString(),

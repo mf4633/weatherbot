@@ -95,7 +95,8 @@ async function loadKalshi() {
         <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
         <td>$${b.price.toFixed(2)}</td>
         <td>${(b.p_model * 100).toFixed(1)}%</td>
-        <td><strong>+$${b.ev.toFixed(2)}</strong></td>
+        <td>+$${b.ev.toFixed(2)}</td>
+        <td><strong>${(b.halfKelly * 100).toFixed(1)}%</strong></td>
         <td>${Math.round(b.volume).toLocaleString()}</td>
       </tr>`).join("");
   } catch (e) {
