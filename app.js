@@ -158,16 +158,18 @@ async function loadPaper() {
         openEl.innerHTML = `<p class="muted small">No open positions yet — first bets land when the next 5-min cron fires.</p>`;
       } else {
         openEl.innerHTML = `<table class="paper-table"><thead><tr>
-          <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Model μ±σ</th>
+          <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Contracts</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Model μ±σ</th>
         </tr></thead><tbody>${open.map(b => {
           const mtm = b.markToMarket;
           const sellPx = mtm?.sellPrice;
           const unr = mtm?.unrealized_pnl;
+          const contracts = b.price > 0 ? Math.round(b.stake_dollars / b.price * 10) / 10 : "—";
           return `<tr>
             <td>${b.city}</td>
             <td class="muted small">${b.variable || "high"}</td>
             <td>${b.bucket || b.ticker}</td>
             <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
+            <td>${contracts}</td>
             <td>$${b.price.toFixed(2)}</td>
             <td>$${b.stake_dollars.toFixed(2)}</td>
             <td class="muted small">${sellPx != null ? '$'+sellPx.toFixed(2) : '—'}</td>
@@ -281,22 +283,29 @@ async function loadJackson() {
       openEl.innerHTML = `<p class="muted small">No open positions.</p>`;
     } else {
       openEl.innerHTML = `<table class="paper-table"><thead><tr>
-        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th>
+        <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Contracts</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Model μ±σ</th>
       </tr></thead><tbody>${heldPositions.map(p => {
         const isYes = p._qty > 0;
         const contracts = Math.abs(p._qty);
         const avgCost = contracts > 0 ? p._exposure / contracts : 0;
-        const mtm = mtmByTicker[p.ticker];
-        const sellPx = mtm?.sellPrice;
-        const unr = mtm?.unrealized_pnl;
+        const mtm = mtmByTicker[p.ticker] || {};
+        const city = mtm.city || "—";
+        const variable = mtm.variable || "—";
+        const bucket = mtm.bucket || p.ticker.split("-").pop();
+        const sellPx = mtm.sellPrice;
+        const unr = mtm.unrealized_pnl;
+        const muSig = (mtm.modelMean != null) ? `${mtm.modelMean.toFixed(1)}±${mtm.modelStd.toFixed(1)}°F` : "—";
         return `<tr>
-          <td class="muted small">${p.ticker}</td>
+          <td>${city}</td>
+          <td class="muted small">${variable}</td>
+          <td>${bucket}</td>
           <td class="${isYes ? 'warm' : 'cool'}">${isYes ? 'YES' : 'NO'}</td>
           <td>${contracts}</td>
           <td>$${avgCost.toFixed(2)}</td>
           <td>$${p._exposure.toFixed(2)}</td>
           <td class="muted small">${sellPx != null ? '$'+sellPx.toFixed(2) : '—'}</td>
           <td class="${unr == null ? 'muted' : (unr >= 0 ? 'warm' : 'cool')}">${unr != null ? fmtSignedDollars(unr) : '—'}</td>
+          <td class="muted small">${muSig}</td>
         </tr>`;
       }).join("")}</tbody></table>`;
     }

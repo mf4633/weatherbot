@@ -132,38 +132,94 @@ async function fetchMarketSnapshot() {
   } catch (e) { return null; }
 }
 
-// Mark-to-market: for each Kalshi position, find current bid and compute unrealized P&L.
-function markToMarket(positions, kalshi) {
-  if (!kalshi?.cities) return { byTicker: {}, totalUnrealized: 0 };
-  // Build ticker → bucket lookup. Kalshi position tickers look like KXHIGHNY-26MAY02-B65.5;
-  // our buckets are stored by their suffix (B65.5 etc).
-  const byTicker = {};
+// Build a reverse lookup from Kalshi series ticker → {city, variable}.
+// Mirror of CITY_TO_KALSHI in kalshi.js. Kept in sync manually for now.
+const SERIES_LOOKUP = {
+  "KXHIGHNY":     { city: "New York",          variable: "high" },
+  "KXLOWNY":      { city: "New York",          variable: "low"  },
+  "KXHIGHLAX":    { city: "Los Angeles",       variable: "high" },
+  "KXLOWLAX":     { city: "Los Angeles",       variable: "low"  },
+  "KXHIGHCHI":    { city: "Chicago",           variable: "high" },
+  "KXLOWTCHI":    { city: "Chicago",           variable: "low"  },
+  "KXHIGHHOU":    { city: "Houston",           variable: "high" },
+  "KXLOWTHOU":    { city: "Houston",           variable: "low"  },
+  "KXHIGHTPHX":   { city: "Phoenix",           variable: "high" },
+  "KXLOWTPHX":    { city: "Phoenix",           variable: "low"  },
+  "KXHIGHPHIL":   { city: "Philadelphia",      variable: "high" },
+  "KXLOWPHIL":    { city: "Philadelphia",      variable: "low"  },
+  "KXHIGHTSATX":  { city: "San Antonio",       variable: "high" },
+  "KXLOWTSATX":   { city: "San Antonio",       variable: "low"  },
+  "KXHIGHTDAL":   { city: "Dallas-Fort Worth", variable: "high" },
+  "KXLOWTDAL":    { city: "Dallas-Fort Worth", variable: "low"  },
+  "KXHIGHAUS":    { city: "Austin",            variable: "high" },
+  "KXLOWAUS":     { city: "Austin",            variable: "low"  },
+  "KXHIGHTSEA":   { city: "Seattle",           variable: "high" },
+  "KXLOWTSEA":    { city: "Seattle",           variable: "low"  },
+  "KXHIGHDEN":    { city: "Denver",            variable: "high" },
+  "KXLOWDEN":     { city: "Denver",            variable: "low"  },
+  "KXHIGHTDC":    { city: "Washington DC",     variable: "high" },
+  "KXHIGHTBOS":   { city: "Boston",            variable: "high" },
+  "KXLOWTBOS":    { city: "Boston",            variable: "low"  }
+};
+
+// Parse a Kalshi market ticker like "KXLOWTCHI-26MAY01-B36.5" into its parts.
+function parseKalshiTicker(ticker) {
+  const parts = ticker.split("-");
+  if (parts.length < 3) return { series: ticker, eventDate: null, bucketTicker: null };
+  return { series: parts[0], eventDate: parts[1], bucketTicker: parts.slice(2).join("-") };
+}
+
+// Mark-to-market + enrichment. For each Kalshi position, find current bid, model context,
+// and human-readable city/variable/bucket. Returns per-ticker enrichment.
+function enrichPositions(positions, kalshi) {
+  const result = {};
+  let totalUnrealized = 0;
+  if (!kalshi?.cities) return { byTicker: result, totalUnrealized: 0 };
+
+  // Build per-bucket lookup keyed by ticker suffix, with city/variable context.
+  const bucketByCityKey = {};  // "<cityName>-<variable>-<bucketTicker>" → bucket
+  const cityByName = {};
   for (const c of kalshi.cities) {
-    for (const arr of [c.highBuckets, c.lowBuckets]) {
-      if (!arr) continue;
-      for (const b of arr) byTicker[b.ticker] = b;
+    cityByName[c.name] = c;
+    for (const [variant, list] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
+      if (!list) continue;
+      for (const b of list) bucketByCityKey[`${c.name}-${variant}-${b.ticker}`] = b;
     }
   }
-  let totalUnrealized = 0;
-  const result = {};
+
   for (const p of positions) {
     const qty = parseFloat(p.position_fp || "0");
     if (qty === 0) continue;
     const exposure = parseFloat(p.market_exposure_dollars || "0");
-    const tickerSuffix = p.ticker.split("-").pop();
-    const bucket = byTicker[tickerSuffix];
-    if (!bucket) continue;
+    const { series, bucketTicker } = parseKalshiTicker(p.ticker);
+    const seriesInfo = SERIES_LOOKUP[series];
+    const cityName = seriesInfo?.city || null;
+    const variable = seriesInfo?.variable || null;
+    const cityModel = cityName ? cityByName[cityName]?.model : null;
+    const bucket = (cityName && variable && bucketTicker)
+      ? bucketByCityKey[`${cityName}-${variable}-${bucketTicker}`]
+      : null;
     const isYes = qty > 0;
-    const sellPrice = isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
-    if (sellPrice == null) continue;
-    const sellProceeds = Math.abs(qty) * sellPrice;
-    const unrealized = sellProceeds - exposure;
+    const sellPrice = bucket
+      ? (isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid)
+      : null;
+    let unrealized = null, sellProceeds = null;
+    if (sellPrice != null) {
+      sellProceeds = Math.abs(qty) * sellPrice;
+      unrealized = sellProceeds - exposure;
+      totalUnrealized += unrealized;
+    }
+    const modelMean = (variable === "high") ? cityModel?.highMean
+                    : (variable === "low")  ? cityModel?.lowMean : null;
+    const modelStd  = (variable === "high") ? cityModel?.highStd
+                    : (variable === "low")  ? cityModel?.lowStd  : null;
     result[p.ticker] = {
+      city: cityName, variable, bucket: bucket?.bucket || bucketTicker,
+      modelMean, modelStd,
       sellPrice,
-      sellProceeds: Math.round(sellProceeds * 100) / 100,
-      unrealized_pnl: Math.round(unrealized * 100) / 100
+      sellProceeds: sellProceeds != null ? Math.round(sellProceeds * 100) / 100 : null,
+      unrealized_pnl: unrealized != null ? Math.round(unrealized * 100) / 100 : null
     };
-    totalUnrealized += unrealized;
   }
   return { byTicker: result, totalUnrealized: Math.round(totalUnrealized * 100) / 100 };
 }
@@ -199,11 +255,11 @@ export default async () => {
       }
       out.totalRealizedPnl = Math.round(totalRealized * 100) / 100;
       out.totalFeesPaid = Math.round(totalFees * 100) / 100;
-      // Unrealized P&L from market quotes.
+      // Unrealized P&L from market quotes + per-position enrichment (city/variable/bucket/model).
       if (kalshi.status === "fulfilled") {
-        const mtm = markToMarket(out.positions.market_positions, kalshi.value);
-        out.markToMarket = mtm.byTicker;
-        out.totalUnrealizedPnl = mtm.totalUnrealized;
+        const enr = enrichPositions(out.positions.market_positions, kalshi.value);
+        out.markToMarket = enr.byTicker;
+        out.totalUnrealizedPnl = enr.totalUnrealized;
       } else {
         out.totalUnrealizedPnl = 0;
         out.markToMarket = {};
