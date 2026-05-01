@@ -71,9 +71,11 @@ export default async () => {
   // Hard arm-switch: real trading only fires when KALSHI_TRADING_LIVE === "true".
   // Without this, the trader is paused even if creds are present. Lets us land
   // safety changes without immediately firing real orders.
-  if (process.env.KALSHI_TRADING_LIVE !== "true") {
+  const liveFlag = (process.env.KALSHI_TRADING_LIVE || "").trim().toLowerCase();
+  if (!["true", "1", "yes", "on", "live"].includes(liveFlag)) {
     return new Response(JSON.stringify({ ok: true, paused: true,
-      message: "Real-trader paused: set KALSHI_TRADING_LIVE=true env var to arm. Currently observing only." }), {
+      flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
+      message: "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live)." }), {
       status: 200, headers: { "content-type": "application/json" }
     });
   }
