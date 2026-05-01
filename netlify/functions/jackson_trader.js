@@ -94,8 +94,15 @@ export default async () => {
 
     const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
     const cashDollars = cashCents / 100;
-    const positions = positionsResp.market_positions || [];
-    const allOpenCount = positions.filter(p => p.position !== 0).length;
+    // Normalize Kalshi position fields. Real fields: position_fp (string of float;
+    // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
+    const positions = (positionsResp.market_positions || []).map(p => ({
+      ...p,
+      qty: parseFloat(p.position_fp || "0"),
+      exposure: parseFloat(p.market_exposure_dollars || "0"),
+      realizedPnl: parseFloat(p.realized_pnl_dollars || "0")
+    }));
+    const allOpenCount = positions.filter(p => p.qty !== 0).length;
 
     // Bot ledger: entries we placed. Sell-loser logic ONLY iterates these.
     // User's pre-existing positions are off-limits.
@@ -107,8 +114,8 @@ export default async () => {
     // Reconcile: remove ledger entries for positions Kalshi no longer has (settled/sold).
     const heldByKalshi = new Set();
     for (const p of positions) {
-      if (p.position > 0) heldByKalshi.add(botKey(p.ticker, "YES"));
-      if (p.position < 0) heldByKalshi.add(botKey(p.ticker, "NO"));
+      if (p.qty > 0) heldByKalshi.add(botKey(p.ticker, "YES"));
+      if (p.qty < 0) heldByKalshi.add(botKey(p.ticker, "NO"));
     }
     const liveLedger = [];
     for (const entry of ledger) {
@@ -130,9 +137,9 @@ export default async () => {
     if (kalshiData?.cities) {
       const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
       for (const p of positions) {
-        if (p.position === 0) continue;
+        if (p.qty === 0) continue;
         const ticker = p.ticker;
-        const side = p.position > 0 ? "YES" : "NO";
+        const side = p.qty > 0 ? "YES" : "NO";
         if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
         // Find this market in our Kalshi snapshot to get current bid + model probability.
         let bucket = null, citySide = null;
@@ -145,16 +152,17 @@ export default async () => {
           if (bucket) break;
         }
         if (!bucket) continue;
-        const isYes = p.position > 0;
+        const isYes = p.qty > 0;
         const sellPrice = isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
         if (sellPrice == null || sellPrice <= 0) continue;
         const pNow = isYes ? bucket.p_model : (1 - bucket.p_model);
-        const avgEntryCents = Math.abs(p.average_buy_cost ?? 0);  // cents per contract
-        const avgEntry = avgEntryCents / 100;
+        const contracts = Math.abs(p.qty);
+        if (contracts <= 0) continue;
+        // Avg entry = total exposure (dollars at risk) / contracts.
+        const avgEntry = p.exposure / contracts;
         if (avgEntry <= 0) continue;
-        const contracts = Math.abs(p.position);
         const sellProceeds = contracts * sellPrice;     // dollars (1 contract = $1 max payout)
-        const stakePaid = contracts * avgEntry;
+        const stakePaid = p.exposure;
         const holdEV = contracts * pNow;
         if (sellProceeds >= stakePaid) continue;        // winning, hold
         if (holdEV >= stakePaid) continue;              // model still positive, hold

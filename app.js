@@ -118,7 +118,7 @@ async function loadKalshi() {
   }
 }
 
-function fmtSigned(v) { if (v == null) return "—"; const s = v >= 0 ? "+" : ""; return `${s}$${v.toFixed(2)}`; }
+function fmtSignedDollars(v) { if (v == null) return "—"; const s = v >= 0 ? "+" : ""; return `${s}$${v.toFixed(2)}`; }
 function fmtPctSigned(v) { if (v == null) return "—"; const s = v >= 0 ? "+" : ""; return `${s}${v.toFixed(1)}%`; }
 
 async function loadPaper() {
@@ -140,13 +140,13 @@ async function loadPaper() {
       stateEl.innerHTML = `
         <div class="stat"><div class="stat-label">bankroll</div><div class="stat-val ${bankroll >= startBank ? 'warm' : 'cool'}">$${bankroll.toFixed(2)} <span class="muted">(${fmtPctSigned(pnlPct)})</span></div></div>
         <div class="stat"><div class="stat-label">mark-to-market</div><div class="stat-val ${mtm >= startBank ? 'warm' : 'cool'}">$${mtm.toFixed(2)}</div></div>
-        <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${unr >= 0 ? 'warm' : 'cool'}">${fmtSigned(unr)}</div></div>
+        <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${unr >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(unr)}</div></div>
         <div class="stat"><div class="stat-label">cash free</div><div class="stat-val">$${(s.cash_free ?? 0).toFixed(2)}</div></div>
         <div class="stat"><div class="stat-label">in flight</div><div class="stat-val">${s.open_count ?? 0} / ${s.max_concurrent ?? 20}</div></div>
         <div class="stat"><div class="stat-label">stake / bet</div><div class="stat-val">$${(s.bet_size_dollars ?? 1).toFixed(2)}</div></div>
         <div class="stat"><div class="stat-label">total bets</div><div class="stat-val">${totalSettled}</div></div>
         <div class="stat"><div class="stat-label">win rate</div><div class="stat-val">${winRatePct.toFixed(1)}%</div></div>
-        <div class="stat"><div class="stat-label">total P&L</div><div class="stat-val ${(s.total_pnl ?? 0) >= 0 ? 'warm' : 'cool'}">${fmtSigned(s.total_pnl ?? 0)}</div></div>
+        <div class="stat"><div class="stat-label">total P&L</div><div class="stat-val ${(s.total_pnl ?? 0) >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(s.total_pnl ?? 0)}</div></div>
         <div class="stat"><div class="stat-label">ROI</div><div class="stat-val ${roiPct >= 0 ? 'warm' : 'cool'}">${fmtPctSigned(roiPct)}</div></div>
         <div class="stat"><div class="stat-label">sold early</div><div class="stat-val">${s.n_sold_total ?? 0}</div></div>`;
     }
@@ -171,7 +171,7 @@ async function loadPaper() {
             <td>$${b.price.toFixed(2)}</td>
             <td>$${b.stake_dollars.toFixed(2)}</td>
             <td class="muted small">${sellPx != null ? '$'+sellPx.toFixed(2) : '—'}</td>
-            <td class="${unr == null ? 'muted' : (unr >= 0 ? 'warm' : 'cool')}">${unr != null ? fmtSigned(unr) : '—'}</td>
+            <td class="${unr == null ? 'muted' : (unr >= 0 ? 'warm' : 'cool')}">${unr != null ? fmtSignedDollars(unr) : '—'}</td>
             <td class="muted small">${b.modelMean != null ? `${b.modelMean.toFixed(1)}±${b.modelStd.toFixed(1)}°F` : "—"}</td>
           </tr>`;
         }).join("")}</tbody></table>`;
@@ -194,7 +194,7 @@ async function loadPaper() {
           <td>$${s.price.toFixed(2)}</td>
           <td class="${s.outcome === 'WIN' ? 'good' : (s.outcome === 'SOLD' ? 'muted' : 'bad')}">${s.outcome}</td>
           <td class="muted small">${s.actualHigh != null ? s.actualHigh + "°F" : (s.sell_price != null ? "@$" + s.sell_price.toFixed(2) : "—")}</td>
-          <td class="${s.pnl_dollars >= 0 ? 'warm' : 'cool'}">${fmtSigned(s.pnl_dollars)}</td>
+          <td class="${s.pnl_dollars >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(s.pnl_dollars)}</td>
         </tr>`).join("")}</tbody></table>`;
       }
     }
@@ -212,7 +212,7 @@ async function loadPaper() {
           <td>${c.n}</td><td>${c.wins}</td><td>${c.sold || 0}</td>
           <td>${c.win_rate_pct.toFixed(1)}%</td>
           <td>$${c.staked.toFixed(2)}</td>
-          <td class="${c.pnl >= 0 ? 'warm' : 'cool'}">${fmtSigned(c.pnl)}</td>
+          <td class="${c.pnl >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(c.pnl)}</td>
           <td class="${c.roi_pct >= 0 ? 'warm' : 'cool'}">${fmtPctSigned(c.roi_pct)}</td>
         </tr>`).join("")}</tbody></table>`;
       }
@@ -251,10 +251,15 @@ async function loadJackson() {
     statusEl.className = "sub fresh";
     const balDollars = (j.balance?.balance ?? 0) / 100;
     const positions = j.positions?.market_positions || [];
-    const heldPositions = positions.filter(p => p.position !== 0);
+    // Kalshi position fields: position_fp (string of float; sign = direction),
+    // market_exposure_dollars (string), realized_pnl_dollars (string).
+    const heldPositions = positions
+      .map(p => ({ ...p, _qty: parseFloat(p.position_fp || "0"),
+                          _exposure: parseFloat(p.market_exposure_dollars || "0") }))
+      .filter(p => p._qty !== 0);
     const fills = j.fills?.fills || [];
     const orders = j.orders?.orders || [];
-    const totalExposure = heldPositions.reduce((a, p) => a + Math.abs(p.position) * Math.abs(p.average_buy_cost ?? 0) / 100, 0);
+    const totalExposure = heldPositions.reduce((a, p) => a + p._exposure, 0);
     stateEl.innerHTML = `
       <div class="stat"><div class="stat-label">cash balance</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
@@ -265,17 +270,17 @@ async function loadJackson() {
       openEl.innerHTML = `<p class="muted small">No open positions.</p>`;
     } else {
       openEl.innerHTML = `<table class="paper-table"><thead><tr>
-        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Total stake</th>
+        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Stake</th>
       </tr></thead><tbody>${heldPositions.map(p => {
-        const isYes = p.position > 0;
-        const contracts = Math.abs(p.position);
-        const avgCost = Math.abs(p.average_buy_cost ?? 0) / 100;
+        const isYes = p._qty > 0;
+        const contracts = Math.abs(p._qty);
+        const avgCost = contracts > 0 ? p._exposure / contracts : 0;
         return `<tr>
           <td class="muted small">${p.ticker}</td>
           <td class="${isYes ? 'warm' : 'cool'}">${isYes ? 'YES' : 'NO'}</td>
           <td>${contracts}</td>
           <td>$${avgCost.toFixed(2)}</td>
-          <td>$${(contracts * avgCost).toFixed(2)}</td>
+          <td>$${p._exposure.toFixed(2)}</td>
         </tr>`;
       }).join("")}</tbody></table>`;
     }
@@ -283,15 +288,19 @@ async function loadJackson() {
       fillsEl.innerHTML = `<p class="muted small">No recent fills.</p>`;
     } else {
       fillsEl.innerHTML = `<table class="paper-table"><thead><tr>
-        <th>Ticker</th><th>Action</th><th>Side</th><th>Count</th><th>Price</th><th>When</th>
-      </tr></thead><tbody>${fills.slice(0, 20).map(f => `<tr>
-        <td class="muted small">${f.ticker}</td>
-        <td>${f.action}</td>
-        <td class="${f.side === 'yes' ? 'warm' : 'cool'}">${f.side?.toUpperCase()}</td>
-        <td>${f.count}</td>
-        <td>$${((f.yes_price ?? f.no_price ?? 0) / 100).toFixed(2)}</td>
-        <td class="muted small">${(f.created_time || "").slice(0, 16)}</td>
-      </tr>`).join("")}</tbody></table>`;
+        <th>Ticker</th><th>Action</th><th>Side</th><th>Count</th><th>Price</th><th>When (UTC)</th>
+      </tr></thead><tbody>${fills.slice(0, 20).map(f => {
+        const count = parseFloat(f.count_fp || "0");
+        const price = parseFloat((f.side === "yes" ? f.yes_price_dollars : f.no_price_dollars) || "0");
+        return `<tr>
+          <td class="muted small">${f.ticker}</td>
+          <td>${f.action}</td>
+          <td class="${f.side === 'yes' ? 'warm' : 'cool'}">${(f.side || "").toUpperCase()}</td>
+          <td>${count}</td>
+          <td>$${price.toFixed(2)}</td>
+          <td class="muted small">${(f.created_time || "").slice(0, 16)}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
     }
   } catch (e) {
     statusEl.textContent = `Load error: ${e.message}`;
