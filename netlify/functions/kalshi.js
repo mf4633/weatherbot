@@ -114,6 +114,24 @@ export default async () => {
   const cities = [];
   const allBets = [];
 
+  // Freshness diagnostics: cache age + oldest forecast issuance among the matched cities.
+  const cacheAgeMs = predData.ageMs ?? 0;
+  const forecastUpdateTimes = (predData.cities || [])
+    .map(c => c.forecastUpdateTime)
+    .filter(Boolean)
+    .map(s => new Date(s).getTime())
+    .filter(t => !isNaN(t));
+  const oldestForecastMs = forecastUpdateTimes.length ? Math.min(...forecastUpdateTimes) : null;
+  const newestForecastMs = forecastUpdateTimes.length ? Math.max(...forecastUpdateTimes) : null;
+  const freshness = {
+    cacheAgeSec: Math.round(cacheAgeMs / 1000),
+    cacheStale: cacheAgeMs > 5 * 60 * 1000,
+    oldestForecastIssuedAt: oldestForecastMs ? new Date(oldestForecastMs).toISOString() : null,
+    oldestForecastAgeMin: oldestForecastMs ? Math.round((Date.now() - oldestForecastMs) / 60000) : null,
+    newestForecastAgeMin: newestForecastMs ? Math.round((Date.now() - newestForecastMs) / 60000) : null,
+    forecastStale: oldestForecastMs ? (Date.now() - oldestForecastMs) > 90 * 60 * 1000 : false
+  };
+
   for (const city of predData.cities || []) {
     if (city.error) continue;
     const series = CITY_TO_KALSHI_SERIES[city.name];
@@ -187,7 +205,8 @@ export default async () => {
 
   return new Response(JSON.stringify({
     ts: now.toISOString(),
-    disclaimer: "Educational only. EV is per $1 staked. Our model RMSE is ~1.7°F; individual bet edges can be noise. Volume = lifetime contract count.",
+    freshness,
+    disclaimer: "Educational only. EV is per $1 staked. Our model RMSE is ~1.7°F; individual bet edges can be noise. Volume = lifetime contract count. Edges from stale forecast data are FALSE — check freshness.",
     topBets: allBets.slice(0, 30),
     cities
   }, null, 2), {

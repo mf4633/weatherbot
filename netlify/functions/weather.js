@@ -26,7 +26,9 @@ const CITIES = [
 
 const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
 let CACHE = { ts: 0, data: null };
-const CACHE_MS = 10 * 60 * 1000;
+// Cache 3 min: balances API politeness against forecast staleness. NWS forecast revisions
+// (which can shift Kalshi edges by 30%+) need to propagate quickly.
+const CACHE_MS = 3 * 60 * 1000;
 
 // Per-city mean-bias offsets — fit on GFS-vs-ERA5 5-year backtest, then HALVED for production
 // because deployed model uses NWS forecasts (forecaster-corrected) not raw GFS.
@@ -138,7 +140,7 @@ async function fetchNWSForecast(lat, lon) {
     const pj = await pr.json();
     const fcUrl = pj.properties?.forecast;
     const hrUrl = pj.properties?.forecastHourly;
-    const out = { dailyHigh: null, hourly: [] };
+    const out = { dailyHigh: null, hourly: [], updateTime: null };
     if (fcUrl) {
       try {
         const fr = await fetch(fcUrl, { headers: { "User-Agent": UA, "Accept": "application/geo+json" } });
@@ -146,6 +148,7 @@ async function fetchNWSForecast(lat, lon) {
           const fj = await fr.json();
           const today = fj.properties?.periods?.find(p => p.isDaytime);
           if (today) out.dailyHigh = today.temperature;
+          if (fj.properties?.updateTime) out.updateTime = fj.properties.updateTime;
         }
       } catch (e) {}
     }
@@ -158,6 +161,8 @@ async function fetchNWSForecast(lat, lon) {
             ts: new Date(p.startTime),
             tempF: p.temperature
           }));
+          // Prefer hourly updateTime if available — it's typically more recent.
+          if (hj.properties?.updateTime) out.updateTime = hj.properties.updateTime;
         }
       } catch (e) {}
     }
@@ -335,6 +340,7 @@ function computePrediction(city, metars, forecast, lastCLI) {
     std: Math.round(std * 100) / 100,
     ci68: [round(ci68[0]), round(ci68[1])],
     ci95: [round(ci95[0]), round(ci95[1])],
+    forecastUpdateTime: forecast?.updateTime || null,
     lastCLI
   };
 }

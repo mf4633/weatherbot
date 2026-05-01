@@ -58,6 +58,22 @@ async function load() {
   }
 }
 
+function renderFreshness(f) {
+  const el = document.getElementById("kalshi-freshness");
+  if (!el || !f) return;
+  const cacheStr = `cache ${f.cacheAgeSec}s old`;
+  const fcStr = f.newestForecastAgeMin != null
+    ? `forecast ${f.newestForecastAgeMin}–${f.oldestForecastAgeMin} min old`
+    : "no forecast data";
+  const stale = f.cacheStale || f.forecastStale;
+  const cls = stale ? "stale" : "fresh";
+  const note = stale
+    ? "⚠ Stale data — apparent edges may be artifacts of forecast revisions the model hasn't seen yet."
+    : "Data fresh; edges reflect current forecast.";
+  el.className = cls;
+  el.textContent = `${cacheStr} · ${fcStr} · ${note}`;
+}
+
 async function loadKalshi() {
   const tbody = document.getElementById("kalshi-rows");
   if (!tbody) return;
@@ -65,6 +81,7 @@ async function loadKalshi() {
     const r = await fetch("/api/kalshi", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
+    renderFreshness(j.freshness);
     const top = (j.topBets || []).slice(0, 15);
     if (!top.length) {
       tbody.innerHTML = `<tr><td colspan="8" class="muted">No +EV bets above 2¢ edge right now.</td></tr>`;

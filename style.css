@@ -60,6 +60,9 @@ main {
 .card .cool { color: var(--cool); }
 .card .muted { color: var(--muted); font-style: italic; }
 #kalshi-section { padding: 16px 24px 8px; border-top: 1px solid var(--border); }
+#kalshi-freshness { font-size: 12px; padding: 6px 10px; border-radius: 4px; margin-top: 8px; }
+#kalshi-freshness.fresh { background: rgba(63, 185, 80, 0.08); color: var(--good); border-left: 3px solid var(--good); }
+#kalshi-freshness.stale { background: rgba(255, 123, 114, 0.08); color: var(--warm); border-left: 3px solid var(--warm); }
 #kalshi-section h2 { margin: 0 0 4px; font-size: 18px; }
 #kalshi-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
 #kalshi-table th, #kalshi-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
