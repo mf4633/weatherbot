@@ -266,6 +266,80 @@ Linear regression of model residuals on time over 5 years showed slope = −0.04
 
 ---
 
+## 9. Trading layer
+
+### 9.1 Bet selection
+
+The trader pulls Kalshi market state from `/api/kalshi`, which returns a list of buckets per city for both HIGH and LOW markets, with model probabilities computed from our normal posterior (with truncation, per-city offset, and continuity correction). For each bucket × side (YES/NO):
+
+```
+edge_gross = p_model − price_ask
+fee_per_$  = 0.07 × (1 − price_ask)               # Kalshi BUY fee (continuous approx)
+edge_net   = edge_gross − fee_per_$                # what we expect to net per $1 staked
+kelly      = max(0, (p_model − price) / (1 − price))
+half_kelly = kelly / 2
+```
+
+Kalshi's exact fee formula: `fee_cents = ceil(7 × count × yes_price × (1 − yes_price))`. Per $1 staked, this resolves to ~0.7¢ near the tails (P=0.01 or 0.99) and ~3.5¢ at P=0.5. **Fees apply on BUY only** — settlement is free.
+
+Qualifying threshold: `edge_net ≥ 0.05` AND `half_kelly ≥ 0.02`. The trader sorts by Kelly fraction, dedups against open positions, and places top N up to `min(20 concurrent, bankroll/stake_per_bet)`.
+
+### 9.2 Bankroll model
+
+```
+bet_size       = max($1, bankroll / 20)
+max_concurrent = min(20, floor(bankroll / bet_size))
+spare_capacity = max_concurrent − currently_open
+```
+
+Bankroll = total wealth (cash + open stake). Placing a bet does not decrement bankroll; settlement adjusts it by the realized P&L (`stake × (1−price)/price` on win, `−stake` on loss). Sale realized P&L = `sell_proceeds − stake`.
+
+### 9.3 Sell-loser rule
+
+For each open position (via `/api/kalshi` lookup of current bid):
+```
+sell_proceeds = contracts × current_bid_for_our_side
+hold_EV       = contracts × p_model_now
+
+if sell_proceeds ≥ stake:           HOLD                   # winning, let it ride
+elif hold_EV ≥ stake:               HOLD                   # underwater but model recovers
+else:                               SELL at current bid    # underwater AND model expects net loss
+```
+
+Never sells winners; only closes positions where the updated model now expects a net loss.
+
+### 9.4 Real-money safety guards (Andrew Jackson)
+
+Three layers of defense between the bot and the account's funds:
+
+1. **Endpoint allowlist** — only `balance`, `positions`, `orders`, `fills`, `markets`, `events` paths permitted by `kalshiAuthedFetch`. Any other path throws `SAFETY: endpoint not on allowlist`.
+2. **Endpoint denylist** — defense in depth. Any path matching `deposit|withdraw|transfer|bank|ach|wire|payout|payment` (case-insensitive) is rejected even if the allowlist were buggy.
+3. **Hard arm-switch** — `KALSHI_TRADING_LIVE` env var must explicitly be set to `true` (or one of `1/yes/on/live`) for the trader to fire orders. Without it, the function short-circuits with `paused: true`.
+
+Plus the bot maintains its own ledger (Netlify Blob `jackson_open_bets`). The sell-loser logic ONLY iterates ledger entries — pre-existing user-placed positions on the same Kalshi account are invisible to the bot's sell logic. Buy dedup uses the full Kalshi position list to avoid doubling down on user-managed markets.
+
+12-case unit test (`test_safety.js`) asserts the allowlist+denylist correctly block transfer-like paths.
+
+---
+
+## 10. Replay backtest of the trading layer
+
+`replay_backtest.js` simulates 90 days of trading by pricing a synthetic Kalshi market at single-GFS forecast probabilities (with a 2¢ bid-ask spread) and running our actual trading logic against it. Headline numbers (n=1,736 simulated bets):
+
+- Win rate: **67.0%**
+- Per-bet ROI: **+24.7%** (gross, before fees)
+- Edge calibration:
+  - 5-10¢ apparent edge → realized **−6.6%** (fees eat the edge)
+  - 10-20¢ apparent edge → +20% (close to expected 15%)
+  - 20-30¢ apparent edge → +23% (well-calibrated to 25%)
+  - 50¢+ apparent edge → −12% on small N (overconfident long-shots)
+
+Caveat: simulated market is not a real Kalshi market. Real markets are tighter, have slippage, and other algos compete. Production paper-trade data (live) will produce trustworthy numbers; replay is just a sanity check that our trading layer is internally consistent.
+
+The replay's most important finding: **Kalshi's fees materially affect 5-10¢ apparent edges**. This drove the addition of fee-aware EV calculation in `/api/kalshi`.
+
+---
+
 ## 8. References
 
 - Greene, *Econometric Analysis* (truncated normal moments)
