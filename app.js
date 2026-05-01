@@ -260,27 +260,37 @@ async function loadJackson() {
     const fills = j.fills?.fills || [];
     const orders = j.orders?.orders || [];
     const totalExposure = heldPositions.reduce((a, p) => a + p._exposure, 0);
+    const mtmByTicker = j.markToMarket || {};
+    const totalUnrealized = j.totalUnrealizedPnl ?? 0;
+    const accountValue = balDollars + totalExposure + totalUnrealized;  // cash + at-risk + unrealized gain/loss
     stateEl.innerHTML = `
       <div class="stat"><div class="stat-label">cash balance</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
-      <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
       <div class="stat"><div class="stat-label">capital at risk</div><div class="stat-val">$${totalExposure.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${totalUnrealized >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalUnrealized)}</div></div>
+      <div class="stat"><div class="stat-label">account value</div><div class="stat-val ${accountValue >= 20 ? 'warm' : 'cool'}">$${accountValue.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
       <div class="stat"><div class="stat-label">resting orders</div><div class="stat-val">${orders.length}</div></div>
       <div class="stat"><div class="stat-label">recent fills</div><div class="stat-val">${fills.length}</div></div>`;
     if (heldPositions.length === 0) {
       openEl.innerHTML = `<p class="muted small">No open positions.</p>`;
     } else {
       openEl.innerHTML = `<table class="paper-table"><thead><tr>
-        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Stake</th>
+        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th>
       </tr></thead><tbody>${heldPositions.map(p => {
         const isYes = p._qty > 0;
         const contracts = Math.abs(p._qty);
         const avgCost = contracts > 0 ? p._exposure / contracts : 0;
+        const mtm = mtmByTicker[p.ticker];
+        const sellPx = mtm?.sellPrice;
+        const unr = mtm?.unrealized_pnl;
         return `<tr>
           <td class="muted small">${p.ticker}</td>
           <td class="${isYes ? 'warm' : 'cool'}">${isYes ? 'YES' : 'NO'}</td>
           <td>${contracts}</td>
           <td>$${avgCost.toFixed(2)}</td>
           <td>$${p._exposure.toFixed(2)}</td>
+          <td class="muted small">${sellPx != null ? '$'+sellPx.toFixed(2) : '—'}</td>
+          <td class="${unr == null ? 'muted' : (unr >= 0 ? 'warm' : 'cool')}">${unr != null ? fmtSignedDollars(unr) : '—'}</td>
         </tr>`;
       }).join("")}</tbody></table>`;
     }

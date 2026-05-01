@@ -122,6 +122,52 @@ export async function getOpenOrders() {
   return await r.json();
 }
 
+// Fetch current Kalshi market state from our internal /api/kalshi.
+async function fetchMarketSnapshot() {
+  try {
+    const auth = "Basic " + btoa("internal:hydro");
+    const r = await fetch("https://weatherbot-mf.netlify.app/api/kalshi", { headers: { authorization: auth } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+// Mark-to-market: for each Kalshi position, find current bid and compute unrealized P&L.
+function markToMarket(positions, kalshi) {
+  if (!kalshi?.cities) return { byTicker: {}, totalUnrealized: 0 };
+  // Build ticker → bucket lookup. Kalshi position tickers look like KXHIGHNY-26MAY02-B65.5;
+  // our buckets are stored by their suffix (B65.5 etc).
+  const byTicker = {};
+  for (const c of kalshi.cities) {
+    for (const arr of [c.highBuckets, c.lowBuckets]) {
+      if (!arr) continue;
+      for (const b of arr) byTicker[b.ticker] = b;
+    }
+  }
+  let totalUnrealized = 0;
+  const result = {};
+  for (const p of positions) {
+    const qty = parseFloat(p.position_fp || "0");
+    if (qty === 0) continue;
+    const exposure = parseFloat(p.market_exposure_dollars || "0");
+    const tickerSuffix = p.ticker.split("-").pop();
+    const bucket = byTicker[tickerSuffix];
+    if (!bucket) continue;
+    const isYes = qty > 0;
+    const sellPrice = isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+    if (sellPrice == null) continue;
+    const sellProceeds = Math.abs(qty) * sellPrice;
+    const unrealized = sellProceeds - exposure;
+    result[p.ticker] = {
+      sellPrice,
+      sellProceeds: Math.round(sellProceeds * 100) / 100,
+      unrealized_pnl: Math.round(unrealized * 100) / 100
+    };
+    totalUnrealized += unrealized;
+  }
+  return { byTicker: result, totalUnrealized: Math.round(totalUnrealized * 100) / 100 };
+}
+
 // Public read endpoint for dashboard. Returns a snapshot of the real account state.
 export default async () => {
   const out = { account: ACCOUNT_NAME, configured: false };
@@ -136,13 +182,19 @@ export default async () => {
   }
   out.configured = true;
   try {
-    const [bal, pos, fills, orders] = await Promise.allSettled([
-      getBalance(), getPositions(), getRecentFills(50), getOpenOrders()
+    const [bal, pos, fills, orders, kalshi] = await Promise.allSettled([
+      getBalance(), getPositions(), getRecentFills(50), getOpenOrders(), fetchMarketSnapshot()
     ]);
     out.balance = bal.status === "fulfilled" ? bal.value : { error: String(bal.reason) };
     out.positions = pos.status === "fulfilled" ? pos.value : { error: String(pos.reason) };
     out.fills = fills.status === "fulfilled" ? fills.value : { error: String(fills.reason) };
     out.orders = orders.status === "fulfilled" ? orders.value : { error: String(orders.reason) };
+    // Compute unrealized P&L using current Kalshi bid prices.
+    if (out.positions?.market_positions && kalshi.status === "fulfilled") {
+      const mtm = markToMarket(out.positions.market_positions, kalshi.value);
+      out.markToMarket = mtm.byTicker;
+      out.totalUnrealizedPnl = mtm.totalUnrealized;
+    }
     out.fetchedAtUTC = new Date().toISOString();
     return new Response(JSON.stringify(out, null, 2), {
       status: 200,
