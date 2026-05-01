@@ -23,3 +23,8 @@
   from = "/api/kalshi"
   to = "/.netlify/functions/kalshi"
   status = 200
+
+[[redirects]]
+  from = "/api/paper"
+  to = "/.netlify/functions/paper"
+  status = 200

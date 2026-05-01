@@ -211,14 +211,16 @@ export default async () => {
         const k = kelly(b.p_model, b.yes_ask);
         allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
                        side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
-                       kelly: k, halfKelly: k / 2, volume: b.volume, ...ctx });
+                       kelly: k, halfKelly: k / 2, volume: b.volume,
+                       loInt: b.loInt, hiInt: b.hiInt, ...ctx });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
         const pNo = 1 - b.p_model;
         const k = kelly(pNo, b.no_ask);
         allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
                        side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
-                       kelly: k, halfKelly: k / 2, volume: b.volume, ...ctx });
+                       kelly: k, halfKelly: k / 2, volume: b.volume,
+                       loInt: b.loInt, hiInt: b.hiInt, ...ctx });
       }
     }
   }
