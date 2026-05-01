@@ -33,13 +33,33 @@ const ENDPOINT_DENYLIST = [
   /deposit/i, /withdraw/i, /transfer/i, /bank/i, /ach/i, /wire/i, /payout/i, /payment/i
 ];
 
+// Normalize the PEM in case Netlify's env var UI stripped/escaped newlines.
+// Accepts: actual multi-line PEM, single-line PEM with "\n" sequences, or single-line
+// no-newlines (just header/footer + base64). Returns a properly-formatted PEM string.
+function normalizePEM(raw) {
+  let s = (raw || "").trim();
+  // Replace literal "\n" sequences with real newlines.
+  if (!s.includes("\n") && s.includes("\\n")) s = s.replace(/\\n/g, "\n");
+  // If it's all on one line, reinsert newlines around the BEGIN/END markers and
+  // every 64 chars of the body.
+  if (!s.includes("\n")) {
+    const m = s.match(/^(-----BEGIN [^-]+-----)(.*?)(-----END [^-]+-----)$/);
+    if (m) {
+      const body = m[2].replace(/\s+/g, "");
+      const wrapped = body.match(/.{1,64}/g)?.join("\n") || "";
+      s = `${m[1]}\n${wrapped}\n${m[3]}`;
+    }
+  }
+  return s;
+}
+
 export function kalshiSign(privateKeyPEM, method, path, timestamp) {
   const message = `${timestamp}${method}${path}`;
   const signer = createSign("sha256");
   signer.update(message);
   signer.end();
   return signer.sign({
-    key: privateKeyPEM,
+    key: normalizePEM(privateKeyPEM),
     padding: constants.RSA_PKCS1_PSS_PADDING,
     saltLength: 32
   }).toString("base64");
