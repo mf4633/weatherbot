@@ -108,7 +108,104 @@ async function loadKalshi() {
   }
 }
 
+function fmtSigned(v) { if (v == null) return "—"; const s = v >= 0 ? "+" : ""; return `${s}$${v.toFixed(2)}`; }
+function fmtPctSigned(v) { if (v == null) return "—"; const s = v >= 0 ? "+" : ""; return `${s}${v.toFixed(1)}%`; }
+
+async function loadPaper() {
+  try {
+    const r = await fetch("/api/paper", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const s = j.state || {};
+    const bankroll = s.bankroll ?? 0;
+    const startBank = 20;
+    const pnlPct = (bankroll - startBank) / startBank * 100;
+    const roiPct = (s.roi ?? 0) * 100;
+    const winRatePct = (s.win_rate ?? 0) * 100;
+    const totalSettled = (s.n_bets_total ?? 0);
+    const stateEl = document.getElementById("paper-state");
+    if (stateEl) {
+      stateEl.innerHTML = `
+        <div class="stat"><div class="stat-label">bankroll</div><div class="stat-val ${bankroll >= startBank ? 'warm' : 'cool'}">$${bankroll.toFixed(2)} <span class="muted">(${fmtPctSigned(pnlPct)})</span></div></div>
+        <div class="stat"><div class="stat-label">cash free</div><div class="stat-val">$${(s.cash_free ?? 0).toFixed(2)}</div></div>
+        <div class="stat"><div class="stat-label">in flight</div><div class="stat-val">${s.open_count ?? 0} / ${s.max_concurrent ?? 20}</div></div>
+        <div class="stat"><div class="stat-label">stake / bet</div><div class="stat-val">$${(s.bet_size_dollars ?? 1).toFixed(2)}</div></div>
+        <div class="stat"><div class="stat-label">total bets</div><div class="stat-val">${totalSettled}</div></div>
+        <div class="stat"><div class="stat-label">win rate</div><div class="stat-val">${winRatePct.toFixed(1)}%</div></div>
+        <div class="stat"><div class="stat-label">total P&L</div><div class="stat-val ${(s.total_pnl ?? 0) >= 0 ? 'warm' : 'cool'}">${fmtSigned(s.total_pnl ?? 0)}</div></div>
+        <div class="stat"><div class="stat-label">ROI</div><div class="stat-val ${roiPct >= 0 ? 'warm' : 'cool'}">${fmtPctSigned(roiPct)}</div></div>
+        <div class="stat"><div class="stat-label">sold early</div><div class="stat-val">${s.n_sold_total ?? 0}</div></div>`;
+    }
+    // Open positions table.
+    const open = j.open_bets || [];
+    const openEl = document.getElementById("paper-open-wrap");
+    if (openEl) {
+      if (open.length === 0) {
+        openEl.innerHTML = `<p class="muted small">No open positions yet — first bets land when the next 5-min cron fires.</p>`;
+      } else {
+        openEl.innerHTML = `<table class="paper-table"><thead><tr>
+          <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Stake</th><th>Model μ±σ</th><th>Placed (UTC)</th>
+        </tr></thead><tbody>${open.map(b => `<tr>
+          <td>${b.city}</td>
+          <td class="muted small">${b.variable || "high"}</td>
+          <td>${b.bucket || b.ticker}</td>
+          <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
+          <td>$${b.price.toFixed(2)}</td>
+          <td>$${b.stake_dollars.toFixed(2)}</td>
+          <td class="muted small">${b.modelMean != null ? `${b.modelMean.toFixed(1)}±${b.modelStd.toFixed(1)}°F` : "—"}</td>
+          <td class="muted small">${(b.placedAtUTC || "").slice(11, 16)}</td>
+        </tr>`).join("")}</tbody></table>`;
+      }
+    }
+    // Recent settled.
+    const settled = (j.recent_settled || []).slice(0, 20);
+    const settledEl = document.getElementById("paper-settled-wrap");
+    if (settledEl) {
+      if (settled.length === 0) {
+        settledEl.innerHTML = `<p class="muted small">No settled bets yet — first settlements land at city's local 7 AM tomorrow.</p>`;
+      } else {
+        settledEl.innerHTML = `<table class="paper-table"><thead><tr>
+          <th>Date</th><th>City</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Outcome</th><th>Actual</th><th>P&L</th>
+        </tr></thead><tbody>${settled.map(s => `<tr>
+          <td class="muted small">${s.targetLocalDate || ""}</td>
+          <td>${s.city}</td>
+          <td>${s.bucket || s.ticker}</td>
+          <td class="${s.side === 'YES' ? 'warm' : 'cool'}">${s.side}</td>
+          <td>$${s.price.toFixed(2)}</td>
+          <td class="${s.outcome === 'WIN' ? 'good' : (s.outcome === 'SOLD' ? 'muted' : 'bad')}">${s.outcome}</td>
+          <td class="muted small">${s.actualHigh != null ? s.actualHigh + "°F" : (s.sell_price != null ? "@$" + s.sell_price.toFixed(2) : "—")}</td>
+          <td class="${s.pnl_dollars >= 0 ? 'warm' : 'cool'}">${fmtSigned(s.pnl_dollars)}</td>
+        </tr>`).join("")}</tbody></table>`;
+      }
+    }
+    // Per-city aggregate.
+    const cities = j.by_city || [];
+    const citiesEl = document.getElementById("paper-cities-wrap");
+    if (citiesEl) {
+      if (cities.length === 0) {
+        citiesEl.innerHTML = `<p class="muted small">Per-city breakdown appears after first settlements.</p>`;
+      } else {
+        citiesEl.innerHTML = `<table class="paper-table"><thead><tr>
+          <th>City</th><th>Bets</th><th>Wins</th><th>Sold</th><th>Win%</th><th>Staked</th><th>P&L</th><th>ROI</th>
+        </tr></thead><tbody>${cities.map(c => `<tr>
+          <td>${c.city || c.cli}</td>
+          <td>${c.n}</td><td>${c.wins}</td><td>${c.sold || 0}</td>
+          <td>${c.win_rate_pct.toFixed(1)}%</td>
+          <td>$${c.staked.toFixed(2)}</td>
+          <td class="${c.pnl >= 0 ? 'warm' : 'cool'}">${fmtSigned(c.pnl)}</td>
+          <td class="${c.roi_pct >= 0 ? 'warm' : 'cool'}">${fmtPctSigned(c.roi_pct)}</td>
+        </tr>`).join("")}</tbody></table>`;
+      }
+    }
+  } catch (e) {
+    const el = document.getElementById("paper-state");
+    if (el) el.innerHTML = `<p class="muted">Paper-trade load error: ${e.message}</p>`;
+  }
+}
+
 load();
 loadKalshi();
+loadPaper();
 setInterval(load, 60_000);
 setInterval(loadKalshi, 120_000);
+setInterval(loadPaper, 60_000);

@@ -378,9 +378,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
-    // σ floor bumped 0.4 → 0.8: empirical end-of-day RMSE is ~1.0°F, so a CI narrower
-    // than ±0.8°F understates remaining uncertainty (cloud break, late convection, etc.)
-    const priorStd = Math.max(0.8, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    // σ formula re-tuned for the 5-model ensemble. Old: max(0.8, 1.0 + 0.12*lead + 0.10*|bias|)
+    // gave σ̄=1.66 against actual RMSE=1.31 — over-covering 84% in 68% CI (target 68%).
+    // New params from grid-search calibrated to min |cov68-0.68|+|cov95-0.95|:
+    //   TEST: σ̄=1.18, cov68=70%, cov95=93%, RMSE unchanged at 1.31°F.
+    const priorStd = Math.max(0.4, 0.7 + 0.08 * hrsToPeak + 0.10 * biasMag);
     // Bayesian truncation: posterior given X >= maxSoFar (max can't be below what's already observed).
     // Use truncated mean but keep empirically-calibrated σ — the σ formula was tuned to actual error
     // variance, not to the forecast prior's variance, so don't shrink it via truncation math.
@@ -403,7 +405,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     const biasWeight = 0.4;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     const priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
-    const priorLowStd = Math.max(0.8, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    const priorLowStd = Math.max(0.4, 0.7 + 0.08 * hrsToPeak + 0.10 * biasMag);
     // Truncate from above: low <= minSoFar.
     lowMean = truncNormalMeanUpper(priorLowMean, priorLowStd, minSoFar);
     lowStd = priorLowStd;

@@ -53,6 +53,22 @@
   </table>
 </section>
 
+<section id="paper-section">
+  <h2>Phase 0 paper trading</h2>
+  <p class="sub">
+    No real money. $20 starting bankroll, max 20 concurrent bets, stake = max($1, bankroll/20).
+    Logger places +EV Kalshi bets every 5 min, settles when CLI lands the next morning.
+    Sells positions whose model has flipped negative (never sells winners).
+  </p>
+  <div id="paper-state" class="paper-row"></div>
+  <h3>Open positions</h3>
+  <div id="paper-open-wrap"></div>
+  <h3>Recent settled (last 20)</h3>
+  <div id="paper-settled-wrap"></div>
+  <h3>Per-city performance</h3>
+  <div id="paper-cities-wrap"></div>
+</section>
+
 <footer>
   <p>Source: NWS METAR (aviationweather.gov), NWS forecast API (api.weather.gov), CLI products (forecast.weather.gov).
      Predictions are heuristic — not an official forecast.</p>
