@@ -61,9 +61,9 @@ async function placeSellOrder(ticker, side, count, priceCents) {
 }
 
 export default async () => {
-  if (!process.env.KALSHI_KEY_ID || !process.env.KALSHI_PRIVATE_KEY) {
+  if (!process.env.KALSHI_ACCESS_KEY_ID || !process.env.KALSHI_PRIVATE_KEY) {
     return new Response(JSON.stringify({ ok: true, dormant: true,
-      message: "Real-trader dormant: KALSHI_KEY_ID/KALSHI_PRIVATE_KEY not set" }), {
+      message: "Real-trader dormant: KALSHI_ACCESS_KEY_ID/KALSHI_PRIVATE_KEY not set" }), {
       status: 200, headers: { "content-type": "application/json" }
     });
   }

@@ -2,7 +2,7 @@
 // Reads live balance + positions + fills from Kalshi. Surfaces them for the dashboard.
 //
 // Authentication: RSA-PSS-SHA256 signed requests using credentials in env:
-//   KALSHI_KEY_ID         — UUID of API key created in Kalshi web UI
+//   KALSHI_ACCESS_KEY_ID         — UUID of API key created in Kalshi web UI
 //   KALSHI_PRIVATE_KEY    — RSA private key (PEM), shown once at API key creation
 //
 // SAFETY GUARDRAIL:
@@ -46,10 +46,10 @@ export function kalshiSign(privateKeyPEM, method, path, timestamp) {
 }
 
 export async function kalshiAuthedFetch(method, path, body = null) {
-  const keyId = process.env.KALSHI_KEY_ID;
+  const keyId = process.env.KALSHI_ACCESS_KEY_ID;
   const privKey = process.env.KALSHI_PRIVATE_KEY;
   if (!keyId || !privKey) {
-    const err = new Error("Kalshi credentials not configured (env KALSHI_KEY_ID, KALSHI_PRIVATE_KEY)");
+    const err = new Error("Kalshi credentials not configured (env KALSHI_ACCESS_KEY_ID, KALSHI_PRIVATE_KEY)");
     err.code = "NOT_CONFIGURED";
     throw err;
   }
@@ -103,10 +103,10 @@ export async function getOpenOrders() {
 // Public read endpoint for dashboard. Returns a snapshot of the real account state.
 export default async () => {
   const out = { account: ACCOUNT_NAME, configured: false };
-  if (!process.env.KALSHI_KEY_ID || !process.env.KALSHI_PRIVATE_KEY) {
+  if (!process.env.KALSHI_ACCESS_KEY_ID || !process.env.KALSHI_PRIVATE_KEY) {
     return new Response(JSON.stringify({
       ...out,
-      message: "Kalshi credentials not yet configured. Set KALSHI_KEY_ID and KALSHI_PRIVATE_KEY env vars to activate."
+      message: "Kalshi credentials not yet configured. Set KALSHI_ACCESS_KEY_ID and KALSHI_PRIVATE_KEY env vars to activate."
     }, null, 2), {
       status: 200,
       headers: { "content-type": "application/json", "cache-control": "public, max-age=60" }
