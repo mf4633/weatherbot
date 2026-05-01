@@ -35,7 +35,8 @@ function priorLocalDate(tz, date = new Date()) {
 }
 
 async function fetchAllPredictions() {
-  const r = await fetch(`${SITE_BASE}/api/weather`);
+  const auth = "Basic " + btoa("internal:hydro");
+  const r = await fetch(`${SITE_BASE}/api/weather`, { headers: { authorization: auth } });
   if (!r.ok) throw new Error(`weather API ${r.status}`);
   return await r.json();
 }

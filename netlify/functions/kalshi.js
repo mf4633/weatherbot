@@ -47,7 +47,9 @@ function kalshiDateSuffix(date, tz) {
 }
 
 async function fetchPredictions() {
-  const r = await fetch(`${SITE_BASE}/api/weather`);
+  // Pass auth so we don't get blocked by the Basic Auth edge function.
+  const auth = "Basic " + btoa("internal:hydro");
+  const r = await fetch(`${SITE_BASE}/api/weather`, { headers: { authorization: auth } });
   if (!r.ok) throw new Error(`weather API ${r.status}`);
   return await r.json();
 }
