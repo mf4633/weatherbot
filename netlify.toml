@@ -28,3 +28,8 @@
   from = "/api/paper"
   to = "/.netlify/functions/paper"
   status = 200
+
+[[redirects]]
+  from = "/api/jackson"
+  to = "/.netlify/functions/jackson"
+  status = 200

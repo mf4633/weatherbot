@@ -69,6 +69,24 @@
   <div id="paper-cities-wrap"></div>
 </section>
 
+<section id="jackson-section">
+  <h2>Andrew Jackson — real money ($20)</h2>
+  <p class="sub">
+    Live Kalshi account <code>royal.greyhound5665</code>. Same rules as phase 0
+    paper trading: max 20 concurrent bets, stake = max($1, balance/20), edge ≥ 5¢,
+    half-Kelly ≥ 2%, sell would-be losers, refresh every 5 min.
+    Code has hard guardrails: <strong>only deposit/withdrawal action permitted is by you, manually, via the Kalshi UI.</strong>
+    The bot's API allowlist permits only orders, balance, positions, fills, and market data —
+    transfer endpoints are denied.
+  </p>
+  <p id="jackson-status" class="sub muted">Loading…</p>
+  <div id="jackson-state" class="paper-row"></div>
+  <h3>Open positions</h3>
+  <div id="jackson-open-wrap"></div>
+  <h3>Recent fills</h3>
+  <div id="jackson-fills-wrap"></div>
+</section>
+
 <footer>
   <p>Source: NWS METAR (aviationweather.gov), NWS forecast API (api.weather.gov), CLI products (forecast.weather.gov).
      Predictions are heuristic — not an official forecast.</p>

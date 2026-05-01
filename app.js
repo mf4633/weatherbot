@@ -135,8 +135,12 @@ async function loadPaper() {
     const totalSettled = (s.n_bets_total ?? 0);
     const stateEl = document.getElementById("paper-state");
     if (stateEl) {
+      const mtm = s.bankroll_mtm ?? bankroll;
+      const unr = s.unrealized_pnl ?? 0;
       stateEl.innerHTML = `
         <div class="stat"><div class="stat-label">bankroll</div><div class="stat-val ${bankroll >= startBank ? 'warm' : 'cool'}">$${bankroll.toFixed(2)} <span class="muted">(${fmtPctSigned(pnlPct)})</span></div></div>
+        <div class="stat"><div class="stat-label">mark-to-market</div><div class="stat-val ${mtm >= startBank ? 'warm' : 'cool'}">$${mtm.toFixed(2)}</div></div>
+        <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${unr >= 0 ? 'warm' : 'cool'}">${fmtSigned(unr)}</div></div>
         <div class="stat"><div class="stat-label">cash free</div><div class="stat-val">$${(s.cash_free ?? 0).toFixed(2)}</div></div>
         <div class="stat"><div class="stat-label">in flight</div><div class="stat-val">${s.open_count ?? 0} / ${s.max_concurrent ?? 20}</div></div>
         <div class="stat"><div class="stat-label">stake / bet</div><div class="stat-val">$${(s.bet_size_dollars ?? 1).toFixed(2)}</div></div>
@@ -154,17 +158,23 @@ async function loadPaper() {
         openEl.innerHTML = `<p class="muted small">No open positions yet — first bets land when the next 5-min cron fires.</p>`;
       } else {
         openEl.innerHTML = `<table class="paper-table"><thead><tr>
-          <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Stake</th><th>Model μ±σ</th><th>Placed (UTC)</th>
-        </tr></thead><tbody>${open.map(b => `<tr>
-          <td>${b.city}</td>
-          <td class="muted small">${b.variable || "high"}</td>
-          <td>${b.bucket || b.ticker}</td>
-          <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
-          <td>$${b.price.toFixed(2)}</td>
-          <td>$${b.stake_dollars.toFixed(2)}</td>
-          <td class="muted small">${b.modelMean != null ? `${b.modelMean.toFixed(1)}±${b.modelStd.toFixed(1)}°F` : "—"}</td>
-          <td class="muted small">${(b.placedAtUTC || "").slice(11, 16)}</td>
-        </tr>`).join("")}</tbody></table>`;
+          <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Model μ±σ</th>
+        </tr></thead><tbody>${open.map(b => {
+          const mtm = b.markToMarket;
+          const sellPx = mtm?.sellPrice;
+          const unr = mtm?.unrealized_pnl;
+          return `<tr>
+            <td>${b.city}</td>
+            <td class="muted small">${b.variable || "high"}</td>
+            <td>${b.bucket || b.ticker}</td>
+            <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
+            <td>$${b.price.toFixed(2)}</td>
+            <td>$${b.stake_dollars.toFixed(2)}</td>
+            <td class="muted small">${sellPx != null ? '$'+sellPx.toFixed(2) : '—'}</td>
+            <td class="${unr == null ? 'muted' : (unr >= 0 ? 'warm' : 'cool')}">${unr != null ? fmtSigned(unr) : '—'}</td>
+            <td class="muted small">${b.modelMean != null ? `${b.modelMean.toFixed(1)}±${b.modelStd.toFixed(1)}°F` : "—"}</td>
+          </tr>`;
+        }).join("")}</tbody></table>`;
       }
     }
     // Recent settled.
@@ -213,9 +223,87 @@ async function loadPaper() {
   }
 }
 
+async function loadJackson() {
+  const statusEl = document.getElementById("jackson-status");
+  const stateEl = document.getElementById("jackson-state");
+  const openEl = document.getElementById("jackson-open-wrap");
+  const fillsEl = document.getElementById("jackson-fills-wrap");
+  if (!statusEl || !stateEl) return;
+  try {
+    const r = await fetch("/api/jackson", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if (!j.configured) {
+      statusEl.textContent = "DORMANT — Kalshi API credentials not yet set. Add KALSHI_KEY_ID and KALSHI_PRIVATE_KEY to Netlify env to activate.";
+      statusEl.className = "sub muted";
+      stateEl.innerHTML = "";
+      openEl.innerHTML = "";
+      fillsEl.innerHTML = "";
+      return;
+    }
+    if (j.error) {
+      statusEl.textContent = `ERROR: ${j.error}`;
+      statusEl.className = "sub";
+      stateEl.style.color = "var(--warm)";
+      return;
+    }
+    statusEl.textContent = `Live · fetched ${(j.fetchedAtUTC || "").slice(11, 16)} UTC`;
+    statusEl.className = "sub fresh";
+    const balDollars = (j.balance?.balance ?? 0) / 100;
+    const positions = j.positions?.market_positions || [];
+    const heldPositions = positions.filter(p => p.position !== 0);
+    const fills = j.fills?.fills || [];
+    const orders = j.orders?.orders || [];
+    const totalExposure = heldPositions.reduce((a, p) => a + Math.abs(p.position) * Math.abs(p.average_buy_cost ?? 0) / 100, 0);
+    stateEl.innerHTML = `
+      <div class="stat"><div class="stat-label">cash balance</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
+      <div class="stat"><div class="stat-label">capital at risk</div><div class="stat-val">$${totalExposure.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">resting orders</div><div class="stat-val">${orders.length}</div></div>
+      <div class="stat"><div class="stat-label">recent fills</div><div class="stat-val">${fills.length}</div></div>`;
+    if (heldPositions.length === 0) {
+      openEl.innerHTML = `<p class="muted small">No open positions.</p>`;
+    } else {
+      openEl.innerHTML = `<table class="paper-table"><thead><tr>
+        <th>Ticker</th><th>Side</th><th>Contracts</th><th>Avg cost</th><th>Total stake</th>
+      </tr></thead><tbody>${heldPositions.map(p => {
+        const isYes = p.position > 0;
+        const contracts = Math.abs(p.position);
+        const avgCost = Math.abs(p.average_buy_cost ?? 0) / 100;
+        return `<tr>
+          <td class="muted small">${p.ticker}</td>
+          <td class="${isYes ? 'warm' : 'cool'}">${isYes ? 'YES' : 'NO'}</td>
+          <td>${contracts}</td>
+          <td>$${avgCost.toFixed(2)}</td>
+          <td>$${(contracts * avgCost).toFixed(2)}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
+    }
+    if (fills.length === 0) {
+      fillsEl.innerHTML = `<p class="muted small">No recent fills.</p>`;
+    } else {
+      fillsEl.innerHTML = `<table class="paper-table"><thead><tr>
+        <th>Ticker</th><th>Action</th><th>Side</th><th>Count</th><th>Price</th><th>When</th>
+      </tr></thead><tbody>${fills.slice(0, 20).map(f => `<tr>
+        <td class="muted small">${f.ticker}</td>
+        <td>${f.action}</td>
+        <td class="${f.side === 'yes' ? 'warm' : 'cool'}">${f.side?.toUpperCase()}</td>
+        <td>${f.count}</td>
+        <td>$${((f.yes_price ?? f.no_price ?? 0) / 100).toFixed(2)}</td>
+        <td class="muted small">${(f.created_time || "").slice(0, 16)}</td>
+      </tr>`).join("")}</tbody></table>`;
+    }
+  } catch (e) {
+    statusEl.textContent = `Load error: ${e.message}`;
+    statusEl.className = "sub";
+  }
+}
+
 load();
 loadKalshi();
 loadPaper();
+loadJackson();
 setInterval(load, 60_000);
 setInterval(loadKalshi, 120_000);
 setInterval(loadPaper, 60_000);
+setInterval(loadJackson, 60_000);

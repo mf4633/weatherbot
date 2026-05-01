@@ -1,6 +1,18 @@
-// Paper-trading dashboard. Returns: bankroll, open bets, settled bets, rolling stats.
+// Paper-trading dashboard. Returns: bankroll, open bets, settled bets, unrealized P&L,
+// rolling stats. Mark-to-market open positions using current Kalshi bid prices.
 
 import { getStore } from "@netlify/blobs";
+
+const SITE_BASE = "https://weatherbot-mf.netlify.app";
+
+async function fetchKalshiSnapshot() {
+  try {
+    const auth = "Basic " + btoa("internal:hydro");
+    const r = await fetch(`${SITE_BASE}/api/kalshi`, { headers: { authorization: auth } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
 
 export default async () => {
   const stateStore = getStore("paper_state");
@@ -12,16 +24,43 @@ export default async () => {
     win_rate: 0, roi: 0
   };
 
-  const [{ blobs: openBlobs }, { blobs: settledBlobs }] = await Promise.all([
+  const [{ blobs: openBlobs }, { blobs: settledBlobs }, kalshi] = await Promise.all([
     openStore.list().catch(() => ({ blobs: [] })),
-    settledStore.list().catch(() => ({ blobs: [] }))
+    settledStore.list().catch(() => ({ blobs: [] })),
+    fetchKalshiSnapshot()
   ]);
-  const open = (await Promise.all(
+  let open = (await Promise.all(
     openBlobs.map(b => openStore.get(b.key, { type: "json" }).catch(() => null))
   )).filter(Boolean).sort((a, b) => (a.placedAtUTC < b.placedAtUTC ? 1 : -1));
   const settled = (await Promise.all(
     settledBlobs.map(b => settledStore.get(b.key, { type: "json" }).catch(() => null))
   )).filter(Boolean).sort((a, b) => (a.settledAtUTC < b.settledAtUTC ? 1 : -1));
+
+  // Mark-to-market: for each open bet, find its current Kalshi bid and compute unrealized P&L.
+  if (kalshi?.cities) {
+    const bucketByTicker = {};
+    for (const c of kalshi.cities) {
+      for (const arr of [c.highBuckets, c.lowBuckets]) {
+        if (!arr) continue;
+        for (const b of arr) bucketByTicker[`${c.name}-${b.ticker}`] = b;
+      }
+    }
+    for (const bet of open) {
+      const key = `${bet.city}-${bet.ticker}`;
+      const bucket = bucketByTicker[key];
+      if (!bucket) continue;
+      const sellPrice = bet.side === "YES" ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+      if (sellPrice == null) continue;
+      const contracts = bet.stake_dollars / bet.price;
+      const sellProceeds = contracts * sellPrice;
+      bet.markToMarket = {
+        sellPrice,
+        sellProceeds: Math.round(sellProceeds * 100) / 100,
+        unrealized_pnl: Math.round((sellProceeds - bet.stake_dollars) * 100) / 100
+      };
+    }
+  }
+  const unrealizedPnl = open.reduce((a, b) => a + (b.markToMarket?.unrealized_pnl || 0), 0);
 
   const bet_size = Math.max(1, state.bankroll / 20);
   const max_concurrent = Math.min(20, Math.floor(state.bankroll / bet_size));
@@ -52,7 +91,9 @@ export default async () => {
       open_count: open.length,
       open_stake_dollars: Math.round(openStake * 100) / 100,
       cash_free: Math.round((state.bankroll - openStake) * 100) / 100,
-      n_sold_total: totalSold
+      n_sold_total: totalSold,
+      unrealized_pnl: Math.round(unrealizedPnl * 100) / 100,
+      bankroll_mtm: Math.round((state.bankroll + unrealizedPnl) * 100) / 100
     },
     by_city: cityAgg,
     open_bets: open,

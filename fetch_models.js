@@ -27,20 +27,35 @@ const CITIES = [
   { name: "BOS",  lat: 42.3656, lon: -71.0096, tz: "America/New_York" }
 ];
 
+// Production 5 (drop JMA, GEM — they hurt the ensemble in earlier tests).
 const MODELS = [
-  "gfs_seamless", "ecmwf_ifs025", "icon_seamless", "gem_seamless",
-  "jma_seamless", "ukmo_seamless", "meteofrance_seamless"
+  "gfs_seamless", "ecmwf_ifs025", "icon_seamless", "ukmo_seamless", "meteofrance_seamless"
 ];
-const LOOKBACK_DAYS = 365;
+const LOOKBACK_DAYS = 5 * 365;  // 5 years for per-city weight tuning
 
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 function addDays(d, n) { return new Date(d.getTime() + n * 24 * 3600 * 1000); }
+
+async function fetchWithRetry(url, attempts = 5) {
+  for (let i = 0; i < attempts; i++) {
+    const r = await fetch(url);
+    if (r.ok) return r;
+    if (r.status === 429 || r.status >= 500) {
+      const wait = 5000 * (i + 1);  // 5s, 10s, 15s, 20s, 25s
+      process.stdout.write(`(${r.status} retry ${i+1}/${attempts}) `);
+      await new Promise(res => setTimeout(res, wait));
+      continue;
+    }
+    return r;
+  }
+  throw new Error(`fetch failed after ${attempts} retries: ${url.slice(0, 100)}`);
+}
 
 async function fetchObs(city, start, end) {
   const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${city.lat}&longitude=${city.lon}`
     + `&start_date=${isoDate(start)}&end_date=${isoDate(end)}`
     + `&hourly=temperature_2m&temperature_unit=fahrenheit&timezone=UTC`;
-  const r = await fetch(url);
+  const r = await fetchWithRetry(url);
   if (!r.ok) throw new Error(`obs ${r.status}`);
   return await r.json();
 }
@@ -49,9 +64,11 @@ async function fetchModel(city, start, end, model) {
   const url = `https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}`
     + `&start_date=${isoDate(start)}&end_date=${isoDate(end)}`
     + `&hourly=temperature_2m&temperature_unit=fahrenheit&timezone=UTC&models=${model}`;
-  const r = await fetch(url);
-  if (!r.ok) return null;
-  return await r.json();
+  try {
+    const r = await fetchWithRetry(url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
 }
 
 const today = new Date();
