@@ -273,9 +273,19 @@ export default async () => {
 
   // kalshiData already fetched above for sell-evaluation; reuse here.
   const fr = kalshiData?.freshness || {};
-  const skipFresh = !!(fr.cacheStale || fr.forecastStale);
+  // Per-city freshness check: skip individual bets whose city's forecast is stale,
+  // not the whole run. Old logic globally blocked when ANY city was stale.
+  const PER_CITY_FRESHNESS_MAX_MIN = 180;
+  const cityForecastAgeMin = {};
+  for (const c of weatherData.cities || []) {
+    if (c.forecastUpdateTime) {
+      cityForecastAgeMin[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
+    }
+  }
+  const skipCacheGlobal = !!fr.cacheStale;  // cache stale = whole snapshot useless; still global
 
-  if (spareCapacity > 0 && kalshiData && !skipFresh) {
+  const skippedStaleCities = new Set();
+  if (spareCapacity > 0 && kalshiData && !skipCacheGlobal) {
     const qualifying = (kalshiData.topBets || []).filter(b =>
       b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY
     );
@@ -285,8 +295,14 @@ export default async () => {
       if (placedThisRun.length >= spareCapacity) break;
       const c = cityByName[b.city];
       if (!c) continue;
+      // Per-city freshness gate.
+      const ageMin = cityForecastAgeMin[b.city];
+      if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) {
+        skippedStaleCities.add(b.city);
+        continue;
+      }
       const targetLocalDate = localDateParts(c.tz, now).date;
-      const betId = `${c.cli}-${targetLocalDate}-${b.ticker}-${b.side}`;
+      const betId = `${c.cli}-${targetLocalDate}-${b.ticker}-${b.side}-${b.variable || "high"}`;
       if (openIds.has(betId)) continue;  // already in flight
       // Also skip if a settled bet exists with this ID (already played for that target date).
       const wasSettled = await settledStore.get(`${betId}.json`, { type: "json" }).catch(() => null);
@@ -318,8 +334,10 @@ export default async () => {
     ok: true, ranAtUTC: now.toISOString(),
     bankroll: state.bankroll, openCount: openIds.size,
     bet_size_dollars: Math.round(bet_size * 100) / 100,
-    spareCapacity, freshnessSkip: skipFresh,
-    captures, reconciliations, placements, settlements
+    spareCapacity,
+    cacheStale: skipCacheGlobal,
+    skippedStaleCities: Array.from(skippedStaleCities),
+    captures, reconciliations, placements, sales, settlements
   }), { headers: { "content-type": "application/json" } });
 };
 
