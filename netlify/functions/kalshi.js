@@ -10,22 +10,22 @@
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
 
-// Map our city display name → Kalshi series ticker (today, Apr 2026).
+// Map our city display name → Kalshi series ticker for HIGH and LOW.
 // 7 of 20 cities don't have Kalshi markets and are skipped: SAN, JAX, TPA, SJC, CMH, CLT, IND.
-const CITY_TO_KALSHI_SERIES = {
-  "New York":          "KXHIGHNY",
-  "Los Angeles":       "KXHIGHLAX",
-  "Chicago":           "KXHIGHCHI",
-  "Houston":           "KXHIGHHOU",
-  "Phoenix":           "KXHIGHTPHX",
-  "Philadelphia":      "KXHIGHPHIL",
-  "San Antonio":       "KXHIGHTSATX",
-  "Dallas-Fort Worth": "KXHIGHTDAL",
-  "Austin":            "KXHIGHAUS",
-  "Seattle":           "KXHIGHTSEA",
-  "Denver":            "KXHIGHDEN",
-  "Washington DC":     "KXHIGHTDC",
-  "Boston":            "KXHIGHTBOS"
+const CITY_TO_KALSHI = {
+  "New York":          { high: "KXHIGHNY",   low: "KXLOWNY"     },
+  "Los Angeles":       { high: "KXHIGHLAX",  low: "KXLOWLAX"    },
+  "Chicago":           { high: "KXHIGHCHI",  low: "KXLOWTCHI"   },
+  "Houston":           { high: "KXHIGHHOU",  low: "KXLOWTHOU"   },
+  "Phoenix":           { high: "KXHIGHTPHX", low: "KXLOWTPHX"   },
+  "Philadelphia":      { high: "KXHIGHPHIL", low: "KXLOWPHIL"   },
+  "San Antonio":       { high: "KXHIGHTSATX", low: "KXLOWTSATX" },
+  "Dallas-Fort Worth": { high: "KXHIGHTDAL", low: "KXLOWTDAL"   },
+  "Austin":            { high: "KXHIGHAUS",  low: "KXLOWAUS"    },
+  "Seattle":           { high: "KXHIGHTSEA", low: "KXLOWTSEA"   },
+  "Denver":            { high: "KXHIGHDEN",  low: "KXLOWDEN"    },
+  "Washington DC":     { high: "KXHIGHTDC",  low: null          },  // no DCA low yet
+  "Boston":            { high: "KXHIGHTBOS", low: "KXLOWTBOS"   }
 };
 
 // Standard normal CDF (Abramowitz & Stegun 26.2.17, ~7-decimal accuracy).
@@ -92,18 +92,21 @@ function bucketBounds(market) {
   return { loInt: fs, hiInt: cs };
 }
 
-// P(high in [loInt, hiInt]) under N(mean, std), with integer-degree quantization (high is reported as int).
-// We use continuity correction: bucket [a, b] integer ↔ (a-0.5, b+0.5) on the continuous distribution.
-// Truncate at maxSoFar (today's high cannot be < what's already observed).
-function bucketProb(mean, std, loInt, hiInt, maxSoFar) {
-  // Effective lower bound for the bucket (after truncation).
+// P(temp in [loInt, hiInt]) under N(mean, std), with integer-degree quantization.
+// Continuity correction: bucket [a, b] integer ↔ (a-0.5, b+0.5) on the continuous distribution.
+// Truncation:
+//  - lowerFloor: temp >= lowerFloor (e.g., today's HIGH can't be < maxSoFar already observed)
+//  - upperFloor: temp <= upperFloor (e.g., today's LOW can't be > minSoFar already observed)
+function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = null) {
   let effLo = loInt === -Infinity ? -Infinity : loInt - 0.5;
   let effHi = hiInt === Infinity ? Infinity : hiInt + 0.5;
-  if (maxSoFar != null) {
-    // Bucket entirely below maxSoFar: impossible.
-    if (effHi < maxSoFar) return 0;
-    // Bucket spans maxSoFar: clip.
-    if (effLo < maxSoFar) effLo = maxSoFar;
+  if (lowerFloor != null) {
+    if (effHi < lowerFloor) return 0;
+    if (effLo < lowerFloor) effLo = lowerFloor;
+  }
+  if (upperFloor != null) {
+    if (effLo > upperFloor) return 0;
+    if (effHi > upperFloor) effHi = upperFloor;
   }
   const pHi = effHi === Infinity ? 1 : normCdf((effHi - mean) / std);
   const pLo = effLo === -Infinity ? 0 : normCdf((effLo - mean) / std);
@@ -142,22 +145,14 @@ export default async () => {
     forecastStale: oldestForecastMs ? (Date.now() - oldestForecastMs) > 90 * 60 * 1000 : false
   };
 
-  for (const city of predData.cities || []) {
-    if (city.error) continue;
-    const series = CITY_TO_KALSHI_SERIES[city.name];
-    if (!series) {
-      cities.push({ name: city.name, station: city.station, kalshi: "no market", model: { mean: city.mean, std: city.std } });
-      continue;
-    }
-
+  // Helper: process one event (HIGH or LOW) for a city.
+  // variable = "high" | "low"; mean / std come from our model for that variable;
+  // lowerFloor / upperFloor are the truncation bounds from already-realized observations.
+  async function processEvent(city, series, variable, mean, std, lowerFloor, upperFloor) {
     const eventTicker = `${series}-${kalshiDateSuffix(now, city.tz)}`;
     const m = await fetchKalshiMarkets(eventTicker);
-    if (!m || !m.markets || !m.markets.length) {
-      cities.push({ name: city.name, station: city.station, kalshi: `event ${eventTicker} not found`, model: { mean: city.mean, std: city.std } });
-      continue;
-    }
+    if (!m || !m.markets || !m.markets.length) return null;
 
-    // Renormalize bucket probabilities so they sum to 1 (handles floor truncation cleanly).
     const bucketsRaw = m.markets.map(mkt => {
       const { loInt, hiInt } = bucketBounds(mkt);
       const yes_ask = mkt.yes_ask_dollars ? parseFloat(mkt.yes_ask_dollars) : null;
@@ -171,60 +166,80 @@ export default async () => {
                yes_ask, yes_bid, no_ask, no_bid, last, midPx,
                volume: mkt.volume_fp || 0 };
     });
-    const probSum = bucketsRaw.reduce((a, b) => a + bucketProb(city.mean, city.std, b.loInt, b.hiInt, city.maxSoFar), 0);
+    const probSum = bucketsRaw.reduce((a, b) =>
+      a + bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor), 0);
     const buckets = bucketsRaw.map(b => {
-      const rawP = bucketProb(city.mean, city.std, b.loInt, b.hiInt, city.maxSoFar);
+      const rawP = bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor);
       const p_model = probSum > 0 ? rawP / probSum : 0;
-      // EV per $1 staked (buying at ask).
       const evYes = b.yes_ask != null ? p_model - b.yes_ask : null;
       const evNo  = b.no_ask  != null ? (1 - p_model) - b.no_ask : null;
       return { ...b, p_model: Math.round(p_model * 1000) / 1000, evYes, evNo };
     });
 
-    cities.push({
-      name: city.name,
-      station: city.station,
-      kalshi: eventTicker,
-      model: { mean: city.mean, std: city.std, maxSoFar: city.maxSoFar, currentTemp: city.currentTemp },
-      buckets: buckets.map(b => ({
-        bucket: b.label,
-        ticker: b.ticker.split("-").pop(),
-        kalshi_mid: b.midPx,
-        kalshi_yes_ask: b.yes_ask,
-        kalshi_yes_bid: b.yes_bid,
-        kalshi_no_ask: b.no_ask,
-        kalshi_no_bid: b.no_bid,
-        p_model: b.p_model,
-        edgeYes: b.yes_ask != null ? Math.round((b.p_model - b.yes_ask) * 1000) / 1000 : null,
-        edgeNo:  b.no_ask  != null ? Math.round(((1 - b.p_model) - b.no_ask) * 1000) / 1000 : null,
-        volume: b.volume
-      }))
-    });
-
-    // Collect bets for ranking.
-    // Kelly fraction f* = (p - price) / (1 - price). It's the optimal % of bankroll to stake
-    // given a binary bet at price `price` with model probability `p`. Combines probability and
-    // edge in one number: large edge at low price → big Kelly; small edge at price near 1 → tiny Kelly.
-    // Half-Kelly = f*/2 is the practical recommendation given our model's ~1.7°F RMSE uncertainty.
     const kelly = (p, price) => Math.max(0, (p - price) / (1 - price));
-    const ctx = { modelMean: city.mean, modelStd: city.std, maxSoFar: city.maxSoFar };
+    const eventBets = [];
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
         const k = kelly(b.p_model, b.yes_ask);
-        allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
-                       side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
-                       kelly: k, halfKelly: k / 2, volume: b.volume,
-                       loInt: b.loInt, hiInt: b.hiInt, ...ctx });
+        eventBets.push({
+          city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
+          side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
+          kelly: k, halfKelly: k / 2, volume: b.volume,
+          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
+        });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
         const pNo = 1 - b.p_model;
         const k = kelly(pNo, b.no_ask);
-        allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
-                       side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
-                       kelly: k, halfKelly: k / 2, volume: b.volume,
-                       loInt: b.loInt, hiInt: b.hiInt, ...ctx });
+        eventBets.push({
+          city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
+          side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
+          kelly: k, halfKelly: k / 2, volume: b.volume,
+          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
+        });
       }
     }
+
+    return { eventTicker, variable, mean, std, buckets, eventBets };
+  }
+
+  for (const city of predData.cities || []) {
+    if (city.error) continue;
+    const tickers = CITY_TO_KALSHI[city.name];
+    if (!tickers) {
+      cities.push({ name: city.name, station: city.station, kalshi: "no market" });
+      continue;
+    }
+    const cityRecord = { name: city.name, station: city.station,
+                         model: { highMean: city.mean, highStd: city.std, maxSoFar: city.maxSoFar,
+                                  lowMean: city.lowMean, lowStd: city.lowStd, minSoFar: city.minSoFar,
+                                  currentTemp: city.currentTemp } };
+
+    // HIGH event.
+    if (tickers.high) {
+      const r = await processEvent(city, tickers.high, "high", city.mean, city.std,
+                                    city.maxSoFar, null);
+      if (r) {
+        cityRecord.highEvent = r.eventTicker;
+        cityRecord.highBuckets = r.buckets;
+        allBets.push(...r.eventBets);
+      } else {
+        cityRecord.highEvent = "not found";
+      }
+    }
+    // LOW event.
+    if (tickers.low && city.lowMean != null && city.lowStd != null) {
+      const r = await processEvent(city, tickers.low, "low", city.lowMean, city.lowStd,
+                                    null, city.minSoFar);
+      if (r) {
+        cityRecord.lowEvent = r.eventTicker;
+        cityRecord.lowBuckets = r.buckets;
+        allBets.push(...r.eventBets);
+      } else {
+        cityRecord.lowEvent = "not found";
+      }
+    }
+    cities.push(cityRecord);
   }
 
   // Sort by Kelly fraction (the "wisest choice" combining probability and edge).

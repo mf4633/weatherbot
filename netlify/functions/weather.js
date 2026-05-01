@@ -280,6 +280,18 @@ function forecastPeakToday(hourly, tzMidnight) {
   if (!todayPeriods.length) return null;
   return Math.max(...todayPeriods.map(p => p.tempF));
 }
+function forecastTroughToday(hourly, tzMidnight) {
+  if (!hourly?.length) return null;
+  const tomorrowMidnight = new Date(tzMidnight.getTime() + 24 * 3600 * 1000);
+  const todayPeriods = hourly.filter(p => p.ts >= tzMidnight && p.ts < tomorrowMidnight);
+  if (!todayPeriods.length) return null;
+  return Math.min(...todayPeriods.map(p => p.tempF));
+}
+// Truncated normal mean for X | X <= a (upper-bound truncation; mirror of truncNormalMean).
+function truncNormalMeanUpper(mu, sigma, a) {
+  // Mirror around 0 and reuse the lower-bound function.
+  return -truncNormalMean(-mu, sigma, -a);
+}
 
 function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   const now = new Date();
@@ -287,6 +299,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   const todayObs = metars.filter(o => o.ts >= localMidnight);
   const tempsF = todayObs.map(o => cToF(o.tempC));
   const maxSoFar = tempsF.length ? Math.max(...tempsF) : null;
+  const minSoFar = tempsF.length ? Math.min(...tempsF) : null;
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
 
@@ -299,28 +312,33 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   // NWS source.
   {
     const peak = forecastPeakToday(forecast.hourly, localMidnight) ?? forecast.dailyHigh ?? null;
+    const trough = forecastTroughToday(forecast.hourly, localMidnight);
     const at = (currentTemp != null && forecast.hourly?.length && todayObs.length)
       ? forecastTempAt(forecast.hourly, todayObs[todayObs.length - 1].ts) : null;
-    if (peak != null) sources.push({ model: "nws", peak, at });
+    if (peak != null) sources.push({ model: "nws", peak, trough, at });
   }
   // Open-Meteo ensemble sources.
   if (ensemble) {
     for (const [m, hourly] of Object.entries(ensemble)) {
       if (!hourly?.length) continue;
       const peak = forecastPeakToday(hourly, localMidnight);
+      const trough = forecastTroughToday(hourly, localMidnight);
       const at = (currentTemp != null && todayObs.length)
         ? forecastTempAt(hourly, todayObs[todayObs.length - 1].ts) : null;
-      if (peak != null) sources.push({ model: m, peak, at });
+      if (peak != null) sources.push({ model: m, peak, trough, at });
     }
   }
   const ensemblePeak = sources.length
     ? sources.reduce((a, s) => a + s.peak, 0) / sources.length : null;
+  const troughs = sources.map(s => s.trough).filter(t => t != null);
+  const ensembleTrough = troughs.length ? troughs.reduce((a, t) => a + t, 0) / troughs.length : null;
   const sourcesWithAt = sources.filter(s => s.at != null);
   const ensembleAt = sourcesWithAt.length
     ? sourcesWithAt.reduce((a, s) => a + s.at, 0) / sourcesWithAt.length : null;
 
   // forecastHighF: prefer the ensemble; fall back to NWS-only if ensemble is empty.
   const forecastHighF = ensemblePeak != null ? Math.round(ensemblePeak) : (forecast.dailyHigh ?? null);
+  const forecastLowF = ensembleTrough != null ? Math.round(ensembleTrough) : null;
 
   // Bias correction uses ensembleAt (or ensemble-of-NWS-only if no Open-Meteo response).
   let biasF = null;
@@ -372,12 +390,42 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   const ci95 = [Math.max(lowerFloor, mean - 1.96 * std), mean + 1.96 * std];
   const round = x => Math.round(x * 10) / 10;
 
+  // === LOW temperature prediction (mirror of HIGH) ===
+  // The day's low can't be ABOVE today's already-observed minimum (truncation from above).
+  // Same bias correction logic but the σ formula uses the same params (probably similar errors).
+  let lowMean = null, lowStd = null, lowMethod = null;
+  if (forecastLowF != null && minSoFar != null) {
+    const biasWeight = 0.4;
+    const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
+    const priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
+    const priorLowStd = Math.max(0.8, 1.0 + 0.12 * hrsToPeak + 0.10 * biasMag);
+    // Truncate from above: low <= minSoFar.
+    lowMean = truncNormalMeanUpper(priorLowMean, priorLowStd, minSoFar);
+    lowStd = priorLowStd;
+    lowMethod = "bias-corrected";
+  } else if (forecastLowF != null) {
+    lowMean = forecastLowF;
+    lowStd = 3.0;
+    lowMethod = "forecast-only";
+  } else if (minSoFar != null) {
+    lowMean = minSoFar;
+    lowStd = 4.5;
+    lowMethod = "obs-only";
+  }
+  // Clip CI upper bound at minSoFar.
+  const upperFloor = minSoFar != null ? minSoFar : Infinity;
+  const lowCi68 = lowMean != null
+    ? [lowMean - lowStd, Math.min(upperFloor, lowMean + lowStd)] : null;
+  const lowCi95 = lowMean != null
+    ? [lowMean - 1.96 * lowStd, Math.min(upperFloor, lowMean + 1.96 * lowStd)] : null;
+
   return {
     name: city.name,
     cli: city.cli,
     station: city.station,
     tz: city.tz,
     currentTemp: currentTemp != null ? round(currentTemp) : null,
+    // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     forecastHighF,
     forecastPeakHourly: ensemblePeak != null ? Math.round(ensemblePeak) : null,
@@ -390,8 +438,19 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     std: Math.round(std * 100) / 100,
     ci68: [round(ci68[0]), round(ci68[1])],
     ci95: [round(ci95[0]), round(ci95[1])],
+    // LOW (today's min).
+    minSoFar: minSoFar != null ? round(minSoFar) : null,
+    forecastLowF,
+    lowMethod,
+    lowMean: lowMean != null ? round(lowMean) : null,
+    lowStd: lowStd != null ? Math.round(lowStd * 100) / 100 : null,
+    lowCi68: lowCi68 ? [round(lowCi68[0]), round(lowCi68[1])] : null,
+    lowCi95: lowCi95 ? [round(lowCi95[0]), round(lowCi95[1])] : null,
     forecastUpdateTime: forecast?.updateTime || null,
-    ensembleSources: sources.map(s => ({ model: s.model, peak: Math.round(s.peak * 10) / 10 })),
+    ensembleSources: sources.map(s => ({
+      model: s.model, peak: Math.round(s.peak * 10) / 10,
+      trough: s.trough != null ? Math.round(s.trough * 10) / 10 : null
+    })),
     lastCLI
   };
 }

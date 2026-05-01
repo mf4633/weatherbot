@@ -27,7 +27,10 @@ const CITIES = [
   { name: "BOS",  lat: 42.3656, lon: -71.0096, tz: "America/New_York" }
 ];
 
-const MODELS = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless", "gem_seamless"];
+const MODELS = [
+  "gfs_seamless", "ecmwf_ifs025", "icon_seamless", "gem_seamless",
+  "jma_seamless", "ukmo_seamless", "meteofrance_seamless"
+];
 const LOOKBACK_DAYS = 365;
 
 function isoDate(d) { return d.toISOString().slice(0, 10); }
