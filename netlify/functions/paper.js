@@ -1,55 +1,60 @@
-// Paper-trading dashboard endpoint. Aggregates settled paper bets and returns rolling stats.
-// No real money — purely for validating whether our +EV signals translate to actual P&L.
+// Paper-trading dashboard. Returns: bankroll, open bets, settled bets, rolling stats.
 
 import { getStore } from "@netlify/blobs";
 
 export default async () => {
-  const settleStore = getStore("paper_settlements");
   const stateStore = getStore("paper_state");
-  const betsStore = getStore("paper_bets");
+  const openStore = getStore("open_bets");
+  const settledStore = getStore("settled_bets");
 
-  const state = await stateStore.get("global", { type: "json" }).catch(() => null);
+  const state = await stateStore.get("global", { type: "json" }).catch(() => null) || {
+    bankroll: 20, n_bets_total: 0, n_wins_total: 0, total_staked: 0, total_pnl: 0,
+    win_rate: 0, roi: 0
+  };
 
-  // List all settlements + open bets (placed, not yet settled).
-  const [{ blobs: settledList }, { blobs: betList }] = await Promise.all([
-    settleStore.list().catch(() => ({ blobs: [] })),
-    betsStore.list().catch(() => ({ blobs: [] }))
+  const [{ blobs: openBlobs }, { blobs: settledBlobs }] = await Promise.all([
+    openStore.list().catch(() => ({ blobs: [] })),
+    settledStore.list().catch(() => ({ blobs: [] }))
   ]);
-  const settledKeys = new Set(settledList.map(b => b.key));
-  const openBets = betList.filter(b => !settledKeys.has(b.key));
-
-  const settlements = (await Promise.all(
-    settledList.map(b => settleStore.get(b.key, { type: "json" }).catch(() => null))
-  )).filter(Boolean).sort((a, b) => (a.localDate < b.localDate ? 1 : -1));
-
   const open = (await Promise.all(
-    openBets.map(b => betsStore.get(b.key, { type: "json" }).catch(() => null))
-  )).filter(Boolean).sort((a, b) => (a.localDate < b.localDate ? 1 : -1));
+    openBlobs.map(b => openStore.get(b.key, { type: "json" }).catch(() => null))
+  )).filter(Boolean).sort((a, b) => (a.placedAtUTC < b.placedAtUTC ? 1 : -1));
+  const settled = (await Promise.all(
+    settledBlobs.map(b => settledStore.get(b.key, { type: "json" }).catch(() => null))
+  )).filter(Boolean).sort((a, b) => (a.settledAtUTC < b.settledAtUTC ? 1 : -1));
 
-  // Per-city aggregate.
+  const bet_size = Math.max(1, state.bankroll / 20);
+  const max_concurrent = Math.min(20, Math.floor(state.bankroll / bet_size));
+  const openStake = open.reduce((a, b) => a + (b.stake_dollars || 0), 0);
+
   const byCity = {};
-  for (const s of settlements) {
-    if (!byCity[s.cli]) byCity[s.cli] = { cli: s.cli, name: s.name, n: 0, wins: 0, staked: 0, pnl: 0 };
-    byCity[s.cli].n += s.n_bets;
-    byCity[s.cli].wins += s.settlements.filter(x => x.outcome === "WIN").length;
-    byCity[s.cli].staked += s.totalStake_dollars;
-    byCity[s.cli].pnl += s.totalPnl_dollars;
+  for (const s of settled) {
+    if (!byCity[s.targetCli]) byCity[s.targetCli] = { cli: s.targetCli, city: s.city, n: 0, wins: 0, staked: 0, pnl: 0 };
+    byCity[s.targetCli].n += 1;
+    if (s.outcome === "WIN") byCity[s.targetCli].wins += 1;
+    byCity[s.targetCli].staked += s.stake_dollars;
+    byCity[s.targetCli].pnl += s.pnl_dollars;
   }
   const cityAgg = Object.values(byCity).map(c => ({
     ...c,
-    win_rate: c.n ? Math.round(c.wins / c.n * 1000) / 10 : 0,
-    roi: c.staked ? Math.round(c.pnl / c.staked * 1000) / 10 : 0
+    win_rate_pct: c.n ? Math.round(c.wins / c.n * 1000) / 10 : 0,
+    roi_pct: c.staked ? Math.round(c.pnl / c.staked * 1000) / 10 : 0
   })).sort((a, b) => b.pnl - a.pnl);
 
   return new Response(JSON.stringify({
-    state: state || { n_bets: 0, n_wins: 0, total_staked: 0, total_pnl: 0, win_rate: 0, roi: 0 },
-    n_open_days: open.length,
-    n_settled_days: settlements.length,
+    state: {
+      ...state,
+      bet_size_dollars: Math.round(bet_size * 100) / 100,
+      max_concurrent,
+      open_count: open.length,
+      open_stake_dollars: Math.round(openStake * 100) / 100,
+      cash_free: Math.round((state.bankroll - openStake) * 100) / 100
+    },
     by_city: cityAgg,
-    open_bet_days: open.slice(0, 30),
-    recent_settlements: settlements.slice(0, 30)
+    open_bets: open,
+    recent_settled: settled.slice(0, 50)
   }, null, 2), {
-    headers: { "content-type": "application/json", "cache-control": "public, max-age=120" }
+    headers: { "content-type": "application/json", "cache-control": "public, max-age=60" }
   });
 };
 

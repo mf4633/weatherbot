@@ -1,30 +1,30 @@
-// Production residual logger + paper-trading bookkeeper.
-// Runs hourly via Netlify scheduled function.
+// Production residual logger + paper-trading bookkeeper. Runs hourly.
 //
-// At each city's local 15:00 (peak heating):
-//   - Captures the prediction for the city → predictions/<cli>/<localDate>.json
-//   - Pulls qualifying Kalshi bets for that city, half-Kelly sized against $1000
-//     virtual bankroll → paper_bets/<cli>/<localDate>.json. NO REAL MONEY.
+// Three responsibilities:
 //
-// At each city's local 07:00 (after morning CLI is typically issued):
-//   - Fetches CLI<station>, parses yesterday's MAXIMUM
-//   - Reconciles prediction → residuals/<cli>/<localDate>.json
-//   - Settles each paper bet (WIN if outcome matches bucket+side) →
-//     paper_settlements/<cli>/<localDate>.json, accumulates running stats in
-//     paper_state.json
+// (A) Predictions: at each city's local 15:00, capture the prediction →
+//     predictions/<cli>/<localDate>.json. At local 07:00 next day, fetch CLI,
+//     compute residual → residuals/<cli>/<localDate>.json.
 //
-// All idempotent on date keys.
+// (B) Paper-trading bet placement: every hour, check spare bet capacity. Up to 20
+//     CONCURRENT (in-flight, not-yet-settled) bets at any time. Per-bet stake =
+//     max($1, bankroll/20). Cumulative stakes cannot exceed bankroll. Pulls the
+//     top Kelly-ranked +EV bets from /api/kalshi (already filtered for edge,
+//     freshness, etc.), places new bets up to remaining capacity, deduping on
+//     (city, targetDate, ticker, side).
+//
+// (C) Settlement: at each city's local 07:00, settle any open bets targeting
+//     yesterday's local date for that city. Updates bankroll in paper_state.
 
 import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const UA = "weatherbot-logger";
 
-// Paper-trade params (no real money).
-const PAPER_BANKROLL = 1000;          // virtual $1000 per bet for sizing
-const MIN_EDGE = 0.05;                // skip bets with edge under 5¢
-const MAX_STAKE_FRAC = 0.20;          // cap any single bet at 20% of bankroll
-const MIN_KELLY_FRAC = 0.02;          // skip half-Kelly bets under 2%
+const STARTING_BANKROLL = 20;
+const MAX_CONCURRENT = 20;
+const MIN_EDGE = 0.05;
+const MIN_HALF_KELLY = 0.02;
 
 function localDateParts(tz, date = new Date()) {
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -39,16 +39,15 @@ function localDateParts(tz, date = new Date()) {
     minute: parseInt(p.minute, 10)
   };
 }
-
 function priorLocalDate(tz, date = new Date()) {
   const yesterday = new Date(date.getTime() - 24 * 3600 * 1000);
   return localDateParts(tz, yesterday).date;
 }
 
-async function fetchKalshiData() {
+async function fetchInternal(path) {
   const auth = "Basic " + btoa("internal:hydro");
-  const r = await fetch(`${SITE_BASE}/api/kalshi`, { headers: { authorization: auth } });
-  if (!r.ok) throw new Error(`kalshi API ${r.status}`);
+  const r = await fetch(`${SITE_BASE}${path}`, { headers: { authorization: auth } });
+  if (!r.ok) throw new Error(`${path} ${r.status}`);
   return await r.json();
 }
 
@@ -67,22 +66,18 @@ async function fetchCLIYesterday(cli) {
   return { maxF, isPartial, dateLabel: forMatch ? `${forMatch[1]} ${forMatch[2]} ${forMatch[3]}` : null };
 }
 
-// Settle a single paper bet given the actual high temp.
 function settleBet(bet, actualHigh) {
-  const { side, loInt, hiInt } = bet;
-  // For tail buckets, loInt may be -Infinity / hiInt Infinity, but JSON serialization
-  // converts those to null. Treat null as ±Infinity.
-  const lo = (loInt == null || loInt === -Infinity) ? -Infinity : loInt;
-  const hi = (hiInt == null || hiInt === Infinity) ? Infinity : hiInt;
+  const lo = (bet.loInt == null) ? -Infinity : bet.loInt;
+  const hi = (bet.hiInt == null) ? Infinity : bet.hiInt;
   const inBucket = actualHigh >= lo && actualHigh <= hi;
-  const wonYes = side === "YES" ? inBucket : !inBucket;
+  const won = bet.side === "YES" ? inBucket : !inBucket;
   const stake = bet.stake_dollars;
-  const pnl = wonYes ? stake * (1 - bet.price) / bet.price : -stake;
+  const pnl = won ? stake * (1 - bet.price) / bet.price : -stake;
   return {
-    ticker: bet.ticker, bucket: bet.bucket, side: bet.side,
-    price: bet.price, stake_dollars: stake,
-    actualHigh, outcome: wonYes ? "WIN" : "LOSS",
-    pnl_dollars: Math.round(pnl * 100) / 100
+    ...bet,
+    actualHigh, outcome: won ? "WIN" : "LOSS",
+    pnl_dollars: Math.round(pnl * 100) / 100,
+    settledAtUTC: new Date().toISOString()
   };
 }
 
@@ -90,41 +85,29 @@ export default async () => {
   const now = new Date();
   const predStore = getStore("predictions");
   const residStore = getStore("residuals");
-  const paperBetsStore = getStore("paper_bets");
-  const paperSettleStore = getStore("paper_settlements");
+  const openStore = getStore("open_bets");
+  const settledStore = getStore("settled_bets");
   const stateStore = getStore("paper_state");
 
-  let kalshiData;
-  try {
-    kalshiData = await fetchKalshiData();
-  } catch (e) {
+  let weatherData;
+  try { weatherData = await fetchInternal("/api/weather"); }
+  catch (e) {
     return new Response(JSON.stringify({ ok: false, error: String(e) }), {
       status: 500, headers: { "content-type": "application/json" }
     });
   }
 
-  const allBets = kalshiData.topBets || [];
-  const freshness = kalshiData.freshness || {};
-
   const captures = [];
   const reconciliations = [];
-  const paperCaptures = [];
-  const paperSettlements = [];
+  const placements = [];
+  const settlements = [];
 
-  // /api/weather is the source of truth for per-city tz, prediction fields, etc.
-  const predListData = await (async () => {
-    const auth = "Basic " + btoa("internal:hydro");
-    const r = await fetch(`${SITE_BASE}/api/weather`, { headers: { authorization: auth } });
-    if (!r.ok) return { cities: [] };
-    return await r.json();
-  })();
-
-  for (const city of predListData.cities || []) {
+  // ===== (A) Per-city prediction capture / reconciliation =====
+  for (const city of weatherData.cities || []) {
     if (city.error) continue;
     const tz = city.tz;
     const { date: localDate, hour: localHr } = localDateParts(tz, now);
 
-    // ===== Capture window: peak hour =====
     if (localHr === 15) {
       const key = `${city.cli}/${localDate}.json`;
       const existing = await predStore.get(key, { type: "json" }).catch(() => null);
@@ -138,110 +121,143 @@ export default async () => {
           ensembleSources: city.ensembleSources
         });
         captures.push(`${city.cli}:${localDate}`);
-
-        // ===== Paper-trade capture =====
-        // Only place paper bets if data is fresh and bets meet minimum edge/Kelly.
-        const cityBets = allBets.filter(b =>
-          b.city === city.name && b.ev >= MIN_EDGE && b.halfKelly >= MIN_KELLY_FRAC
-        );
-        const skip = freshness.cacheStale || freshness.forecastStale;
-        if (cityBets.length && !skip) {
-          const paperRecord = {
-            cli: city.cli, name: city.name, localDate, capturedAtUTC: now.toISOString(),
-            modelMean: city.mean, modelStd: city.std,
-            freshness,
-            bankroll: PAPER_BANKROLL,
-            bets: cityBets.map(b => {
-              const stakeFrac = Math.min(b.halfKelly, MAX_STAKE_FRAC);
-              const stake = Math.round(stakeFrac * PAPER_BANKROLL * 100) / 100;
-              return {
-                ticker: b.ticker, bucket: b.bucket, side: b.side, price: b.price,
-                p_model: b.p_model, ev: b.ev, halfKelly: b.halfKelly,
-                stake_frac: Math.round(stakeFrac * 1000) / 1000,
-                stake_dollars: stake,
-                max_payout: Math.round((stake / b.price) * 100) / 100,
-                loInt: b.loInt === -Infinity ? null : b.loInt,
-                hiInt: b.hiInt === Infinity ? null : b.hiInt
-              };
-            })
-          };
-          await paperBetsStore.setJSON(key, paperRecord);
-          paperCaptures.push(`${city.cli}:${localDate} (${paperRecord.bets.length} bets)`);
-        } else if (cityBets.length && skip) {
-          paperCaptures.push(`${city.cli}:${localDate} SKIPPED (stale data)`);
-        }
       }
     }
 
-    // ===== Reconciliation window: morning =====
     if (localHr === 7) {
       const yDate = priorLocalDate(tz, now);
       const yKey = `${city.cli}/${yDate}.json`;
-      const alreadyDoneResid = await residStore.get(yKey, { type: "json" }).catch(() => null);
-      const alreadyDoneSettle = await paperSettleStore.get(yKey, { type: "json" }).catch(() => null);
-      if (alreadyDoneResid && alreadyDoneSettle) continue;
-      const stored = await predStore.get(yKey, { type: "json" }).catch(() => null);
-      if (!stored) continue;
-      const cli = await fetchCLIYesterday(city.cli);
-      if (!cli || cli.maxF == null || cli.isPartial) continue;
-
-      // Residual reconciliation.
-      if (!alreadyDoneResid) {
-        const residual = stored.mean - cli.maxF;
-        await residStore.setJSON(yKey, {
-          cli: city.cli, name: city.name, localDate: yDate,
-          predicted: stored.mean, actual: cli.maxF, residual,
-          std: stored.std, withinCI68: Math.abs(residual) <= stored.std,
-          withinCI95: Math.abs(residual) <= 1.96 * stored.std,
-          cliDateLabel: cli.dateLabel,
-          capturedAtUTC: stored.capturedAtUTC,
-          reconciledAtUTC: now.toISOString()
-        });
-        reconciliations.push(`${city.cli}:${yDate} pred=${stored.mean} actual=${cli.maxF} resid=${residual.toFixed(2)}`);
-      }
-
-      // Paper bet settlement.
-      if (!alreadyDoneSettle) {
-        const paperRec = await paperBetsStore.get(yKey, { type: "json" }).catch(() => null);
-        if (paperRec && paperRec.bets?.length) {
-          const settlements = paperRec.bets.map(b => settleBet(b, cli.maxF));
-          const totalStake = settlements.reduce((a, s) => a + s.stake_dollars, 0);
-          const totalPnl = settlements.reduce((a, s) => a + s.pnl_dollars, 0);
-          await paperSettleStore.setJSON(yKey, {
-            cli: city.cli, name: city.name, localDate: yDate,
-            actualHigh: cli.maxF, capturedAtUTC: paperRec.capturedAtUTC,
-            settledAtUTC: now.toISOString(),
-            n_bets: settlements.length,
-            totalStake_dollars: Math.round(totalStake * 100) / 100,
-            totalPnl_dollars: Math.round(totalPnl * 100) / 100,
-            settlements
-          });
-          paperSettlements.push(`${city.cli}:${yDate} ${settlements.length} bets staked=$${totalStake.toFixed(2)} pnl=$${totalPnl.toFixed(2)}`);
-
-          // Update running paper-state.
-          const state = (await stateStore.get("global", { type: "json" }).catch(() => null)) || {
-            startedAtUTC: now.toISOString(),
-            n_bets: 0, n_wins: 0,
-            total_staked: 0, total_pnl: 0,
-            cities_seen: []
-          };
-          state.n_bets += settlements.length;
-          state.n_wins += settlements.filter(s => s.outcome === "WIN").length;
-          state.total_staked += totalStake;
-          state.total_pnl += totalPnl;
-          if (!state.cities_seen.includes(city.cli)) state.cities_seen.push(city.cli);
-          state.lastUpdatedUTC = now.toISOString();
-          state.win_rate = state.n_bets ? state.n_wins / state.n_bets : 0;
-          state.roi = state.total_staked ? state.total_pnl / state.total_staked : 0;
-          await stateStore.setJSON("global", state);
+      const existing = await residStore.get(yKey, { type: "json" }).catch(() => null);
+      if (!existing) {
+        const stored = await predStore.get(yKey, { type: "json" }).catch(() => null);
+        if (stored) {
+          const cli = await fetchCLIYesterday(city.cli);
+          if (cli && cli.maxF != null && !cli.isPartial) {
+            const residual = stored.mean - cli.maxF;
+            await residStore.setJSON(yKey, {
+              cli: city.cli, name: city.name, localDate: yDate,
+              predicted: stored.mean, actual: cli.maxF, residual,
+              std: stored.std, withinCI68: Math.abs(residual) <= stored.std,
+              withinCI95: Math.abs(residual) <= 1.96 * stored.std,
+              cliDateLabel: cli.dateLabel,
+              capturedAtUTC: stored.capturedAtUTC,
+              reconciledAtUTC: now.toISOString()
+            });
+            reconciliations.push(`${city.cli}:${yDate} pred=${stored.mean} actual=${cli.maxF} resid=${residual.toFixed(2)}`);
+          }
         }
       }
     }
   }
 
+  // ===== Load state, list open bets =====
+  let state = await stateStore.get("global", { type: "json" }).catch(() => null);
+  if (!state) {
+    state = {
+      startedAtUTC: now.toISOString(),
+      bankroll: STARTING_BANKROLL,
+      n_bets_total: 0, n_wins_total: 0,
+      total_staked: 0, total_pnl: 0,
+      lastUpdatedUTC: now.toISOString()
+    };
+  }
+  const { blobs: openBlobs } = await openStore.list().catch(() => ({ blobs: [] }));
+  const openBets = (await Promise.all(
+    openBlobs.map(b => openStore.get(b.key, { type: "json" }).catch(() => null))
+  )).filter(Boolean);
+  const openCount = openBets.length;
+  const openIds = new Set(openBets.map(b => b.betId));
+
+  // ===== (C) Settlement at city's local 07:00 =====
+  // Process before placement so freed-up capacity can immediately be used.
+  for (const city of weatherData.cities || []) {
+    if (city.error) continue;
+    const tz = city.tz;
+    const { hour: localHr } = localDateParts(tz, now);
+    if (localHr !== 7) continue;
+    const yDate = priorLocalDate(tz, now);
+    const candidates = openBets.filter(b => b.targetCli === city.cli && b.targetLocalDate === yDate);
+    if (!candidates.length) continue;
+    const cliResult = await fetchCLIYesterday(city.cli);
+    if (!cliResult || cliResult.maxF == null || cliResult.isPartial) continue;
+    const actualHigh = cliResult.maxF;
+
+    for (const bet of candidates) {
+      const result = settleBet(bet, actualHigh);
+      await settledStore.setJSON(`${bet.betId}.json`, result);
+      await openStore.delete(`${bet.betId}.json`).catch(() => {});
+      openIds.delete(bet.betId);
+      state.bankroll = Math.round((state.bankroll + result.pnl_dollars) * 100) / 100;
+      state.n_bets_total += 1;
+      if (result.outcome === "WIN") state.n_wins_total += 1;
+      state.total_staked = Math.round((state.total_staked + result.stake_dollars) * 100) / 100;
+      state.total_pnl = Math.round((state.total_pnl + result.pnl_dollars) * 100) / 100;
+      settlements.push(`${bet.city} ${bet.ticker} ${bet.side}: ${result.outcome} $${result.pnl_dollars.toFixed(2)} (bankroll → $${state.bankroll.toFixed(2)})`);
+    }
+  }
+
+  // ===== (B) Paper-trading bet placement =====
+  // Compute spare capacity at current bankroll.
+  const bankroll = state.bankroll;
+  const bet_size = Math.max(1, bankroll / 20);
+  const currentOpenStake = openBets.reduce((a, b) => a + (b.stake_dollars || 0), 0);
+  const cashAvailable = bankroll - currentOpenStake;
+  const remainingByCount = MAX_CONCURRENT - (openCount - settlements.length);
+  const remainingByCash = Math.floor(cashAvailable / bet_size);
+  const spareCapacity = Math.max(0, Math.min(remainingByCount, remainingByCash));
+
+  let kalshiData = null;
+  if (spareCapacity > 0) {
+    try { kalshiData = await fetchInternal("/api/kalshi"); } catch (e) { kalshiData = null; }
+  }
+  const fr = kalshiData?.freshness || {};
+  const skipFresh = !!(fr.cacheStale || fr.forecastStale);
+
+  if (spareCapacity > 0 && kalshiData && !skipFresh) {
+    const qualifying = (kalshiData.topBets || []).filter(b =>
+      b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY
+    );
+    const cityByName = Object.fromEntries((weatherData.cities || []).map(c => [c.name, c]));
+    const placedThisRun = [];
+    for (const b of qualifying) {
+      if (placedThisRun.length >= spareCapacity) break;
+      const c = cityByName[b.city];
+      if (!c) continue;
+      const targetLocalDate = localDateParts(c.tz, now).date;
+      const betId = `${c.cli}-${targetLocalDate}-${b.ticker}-${b.side}`;
+      if (openIds.has(betId)) continue;  // already in flight
+      // Also skip if a settled bet exists with this ID (already played for that target date).
+      const wasSettled = await settledStore.get(`${betId}.json`, { type: "json" }).catch(() => null);
+      if (wasSettled) continue;
+      const record = {
+        betId, city: b.city, targetCli: c.cli, targetLocalDate,
+        ticker: b.ticker, bucket: b.bucket, side: b.side, price: b.price,
+        p_model: b.p_model, ev: b.ev, kelly: b.kelly, halfKelly: b.halfKelly,
+        stake_dollars: Math.round(bet_size * 100) / 100,
+        loInt: (b.loInt === -Infinity || b.loInt == null) ? null : b.loInt,
+        hiInt: (b.hiInt === Infinity || b.hiInt == null) ? null : b.hiInt,
+        modelMean: b.modelMean, modelStd: b.modelStd,
+        placedAtUTC: now.toISOString(),
+        bankroll_at_placement: bankroll
+      };
+      await openStore.setJSON(`${betId}.json`, record);
+      openIds.add(betId);
+      placedThisRun.push(record);
+      placements.push(`${b.city} ${b.bucket} ${b.side} @ $${b.price.toFixed(2)} stake=$${record.stake_dollars}`);
+    }
+  }
+
+  state.win_rate = state.n_bets_total ? state.n_wins_total / state.n_bets_total : 0;
+  state.roi = state.total_staked ? state.total_pnl / state.total_staked : 0;
+  state.lastUpdatedUTC = now.toISOString();
+  await stateStore.setJSON("global", state);
+
   return new Response(JSON.stringify({
     ok: true, ranAtUTC: now.toISOString(),
-    captures, reconciliations, paperCaptures, paperSettlements
+    bankroll: state.bankroll, openCount: openIds.size,
+    bet_size_dollars: Math.round(bet_size * 100) / 100,
+    spareCapacity, freshnessSkip: skipFresh,
+    captures, reconciliations, placements, settlements
   }), { headers: { "content-type": "application/json" } });
 };
 
