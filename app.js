@@ -262,12 +262,18 @@ async function loadJackson() {
     const totalExposure = heldPositions.reduce((a, p) => a + p._exposure, 0);
     const mtmByTicker = j.markToMarket || {};
     const totalUnrealized = j.totalUnrealizedPnl ?? 0;
-    const accountValue = balDollars + totalExposure + totalUnrealized;  // cash + at-risk + unrealized gain/loss
+    const totalRealized = j.totalRealizedPnl ?? 0;
+    const totalFees = j.totalFeesPaid ?? 0;
+    const totalPnl = j.totalPnl ?? (totalRealized + totalUnrealized);
+    const accountValue = balDollars + totalExposure + totalUnrealized;  // cash + at-risk + unrealized
     stateEl.innerHTML = `
       <div class="stat"><div class="stat-label">cash balance</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">capital at risk</div><div class="stat-val">$${totalExposure.toFixed(2)}</div></div>
-      <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${totalUnrealized >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalUnrealized)}</div></div>
       <div class="stat"><div class="stat-label">account value</div><div class="stat-val ${accountValue >= 20 ? 'warm' : 'cool'}">$${accountValue.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${totalUnrealized >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalUnrealized)}</div></div>
+      <div class="stat"><div class="stat-label">realized P&L</div><div class="stat-val ${totalRealized >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalRealized)}</div></div>
+      <div class="stat"><div class="stat-label">total P&L</div><div class="stat-val ${totalPnl >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalPnl)}</div></div>
+      <div class="stat"><div class="stat-label">fees paid</div><div class="stat-val muted">$${totalFees.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
       <div class="stat"><div class="stat-label">resting orders</div><div class="stat-val">${orders.length}</div></div>
       <div class="stat"><div class="stat-label">recent fills</div><div class="stat-val">${fills.length}</div></div>`;

@@ -189,11 +189,26 @@ export default async () => {
     out.positions = pos.status === "fulfilled" ? pos.value : { error: String(pos.reason) };
     out.fills = fills.status === "fulfilled" ? fills.value : { error: String(fills.reason) };
     out.orders = orders.status === "fulfilled" ? orders.value : { error: String(orders.reason) };
-    // Compute unrealized P&L using current Kalshi bid prices.
-    if (out.positions?.market_positions && kalshi.status === "fulfilled") {
-      const mtm = markToMarket(out.positions.market_positions, kalshi.value);
-      out.markToMarket = mtm.byTicker;
-      out.totalUnrealizedPnl = mtm.totalUnrealized;
+    // Compute unrealized + realized P&L using current Kalshi bid prices.
+    if (out.positions?.market_positions) {
+      // Realized P&L (per-position, summed). Includes closed positions still in the response.
+      let totalRealized = 0, totalFees = 0;
+      for (const p of out.positions.market_positions) {
+        totalRealized += parseFloat(p.realized_pnl_dollars || "0");
+        totalFees += parseFloat(p.fees_paid_dollars || "0");
+      }
+      out.totalRealizedPnl = Math.round(totalRealized * 100) / 100;
+      out.totalFeesPaid = Math.round(totalFees * 100) / 100;
+      // Unrealized P&L from market quotes.
+      if (kalshi.status === "fulfilled") {
+        const mtm = markToMarket(out.positions.market_positions, kalshi.value);
+        out.markToMarket = mtm.byTicker;
+        out.totalUnrealizedPnl = mtm.totalUnrealized;
+      } else {
+        out.totalUnrealizedPnl = 0;
+        out.markToMarket = {};
+      }
+      out.totalPnl = Math.round((totalRealized + (out.totalUnrealizedPnl || 0)) * 100) / 100;
     }
     out.fetchedAtUTC = new Date().toISOString();
     return new Response(JSON.stringify(out, null, 2), {
