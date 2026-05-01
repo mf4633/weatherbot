@@ -173,7 +173,12 @@ async function fetchNWSForecast(lat, lon) {
 // Fetch GFS / ECMWF / ICON forecasts via Open-Meteo for ensemble blending.
 // Backtest showed equal-weighted 4-model ensemble (NWS+GFS+ECMWF+ICON) gives RMSE 1.30°F vs
 // 2.02°F for any single model — roughly 35% reduction. Skip GEM (worst single-model RMSE).
-const ENSEMBLE_MODELS = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless"];
+// 5-model ensemble. Backtest (1y, 20 cities, n_test=7200): TEST RMSE 1.313°F vs
+// 4-model GFS+ECMWF+ICON+GEM at 1.446 (-9.2%). JMA and GEM hurt more than help on US cities;
+// dropped them and added UKMO + MeteoFrance for international diversity.
+const ENSEMBLE_MODELS = [
+  "gfs_seamless", "ecmwf_ifs025", "icon_seamless", "ukmo_seamless", "meteofrance_seamless"
+];
 async function fetchOpenMeteoEnsemble(lat, lon) {
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`

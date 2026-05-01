@@ -144,52 +144,28 @@ const eqTr = summarize(evaluate(eqW, inTrain), "eq");
 const eqTe = summarize(evaluate(eqW, inTest), "eq");
 console.log(`  TRAIN RMSE=${eqTr.rmse.toFixed(3)}  TEST RMSE=${eqTe.rmse.toFixed(3)}  bias=${eqTe.bias.toFixed(2)}`);
 
-// Grid-search optimal blend.
-console.log("\n=== Optimal blend (grid search on TRAIN) ===");
-const grid = [];
-const step = 0.1;
-for (let g = 0; g <= 1; g += step) {
-  for (let e = 0; e <= 1 - g; e += step) {
-    for (let i = 0; i <= 1 - g - e; i += step) {
-      const j = 1 - g - e - i;
-      if (j < -0.001 || j > 1.001) continue;
-      grid.push({ gfs_seamless: g, ecmwf_ifs025: e, icon_seamless: i, gem_seamless: j });
-    }
-  }
-}
-console.log(`Searching ${grid.length} weight combinations...`);
-let best = { rmse: Infinity, w: null };
-for (const w of grid) {
-  const s = summarize(evaluate(w, inTrain), "");
-  if (s.rmse < best.rmse) best = { rmse: s.rmse, w, summary: s };
-}
-const wStr = MODELS.map(m => `${m.split("_")[0]}=${best.w[m].toFixed(1)}`).join(" ");
-console.log(`Best on TRAIN: ${wStr}  RMSE=${best.rmse.toFixed(3)}`);
+// Curated blends — 7 model space is too big for full grid.
+const equalWeights = (mods) => {
+  const w = Object.fromEntries(MODELS.map(m => [m, 0]));
+  for (const m of mods) w[m] = 1 / mods.length;
+  return w;
+};
 
-// Evaluate best blend on test.
-const optTe = summarize(evaluate(best.w, inTest), "opt");
-console.log(`On TEST: RMSE=${optTe.rmse.toFixed(3)}  MAE=${optTe.mae.toFixed(3)}  bias=${optTe.bias.toFixed(2)}`);
-
-// Also test 50/50 GFS+ECMWF and 33/33/33 (no GEM).
-console.log("\n=== Ad hoc blends ===");
+console.log("\n=== Curated blends (TRAIN / TEST) ===");
 const blends = [
-  { label: "50/50 GFS+ECMWF",       gfs_seamless: 0.5, ecmwf_ifs025: 0.5, icon_seamless: 0,   gem_seamless: 0 },
-  { label: "GFS+ECMWF+ICON eq",      gfs_seamless: 1/3, ecmwf_ifs025: 1/3, icon_seamless: 1/3, gem_seamless: 0 },
-  { label: "70 GFS / 30 ECMWF",      gfs_seamless: 0.7, ecmwf_ifs025: 0.3, icon_seamless: 0,   gem_seamless: 0 },
-  { label: "60/40 ECMWF+GFS",        gfs_seamless: 0.4, ecmwf_ifs025: 0.6, icon_seamless: 0,   gem_seamless: 0 }
+  { label: "all 7 equal",         w: equalWeights(MODELS) },
+  { label: "drop JMA (6 eq)",     w: equalWeights(MODELS.filter(m => m !== "jma_seamless")) },
+  { label: "drop JMA+GEM (5 eq)", w: equalWeights(MODELS.filter(m => !["jma_seamless","gem_seamless"].includes(m))) },
+  { label: "GFS+ECMWF+ICON+GEM",  w: equalWeights(["gfs_seamless","ecmwf_ifs025","icon_seamless","gem_seamless"]) },
+  { label: "GFS+ECMWF+ICON+UKMO", w: equalWeights(["gfs_seamless","ecmwf_ifs025","icon_seamless","ukmo_seamless"]) },
+  { label: "ECMWF+ICON+UKMO+MF",  w: equalWeights(["ecmwf_ifs025","icon_seamless","ukmo_seamless","meteofrance_seamless"]) },
+  { label: "GFS+ECMWF+ICON+UKMO+MF", w: equalWeights(["gfs_seamless","ecmwf_ifs025","icon_seamless","ukmo_seamless","meteofrance_seamless"]) }
 ];
+let best = { rmse: Infinity, label: null };
 for (const b of blends) {
-  const w = { gfs_seamless: b.gfs_seamless, ecmwf_ifs025: b.ecmwf_ifs025, icon_seamless: b.icon_seamless, gem_seamless: b.gem_seamless };
-  const tr = summarize(evaluate(w, inTrain), b.label);
-  const te = summarize(evaluate(w, inTest), b.label);
-  console.log(`  ${b.label.padEnd(28)} TRAIN=${tr.rmse.toFixed(3)}  TEST=${te.rmse.toFixed(3)}`);
+  const tr = summarize(evaluate(b.w, inTrain), b.label);
+  const te = summarize(evaluate(b.w, inTest), b.label);
+  console.log(`  ${b.label.padEnd(32)} TRAIN=${tr.rmse.toFixed(3)}  TEST=${te.rmse.toFixed(3)}`);
+  if (te.rmse < best.rmse) best = { rmse: te.rmse, label: b.label, w: b.w };
 }
-
-// Compare best vs GFS-only.
-const gfsW = { gfs_seamless: 1, ecmwf_ifs025: 0, icon_seamless: 0, gem_seamless: 0 };
-const gfsTe = summarize(evaluate(gfsW, inTest), "gfs");
-const delta = optTe.rmse - gfsTe.rmse;
-console.log(`\n=== HEADLINE: best ensemble vs GFS-only on TEST ===`);
-console.log(`  GFS-only:  RMSE=${gfsTe.rmse.toFixed(3)}`);
-console.log(`  Ensemble:  RMSE=${optTe.rmse.toFixed(3)}`);
-console.log(`  Δ:         ${delta.toFixed(3)}°F (${(delta / gfsTe.rmse * 100).toFixed(1)}%)  ${delta < -0.01 ? "✓ improvement" : "✗ no real gain"}`);
+console.log(`\nBest by TEST RMSE: ${best.label} → ${best.rmse.toFixed(3)}°F`);
