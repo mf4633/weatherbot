@@ -261,6 +261,9 @@ export default async () => {
   }), { headers: { "content-type": "application/json" } });
 };
 
+// Every 5 min: fast enough to catch SPECIs and NWS forecast updates promptly,
+// while ≥ /api/weather server cache TTL (3 min) so most firings see fresh data.
+// Dedup by betId keeps us from re-stacking the same (city, ticker, side, date).
 export const config = {
-  schedule: "5 * * * *"
+  schedule: "*/5 * * * *"
 };
