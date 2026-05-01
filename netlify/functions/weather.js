@@ -380,7 +380,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     currentTemp: currentTemp != null ? round(currentTemp) : null,
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     forecastHighF,
-    forecastPeakHourly: peakFromHourly != null ? Math.round(peakFromHourly) : null,
+    forecastPeakHourly: ensemblePeak != null ? Math.round(ensemblePeak) : null,
     biasF: biasF != null ? round(biasF) : null,
     hrsToPeak: Math.round(hrsToPeak * 10) / 10,
     method,
