@@ -87,10 +87,13 @@ async function loadKalshi() {
       tbody.innerHTML = `<tr><td colspan="8" class="muted">No +EV bets above 2¢ edge right now.</td></tr>`;
       return;
     }
-    tbody.innerHTML = top.map((b, i) => `
+    tbody.innerHTML = top.map((b, i) => {
+      const muSig = (b.modelMean != null) ? `${b.modelMean.toFixed(1)} ± ${b.modelStd.toFixed(1)}` : "—";
+      return `
       <tr>
         <td>${i + 1}</td>
         <td>${b.city}</td>
+        <td class="muted">${muSig}°F</td>
         <td>${b.bucket || b.ticker || "—"}</td>
         <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
         <td>$${b.price.toFixed(2)}</td>
@@ -98,7 +101,8 @@ async function loadKalshi() {
         <td>+$${b.ev.toFixed(2)}</td>
         <td><strong>${(b.halfKelly * 100).toFixed(1)}%</strong></td>
         <td>${Math.round(b.volume).toLocaleString()}</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8" class="muted">Kalshi load error: ${e.message}</td></tr>`;
   }

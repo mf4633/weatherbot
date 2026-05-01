@@ -60,6 +60,14 @@ async function fetchKalshiMarkets(eventTicker) {
   return await r.json();
 }
 
+// Synthesize a human-readable label for any bucket, even when Kalshi's subtitle is empty.
+function bucketLabel(loInt, hiInt, subtitle) {
+  if (subtitle && subtitle.trim()) return subtitle.trim();
+  if (loInt === -Infinity || loInt == null) return `≤ ${hiInt}°F`;
+  if (hiInt === Infinity || hiInt == null) return `≥ ${loInt}°F`;
+  return loInt === hiInt ? `${loInt}°F` : `${loInt}–${hiInt}°F`;
+}
+
 // Parse a market's bucket boundaries. Returns { loInt, hiInt } where bucket means high ∈ [loInt, hiInt]
 // (inclusive of integer-degree highs). For tail buckets, use ±Infinity.
 function bucketBounds(market) {
@@ -158,7 +166,8 @@ export default async () => {
       const no_bid  = mkt.no_bid_dollars  ? parseFloat(mkt.no_bid_dollars)  : null;
       const last    = mkt.last_price_dollars ? parseFloat(mkt.last_price_dollars) : null;
       const midPx   = (yes_ask != null && yes_bid != null) ? (yes_ask + yes_bid) / 2 : last;
-      return { ticker: mkt.ticker, subtitle: mkt.subtitle, loInt, hiInt,
+      const label   = bucketLabel(loInt, hiInt, mkt.subtitle);
+      return { ticker: mkt.ticker, subtitle: mkt.subtitle, label, loInt, hiInt,
                yes_ask, yes_bid, no_ask, no_bid, last, midPx,
                volume: mkt.volume_fp || 0 };
     });
@@ -178,7 +187,7 @@ export default async () => {
       kalshi: eventTicker,
       model: { mean: city.mean, std: city.std, maxSoFar: city.maxSoFar, currentTemp: city.currentTemp },
       buckets: buckets.map(b => ({
-        bucket: b.subtitle,
+        bucket: b.label,
         ticker: b.ticker.split("-").pop(),
         kalshi_mid: b.midPx,
         kalshi_yes_ask: b.yes_ask,
@@ -196,19 +205,20 @@ export default async () => {
     // edge in one number: large edge at low price → big Kelly; small edge at price near 1 → tiny Kelly.
     // Half-Kelly = f*/2 is the practical recommendation given our model's ~1.7°F RMSE uncertainty.
     const kelly = (p, price) => Math.max(0, (p - price) / (1 - price));
+    const ctx = { modelMean: city.mean, modelStd: city.std, maxSoFar: city.maxSoFar };
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
         const k = kelly(b.p_model, b.yes_ask);
-        allBets.push({ city: city.name, bucket: b.subtitle, ticker: b.ticker.split("-").pop(),
+        allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
                        side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
-                       kelly: k, halfKelly: k / 2, volume: b.volume });
+                       kelly: k, halfKelly: k / 2, volume: b.volume, ...ctx });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
         const pNo = 1 - b.p_model;
         const k = kelly(pNo, b.no_ask);
-        allBets.push({ city: city.name, bucket: b.subtitle, ticker: b.ticker.split("-").pop(),
+        allBets.push({ city: city.name, bucket: b.label, ticker: b.ticker.split("-").pop(),
                        side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
-                       kelly: k, halfKelly: k / 2, volume: b.volume });
+                       kelly: k, halfKelly: k / 2, volume: b.volume, ...ctx });
       }
     }
   }
