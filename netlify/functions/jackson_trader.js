@@ -93,7 +93,7 @@ export default async () => {
     });
   }
 
-  const placements = [], sales = [], errors = [];
+  const placements = [], sales = [], errors = [], skipped = [];
   const ledgerStore = getStore("jackson_open_bets");
   const cooldownStore = getStore("jackson_cooldown");
   try {
@@ -210,22 +210,27 @@ export default async () => {
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
       const qualifying = (kalshiData.topBets || []).filter(b => b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY);
+      // Skip-reason log so we can see exactly how high vs low were weighed each run.
+      // Listed in priority order matching the iteration below.
+      const briefBet = b => ({ city: b.city, variable: b.variable || "high", bucket: b.bucket,
+                               side: b.side, ev: Math.round(b.ev*1000)/1000,
+                               halfKelly: Math.round(b.halfKelly*1000)/1000 });
       let placed = 0;
       let committed = 0;
       for (const b of qualifying) {
-        if (placed >= spareCapacity) break;
-        if (cashDollars - committed < STAKE_FLOOR) break;  // out of cash
+        if (placed >= spareCapacity) { skipped.push({ ...briefBet(b), reason: "no-spare-capacity" }); continue; }
+        if (cashDollars - committed < STAKE_FLOOR) { skipped.push({ ...briefBet(b), reason: "out-of-cash" }); continue; }
         const ageMin = cityForecastAge[b.city];
-        if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) continue;
+        if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) { skipped.push({ ...briefBet(b), reason: "forecast-stale", ageMin: Math.round(ageMin) }); continue; }
         // Resolve event ticker → full market ticker like KXHIGHNY-26MAY02-B65.5.
         const cityKalshi = (kalshiData.cities || []).find(c => c.name === b.city);
-        if (!cityKalshi) continue;
+        if (!cityKalshi) { skipped.push({ ...briefBet(b), reason: "city-not-in-kalshi-data" }); continue; }
         const eventTicker = b.variable === "low" ? cityKalshi.lowEvent : cityKalshi.highEvent;
-        if (!eventTicker || eventTicker === "not found") continue;
+        if (!eventTicker || eventTicker === "not found") { skipped.push({ ...briefBet(b), reason: "event-not-listed-on-kalshi" }); continue; }
         const fullTicker = `${eventTicker}-${b.ticker}`;
         const dedupKey = botKey(fullTicker, b.side);
-        if (heldKey.has(dedupKey)) continue;            // already long; no stacking
-        if (cooldownMap[dedupKey]) continue;            // recently sold; cooling off
+        if (heldKey.has(dedupKey)) { skipped.push({ ...briefBet(b), reason: "already-held" }); continue; }
+        if (cooldownMap[dedupKey]) { skipped.push({ ...briefBet(b), reason: "in-cooldown" }); continue; }
         // Conviction-weighted stake: halfKelly × bankroll, floored & capped, and
         // bounded by the cash actually still available after prior placements in this run.
         const remaining = cashDollars - committed;
@@ -240,6 +245,7 @@ export default async () => {
                           ev: b.ev, halfKelly: b.halfKelly, ok: res.ok });
         if (!res.ok) {
           errors.push({ where: "buy", ticker: fullTicker, response: res.body });
+          skipped.push({ ...briefBet(b), reason: "kalshi-rejected", detail: res.body?.error?.code || res.body?.error?.message || "unknown" });
         } else {
           placed++;
           committed += stake_dollars;
@@ -269,13 +275,13 @@ export default async () => {
       spareCapacity,
       stake_floor: STAKE_FLOOR,
       stake_ceil_dollars: Math.round(cashDollars * STAKE_CEIL_FRAC * 100) / 100,
-      sales, placements, errors
+      sales, placements, skipped, errors
     }, null, 2), {
       status: 200, headers: { "content-type": "application/json" }
     });
   } catch (e) {
     return new Response(JSON.stringify({
-      ok: false, error: String(e), placements, sales, errors
+      ok: false, error: String(e), placements, sales, skipped, errors
     }), { status: 500, headers: { "content-type": "application/json" } });
   }
 };
