@@ -14,10 +14,23 @@ import { kalshiAuthedFetch, getBalance, getPositions } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
+// Up to 20 concurrent positions, each on a DIFFERENT market. Threshold-gated so
+// the bot fires fewer if signals don't qualify — never 20 at once unless all great.
 const MAX_CONCURRENT = 20;
-const MIN_EDGE = 0.05;
-const MIN_HALF_KELLY = 0.02;
+// High-conviction floor: net-of-fee edge ≥ 10¢ AND halfKelly ≥ 5%. Model RMSE is
+// ~1.7°F so anything below this is likely noise.
+const MIN_EDGE = 0.10;
+const MIN_HALF_KELLY = 0.05;
 const PER_CITY_FRESHNESS_MAX_MIN = 180;
+// Don't re-enter a ticker+side within this window after selling it.
+const COOLDOWN_MIN = 60;
+// Sell-loser hysteresis. Require expected hold value to be at least this fraction
+// below the sell-now proceeds before paying round-trip fees on a flip.
+const SELL_HYSTERESIS = 0.10;
+// Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
+// At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
+const STAKE_FLOOR = 1.0;
+const STAKE_CEIL_FRAC = 0.10;
 
 async function fetchInternal(path) {
   const auth = "Basic " + btoa("internal:hydro");
@@ -82,15 +95,24 @@ export default async () => {
 
   const placements = [], sales = [], errors = [];
   const ledgerStore = getStore("jackson_open_bets");
+  const cooldownStore = getStore("jackson_cooldown");
   try {
-    // 1. Read live state from Kalshi + bot ledger.
-    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }] = await Promise.all([
+    // 1. Read live state from Kalshi + bot ledger + cooldown map.
+    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }, cooldownRaw] = await Promise.all([
       getBalance(),
       getPositions(),
       fetchInternal("/api/kalshi"),
       fetchInternal("/api/weather"),
-      ledgerStore.list().catch(() => ({ blobs: [] }))
+      ledgerStore.list().catch(() => ({ blobs: [] })),
+      cooldownStore.get("map.json", { type: "json" }).catch(() => ({}))
     ]);
+    // Prune expired cooldown entries.
+    const cooldownMap = cooldownRaw || {};
+    const nowMs = Date.now();
+    const cooldownMs = COOLDOWN_MIN * 60 * 1000;
+    for (const k of Object.keys(cooldownMap)) {
+      if (nowMs - new Date(cooldownMap[k]).getTime() > cooldownMs) delete cooldownMap[k];
+    }
 
     const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
     const cashDollars = cashCents / 100;
@@ -126,12 +148,12 @@ export default async () => {
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
     const botOpenCount = liveLedger.length;
 
-    // Sizing: stake = max($1, bankroll/20). Bot's max concurrent = 20.
-    const stake_dollars = Math.max(1, cashDollars / 20);
     const spareCapacity = Math.max(0, MAX_CONCURRENT - botOpenCount);
 
-    // Buy dedup: against ALL Kalshi positions (don't double-down on user's manual ones either).
-    const heldKey = heldByKalshi;
+    // Buy dedup: ONLY against bot's own placed positions. User's manual positions
+    // are independent — bot can enter the same market on its own conviction without
+    // adding to (or selling) user's stake.
+    const heldKey = botPlacedKeys;
 
     // 2. Sell would-be losers — ONLY among bot-placed positions.
     if (kalshiData?.cities) {
@@ -164,13 +186,17 @@ export default async () => {
         const sellProceeds = contracts * sellPrice;     // dollars (1 contract = $1 max payout)
         const stakePaid = p.exposure;
         const holdEV = contracts * pNow;
-        if (sellProceeds >= stakePaid) continue;        // winning, hold
-        if (holdEV >= stakePaid) continue;              // model still positive, hold
+        if (sellProceeds >= stakePaid) continue;        // winning vs entry, hold
+        if (holdEV >= stakePaid) continue;              // model expects breakeven, hold
+        // Hysteresis: only sell if hold value is meaningfully below sell-now value.
+        // Avoids paying round-trip Kalshi fees on tiny noise-level model flips.
+        if (holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
         // SELL.
         const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
         const res = await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents, ok: res.ok });
         if (!res.ok) errors.push({ where: "sell", ticker, response: res.body });
+        else cooldownMap[botKey(ticker, isYes ? "YES" : "NO")] = new Date().toISOString();
       }
     }
 
@@ -181,10 +207,14 @@ export default async () => {
       for (const c of (weatherData.cities || [])) {
         if (c.forecastUpdateTime) cityForecastAge[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
       }
+      // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
+      // halfKelly desc upstream, so iterating fills highest-conviction first.
       const qualifying = (kalshiData.topBets || []).filter(b => b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY);
       let placed = 0;
+      let committed = 0;
       for (const b of qualifying) {
         if (placed >= spareCapacity) break;
+        if (cashDollars - committed < STAKE_FLOOR) break;  // out of cash
         const ageMin = cityForecastAge[b.city];
         if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) continue;
         // Resolve event ticker → full market ticker like KXHIGHNY-26MAY02-B65.5.
@@ -193,18 +223,26 @@ export default async () => {
         const eventTicker = b.variable === "low" ? cityKalshi.lowEvent : cityKalshi.highEvent;
         if (!eventTicker || eventTicker === "not found") continue;
         const fullTicker = `${eventTicker}-${b.ticker}`;
-        const dedupKey = `${fullTicker}-${b.side}`;
-        if (heldKey.has(dedupKey)) continue;          // already long the same market+side
-        // Stake → contracts. count = floor(stake_dollars / price_paid).
+        const dedupKey = botKey(fullTicker, b.side);
+        if (heldKey.has(dedupKey)) continue;            // already long; no stacking
+        if (cooldownMap[dedupKey]) continue;            // recently sold; cooling off
+        // Conviction-weighted stake: halfKelly × bankroll, floored & capped, and
+        // bounded by the cash actually still available after prior placements in this run.
+        const remaining = cashDollars - committed;
+        const stake_dollars = Math.max(STAKE_FLOOR,
+          Math.min(cashDollars * STAKE_CEIL_FRAC, b.halfKelly * cashDollars, remaining));
+        if (stake_dollars < STAKE_FLOOR) break;
         const contracts = Math.max(1, Math.floor(stake_dollars / b.price));
         const priceCents = Math.max(1, Math.min(99, Math.round(b.price * 100)));
         const res = await placeBuyOrder(fullTicker, b.side, contracts, priceCents);
         placements.push({ ticker: fullTicker, side: b.side, count: contracts, priceCents,
+                          stake_dollars: Math.round(stake_dollars * 100) / 100,
                           ev: b.ev, halfKelly: b.halfKelly, ok: res.ok });
         if (!res.ok) {
           errors.push({ where: "buy", ticker: fullTicker, response: res.body });
         } else {
           placed++;
+          committed += stake_dollars;
           // Save to bot ledger so future runs know we own this position.
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
           await ledgerStore.setJSON(`${betId}.json`, {
@@ -219,6 +257,9 @@ export default async () => {
         }
       }
     }
+    // Persist updated cooldown map (sells written above; expired pruned at top).
+    await cooldownStore.setJSON("map.json", cooldownMap)
+      .catch(err => errors.push({ where: "cooldown-write", err: String(err) }));
 
     return new Response(JSON.stringify({
       ok: true,
@@ -226,7 +267,8 @@ export default async () => {
       cashDollars,
       botOpenCount, allOpenCount,
       spareCapacity,
-      stake_dollars: Math.round(stake_dollars * 100) / 100,
+      stake_floor: STAKE_FLOOR,
+      stake_ceil_dollars: Math.round(cashDollars * STAKE_CEIL_FRAC * 100) / 100,
       sales, placements, errors
     }, null, 2), {
       status: 200, headers: { "content-type": "application/json" }

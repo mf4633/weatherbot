@@ -1,0 +1,20 @@
+name: Jackson trader cron
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit /api/jackson_trader
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 60 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/jackson_trader" \
+            -o /tmp/out.json -w "HTTP %{http_code}\n"
+          jq '{ranAtUTC, botOpenCount, spareCapacity, sales: (.sales|length), placements: (.placements|length), errors: (.errors|length)}' /tmp/out.json

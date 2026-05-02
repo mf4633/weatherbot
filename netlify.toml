@@ -5,6 +5,12 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[functions."jackson_trader"]
+  schedule = "*/5 * * * *"
+
+[functions."logger"]
+  schedule = "*/5 * * * *"
+
 [[edge_functions]]
   path = "/*"
   function = "auth"
@@ -32,4 +38,9 @@
 [[redirects]]
   from = "/api/jackson"
   to = "/.netlify/functions/jackson"
+  status = 200
+
+[[redirects]]
+  from = "/api/jackson_trader"
+  to = "/.netlify/functions/jackson_trader"
   status = 200
