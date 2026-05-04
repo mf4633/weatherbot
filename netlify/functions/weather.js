@@ -1,11 +1,13 @@
 // Netlify Function: predicts what tomorrow's CLI<station> will list as today's high.
 // For top-20 US cities. Uses NWS hourly forecast + METAR observations + bias correction.
 
+import { getStore } from "@netlify/blobs";
+
 const CITIES = [
   { name: "New York",       cli: "NYC", station: "KNYC", lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
   { name: "Los Angeles",    cli: "LAX", station: "KLAX", lat: 33.9425, lon: -118.4081, tz: "America/Los_Angeles" },
-  { name: "Chicago",        cli: "ORD", station: "KORD", lat: 41.9742, lon: -87.9073, tz: "America/Chicago" },
-  { name: "Houston",        cli: "IAH", station: "KIAH", lat: 29.9844, lon: -95.3414, tz: "America/Chicago" },
+  { name: "Chicago",        cli: "MDW", station: "KMDW", lat: 41.7860, lon: -87.7524, tz: "America/Chicago" },
+  { name: "Houston",        cli: "HOU", station: "KHOU", lat: 29.6454, lon: -95.2769, tz: "America/Chicago" },
   { name: "Phoenix",        cli: "PHX", station: "KPHX", lat: 33.4342, lon: -112.0116, tz: "America/Phoenix" },
   { name: "Philadelphia",   cli: "PHL", station: "KPHL", lat: 39.8729, lon: -75.2437, tz: "America/New_York" },
   { name: "San Antonio",    cli: "SAT", station: "KSAT", lat: 29.5337, lon: -98.4698, tz: "America/Chicago" },
@@ -35,8 +37,8 @@ const CACHE_MS = 3 * 60 * 1000;
 // Treat as interim until ≥30 days of NWS-vs-CLI residuals are logged via /api/logger.
 const OFFSET_SCALE = 0.5;
 const CITY_OFFSETS_RAW = {
-  "New York":             0.39, "Los Angeles":          0.24, "Chicago":              0.28,
-  "Houston":              0.86, "Phoenix":              0.15, "Philadelphia":         0.00,
+  "New York":             0.39, "Los Angeles":          0.24, "Chicago":              0.10,
+  "Houston":              1.20, "Phoenix":              0.15, "Philadelphia":         0.00,
   "San Antonio":          1.10, "San Diego":            0.21, "Dallas-Fort Worth":    0.39,
   "Jacksonville":         0.27, "Austin":               0.80, "Tampa":                0.64,
   "San Jose":            -0.98, "Columbus":             0.88, "Charlotte":            0.09,
@@ -53,7 +55,7 @@ const CITY_OFFSETS_LOW_RAW = {
   "New York":             0.24,
   "Los Angeles":          0.03,
   "Chicago":              0.24,
-  "Houston":              0.10,
+  "Houston":              0.28,
   "Phoenix":              0.46,
   "Philadelphia":         0.24,
   "San Antonio":          0.06,
@@ -74,6 +76,27 @@ const CITY_OFFSETS_LOW_RAW = {
 const CITY_OFFSETS_LOW = Object.fromEntries(
   Object.entries(CITY_OFFSETS_LOW_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
 );
+
+// Regime correction (recent forecast-bias): added on top of CITY_OFFSETS to track
+// short-window drift the long-run offset can't see. Damping 0.3 over a Bayesian-ish
+// blend with the 5-y prior (effective n_prior ≈ 30 days). Floor at 0.5°F to avoid
+// fitting noise. Audit on 2026-05-04 of bot's first 28 settled bets showed the model
+// running 1.5-2.3°F COLD across NYC/CHI/LAX/AUS/PHL/SAT/DFW/DC over 2 days — that
+// regime drift caused most of the loss. Negative values = model under-predicted
+// (priorMean -= residual_mean × damping → positive correction). These hardcoded values
+// are seed-only; logger.js updates them dynamically into the regime_corrections blob
+// after each daily CLI capture, replaced by 7-day rolling mean once data accumulates.
+const REGIME_DAMPING = 0.3;
+const REGIME_FLOOR_F = 0.5;
+const REGIME_RESIDUAL_SEED = {
+  "New York":            -1.5, "Los Angeles":         -1.6, "Chicago":             -2.0,
+  "Houston":             -1.7, "Phoenix":             -1.0, "Philadelphia":        -2.0,
+  "San Antonio":         -2.0, "San Diego":           -1.0, "Dallas-Fort Worth":   -1.7,
+  "Jacksonville":        -1.0, "Austin":              -1.5, "Tampa":               -1.0,
+  "San Jose":            -1.0, "Columbus":            -1.0, "Charlotte":           -1.0,
+  "Indianapolis":        -1.0, "Seattle":             -1.0, "Denver":              -1.0,
+  "Washington DC":       -1.3, "Boston":              -1.0
+};
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
@@ -279,8 +302,22 @@ async function fetchLatestCLI(cli) {
       if (m) maxF = parseInt(m[1], 10);
     }
 
+    // Mirror the maxF parser for MINIMUM. Partial CLIs may not have a minimum yet.
+    let minF = null;
+    m = text.match(/^\s*MINIMUM\s+(-?\d+)/im);
+    if (m) minF = parseInt(m[1], 10);
+    if (minF == null) {
+      m = text.match(/LOW(?:EST)?\s+TEMP[A-Z\s\(\)]*\s+(-?\d+)/i);
+      if (m) minF = parseInt(m[1], 10);
+    }
+    if (minF == null) {
+      const tempBlock = text.split(/PRECIPITATION|SNOW|WIND|SKY/)[0] || text;
+      m = tempBlock.match(/MINIMUM[^\n]*?(-?\d{2,3})/i);
+      if (m) minF = parseInt(m[1], 10);
+    }
+
     return {
-      maxF,
+      maxF, minF,
       coversDate: coversDate ? coversDate.toISOString().slice(0, 10) : null,
       isPartial,
       dateLabel: forMatch ? `${forMatch[1]} ${forMatch[2]} ${forMatch[3]}` : null
@@ -334,7 +371,36 @@ function truncNormalMeanUpper(mu, sigma, a) {
   return -truncNormalMean(-mu, sigma, -a);
 }
 
-function computePrediction(city, metars, forecast, ensemble, lastCLI) {
+// Compute warming rate (°F/hr) from last ~4 hourly METARs via linear regression.
+// Returns null if insufficient data. Clips extreme slopes that won't extrapolate
+// (e.g., front-passage spikes capped at +5°F/hr, cooling ramps at −3°F/hr).
+function computeWarmingRate(todayObs) {
+  if (!todayObs || todayObs.length < 3) return null;
+  const recent = todayObs.slice(-4);
+  const n = recent.length;
+  const t0 = recent[0].ts.getTime();
+  const xs = recent.map(o => (o.ts.getTime() - t0) / 3600000);
+  const ys = recent.map(o => cToF(o.tempC));
+  const xMean = xs.reduce((a, x) => a + x, 0) / n;
+  const yMean = ys.reduce((a, y) => a + y, 0) / n;
+  const num = xs.reduce((a, x, i) => a + (x - xMean) * (ys[i] - yMean), 0);
+  const den = xs.reduce((a, x) => a + (x - xMean) ** 2, 0);
+  if (den < 0.01) return null;
+  return Math.max(-3, Math.min(5, num / den));
+}
+
+// Resolve the regime correction (recent 7-day rolling residual mean) for a city.
+// Prefers the dynamic blob written by logger.js (under per_city_residual_mean_7d);
+// falls back to seed constants when the dynamic blob is missing or unset for the city.
+function resolveRegimeResidual(city, regimeBlob) {
+  const dyn = regimeBlob?.per_city_residual_mean_7d;
+  if (dyn && typeof dyn === "object" && dyn[city.name] != null) {
+    return dyn[city.name];
+  }
+  return REGIME_RESIDUAL_SEED[city.name] ?? 0;
+}
+
+function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
@@ -351,12 +417,17 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
   // overlap with GFS.
   const sources = [];
   // NWS source.
+  let nwsHighF = null, nwsLowF = null;
   {
     const peak = forecastPeakToday(forecast.hourly, localMidnight) ?? forecast.dailyHigh ?? null;
     const trough = forecastTroughToday(forecast.hourly, localMidnight);
     const at = (currentTemp != null && forecast.hourly?.length && todayObs.length)
       ? forecastTempAt(forecast.hourly, todayObs[todayObs.length - 1].ts) : null;
-    if (peak != null) sources.push({ model: "nws", peak, trough, at });
+    if (peak != null) {
+      sources.push({ model: "nws", peak, trough, at });
+      nwsHighF = Math.round(peak);
+      nwsLowF = trough != null ? Math.round(trough) : null;
+    }
   }
   // Open-Meteo ensemble sources.
   if (ensemble) {
@@ -408,12 +479,37 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     mean = forecastHighF;
     std = 3.0;
     method = "forecast-only";
+  } else if (hrsToPeak < 1.0) {
+    // Peak-collapse: at <1h to peak, the day's max is essentially realized — anchoring on
+    // a stale NWS forecast that's already been falsified by maxSoFar mispriced 1°F clusters
+    // (CHI/NYC NO positions on 2026-05-02). Small upside budget for late-afternoon warming.
+    mean = maxSoFar + 0.2 + 0.3 * hrsToPeak;
+    std = Math.max(0.4, 0.4 + 0.3 * hrsToPeak);
+    method = "peak-realized";
   } else {
     // Bias-corrected forecast prior. Validated on 5y×20cities held-out (n_test=14400).
     const biasWeight = 0.4;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
+    // Regime correction: damped 7-day forecast bias on top of the long-run offset.
+    const regimeResidual = resolveRegimeResidual(city, regimeBlob);
+    if (regimeResidual != null && Math.abs(regimeResidual) > REGIME_FLOOR_F) {
+      priorMean -= REGIME_DAMPING * regimeResidual;
+    }
+    // Warming-rate observation term (V3): project current obs trajectory forward and
+    // blend with forecast-prior, ONLY in the afternoon window (hrsToPeak ≤ 3). 5y backtest
+    // (n_test=14400): all-hours linear extrapolation degrades RMSE 9.3% (early-morning
+    // ramps don't sustain to peak); afternoon-only gate improves RMSE 2.1% with bias
+    // tightening +0.11 → +0.03. Sinusoidal cot variants tested and discarded (radiative
+    // model overstates morning warming, degraded RMSE 19-20%).
+    const warmingRate = computeWarmingRate(todayObs);
+    if (warmingRate != null && currentTemp != null && hrsToPeak > 0.5 && hrsToPeak <= 3) {
+      const projectedMax = currentTemp + 0.4 * warmingRate * hrsToPeak;
+      // w_obs caps at 0.4 (gate-driven gain is concentrated near peak).
+      const w_obs = Math.max(0.1, Math.min(0.4, 0.5 - 0.1 * hrsToPeak));
+      priorMean = (1 - w_obs) * priorMean + w_obs * projectedMax;
+    }
     // σ formula re-tuned for the 5-model ensemble. Old: max(0.8, 1.0 + 0.12*lead + 0.10*|bias|)
     // gave σ̄=1.66 against actual RMSE=1.31 — over-covering 84% in 68% CI (target 68%).
     // New params from grid-search calibrated to min |cov68-0.68|+|cov95-0.95|:
@@ -480,6 +576,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     forecastHighF,
+    nwsHighF,
     forecastPeakHourly: ensemblePeak != null ? Math.round(ensemblePeak) : null,
     biasF: biasF != null ? round(biasF) : null,
     hrsToPeak: Math.round(hrsToPeak * 10) / 10,
@@ -493,6 +590,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI) {
     // LOW (today's min).
     minSoFar: minSoFar != null ? round(minSoFar) : null,
     forecastLowF,
+    nwsLowF,
     lowMethod,
     hrsToTrough: Math.round(hrsToTrough_ * 10) / 10,
     lowMean: lowMean != null ? round(lowMean) : null,
@@ -524,6 +622,14 @@ export default async (req) => {
     });
   }
 
+  // Regime corrections: optional blob written by logger.js (7-day rolling residual mean
+  // per city). If missing, computePrediction falls back to REGIME_RESIDUAL_SEED constants.
+  let regimeBlob = null;
+  try {
+    const regimeStore = getStore("regime_corrections");
+    regimeBlob = await regimeStore.get("global", { type: "json" });
+  } catch (e) { /* fall through to seed */ }
+
   const [forecasts, ensembles, clis] = await Promise.all([
     Promise.all(CITIES.map(c => fetchNWSForecast(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon))),
@@ -532,7 +638,7 @@ export default async (req) => {
 
   const cities = CITIES.map((c, i) => {
     const metars = parseStationMetars(metarText, c.station);
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i]);
+    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob);
   });
 
   CACHE = { ts: now, data: cities };
