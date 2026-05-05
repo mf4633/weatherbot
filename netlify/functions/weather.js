@@ -124,6 +124,31 @@ function parseTGroup(metar) {
   return { tempC: (m[1]==="1"?-1:1)*parseInt(m[2],10)/10, dewC: (m[3]==="1"?-1:1)*parseInt(m[4],10)/10 };
 }
 
+// Parse synoptic temperature extreme groups from a METAR's RMK section:
+//   1sTTT     = 6-hour max (s=sign, TTT=tenths °C). Window: (reportTime − 6h, reportTime].
+//   2sTTT     = 6-hour min, same format.
+//   4sTTTsTTT = 24-hour max+min, both signed-tenths °C. Window: prior climate day.
+// These capture between-cycle extremes that the hourly :54 T-group misses. On 2026-05-05
+// KBOS the 12Z report carried `20100` → 10.0°C/50°F as the true 06–12Z minimum, while the
+// hourly samples never went below 52°F. Without this group, minSoFar over-floors the LOW
+// truncation and the model concentrates probability on already-impossible buckets.
+function parseRmkExtremes(metar) {
+  const rmkIdx = metar.indexOf(" RMK ");
+  const scope = rmkIdx >= 0 ? metar.slice(rmkIdx) : metar;
+  const decode = (sign, tenths) => (sign === "1" ? -1 : 1) * parseInt(tenths, 10) / 10;
+  const out = {};
+  const m6max = scope.match(/\b1([01])(\d{3})\b/);
+  if (m6max) out.sixHrMaxC = decode(m6max[1], m6max[2]);
+  const m6min = scope.match(/\b2([01])(\d{3})\b/);
+  if (m6min) out.sixHrMinC = decode(m6min[1], m6min[2]);
+  const m24 = scope.match(/\b4([01])(\d{3})([01])(\d{3})\b/);
+  if (m24) {
+    out.dailyMaxC = decode(m24[1], m24[2]);
+    out.dailyMinC = decode(m24[3], m24[4]);
+  }
+  return out;
+}
+
 function parseMetarTime(metar) {
   const m = metar.match(/\b(\d{2})(\d{2})(\d{2})Z\b/);
   if (!m) return null;
@@ -332,7 +357,8 @@ function parseStationMetars(allText, station) {
     const t = parseTGroup(line);
     const ts = parseMetarTime(line);
     const tempC = t ? t.tempC : (parseBodyTemp(line) ?? null);
-    return { line, ts, tempC };
+    const ext = parseRmkExtremes(line);
+    return { line, ts, tempC, ...ext };
   }).filter(o => o.ts && o.tempC !== null).sort((a, b) => a.ts - b.ts);
 }
 
@@ -405,8 +431,23 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
   const tempsF = todayObs.map(o => cToF(o.tempC));
-  const maxSoFar = tempsF.length ? Math.max(...tempsF) : null;
-  const minSoFar = tempsF.length ? Math.min(...tempsF) : null;
+  let maxSoFar = tempsF.length ? Math.max(...tempsF) : null;
+  let minSoFar = tempsF.length ? Math.min(...tempsF) : null;
+  // Fold in METAR RMK 6-hour extreme groups (1xxxx / 2xxxx) whose 6h window is
+  // entirely inside today's local climate day. Hourly :54 obs miss between-cycle
+  // dips; the 12Z synoptic report carries the actual 06–12Z min that CLI uses.
+  const SIX_HR_MS = 6 * 3600 * 1000;
+  for (const o of todayObs) {
+    if (o.ts.getTime() - SIX_HR_MS < localMidnight.getTime()) continue;
+    if (o.sixHrMinC != null) {
+      const f = cToF(o.sixHrMinC);
+      if (minSoFar == null || f < minSoFar) minSoFar = f;
+    }
+    if (o.sixHrMaxC != null) {
+      const f = cToF(o.sixHrMaxC);
+      if (maxSoFar == null || f > maxSoFar) maxSoFar = f;
+    }
+  }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
 

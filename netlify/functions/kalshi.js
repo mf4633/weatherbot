@@ -85,12 +85,19 @@ function bucketBounds(market) {
   const cs = market.cap_strike;
   if (t.startsWith("T")) {
     // Tail: T<n> can mean either "<= n-1" (low tail) or ">= n+1" (high tail).
-    // The strike_type and floor/cap fields disambiguate.
+    // Kalshi strike values are EXCLUSIVE bounds — a "less" market with cs=77
+    // settles on integer outcomes ≤ 76 (subtitle "76° or below"), and a
+    // "greater" market with fs=84 settles on integer outcomes ≥ 85 (subtitle
+    // "85° or above"). Earlier code returned the strike value as the inclusive
+    // bound (off-by-one), which made adjacent T-tail and B-bucket ranges
+    // overlap and inflated probSum above 1.0 — e.g., on 2026-05-05 KXLOWTBOS
+    // the T52-greater bucket was scored over [51.5, ∞) instead of [52.5, ∞),
+    // double-counting probability mass that B51.5 already covered.
     if (market.strike_type === "less" || (cs != null && fs == null)) {
-      return { loInt: -Infinity, hiInt: cs };  // <= cs
+      return { loInt: -Infinity, hiInt: cs - 1 };  // x < cs (strict)
     }
     if (market.strike_type === "greater" || (fs != null && cs == null)) {
-      return { loInt: fs, hiInt: Infinity };   // >= fs
+      return { loInt: fs + 1, hiInt: Infinity };   // x > fs (strict)
     }
     // Fallback: parse from subtitle.
     const sub = market.subtitle || "";
@@ -269,7 +276,10 @@ export default async () => {
     topBets: allBets.slice(0, 30),
     cities
   }, null, 2), {
-    headers: { "content-type": "application/json", "cache-control": "public, max-age=120" }
+    // Short cache (30s): trader cron fires every ~5 min, so a 30s edge cache means each cycle
+    // sees fresh model state. Previous 120s cache was a known cause of placement against stale
+    // p_model when minSoFar / bias updates within a 2-min window.
+    headers: { "content-type": "application/json", "cache-control": "public, max-age=30" }
   });
 };
 
