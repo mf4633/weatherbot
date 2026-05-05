@@ -118,6 +118,34 @@ function truncNormalMean(mu, sigma, a) {
   return mu + sigma * (_phi(alpha) / oneMinusPhiA);
 }
 
+// Expected daily max with floor: E[max(X, a)] where X ~ N(mu, sigma^2).
+// This is the right object for predicting CLI's reported daily MAX given an
+// already-observed today-so-far max of `a` — the daily max is literally
+// max(future_peak, a), a mixture: mass below `a` collapses to `a`, mass above
+// `a` stays. Distinct from truncNormalMean which returns E[X | X >= a] (the
+// conditional mean given the bound). truncNormalMean overshoots when mu < a
+// because it lifts the mean to the conditional centroid above the floor;
+// expectedMaxNormal correctly returns ≈ a in that regime.
+//   E[max(X, a)] = mu + (a - mu)·Φ((a-mu)/σ) + σ·φ((a-mu)/σ)
+function expectedMaxNormal(mu, sigma, a) {
+  const z = (a - mu) / sigma;
+  if (z > 6) return a;       // mu << a: daily max essentially locked at a
+  if (z < -6) return mu;     // mu >> a: floor irrelevant
+  return mu + (a - mu) * _Phi(z) + sigma * _phi(z);
+}
+
+// Expected daily min with ceiling: E[min(X, b)] where X ~ N(mu, sigma^2).
+// Mirror of expectedMaxNormal — used for LOW prediction where minSoFar is an
+// upper bound on the day's eventual minimum (today's low can't be > what's
+// already been observed). Mass above `b` collapses to `b`; mass below stays.
+//   E[min(X, b)] = mu + (b - mu)·(1 - Φ((b-mu)/σ)) - σ·φ((b-mu)/σ)
+function expectedMinNormal(mu, sigma, b) {
+  const z = (b - mu) / sigma;
+  if (z < -6) return b;      // mu >> b: daily min essentially locked at b
+  if (z > 6) return mu;      // mu << b: ceiling irrelevant
+  return mu + (b - mu) * (1 - _Phi(z)) - sigma * _phi(z);
+}
+
 function parseTGroup(metar) {
   const m = metar.match(/\bT([01])(\d{3})([01])(\d{3})\b/);
   if (!m) return null;
@@ -556,10 +584,16 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // New params from grid-search calibrated to min |cov68-0.68|+|cov95-0.95|:
     //   TEST: σ̄=1.18, cov68=70%, cov95=93%, RMSE unchanged at 1.31°F.
     const priorStd = Math.max(0.4, 0.7 + 0.08 * hrsToPeak + 0.10 * biasMag);
-    // Bayesian truncation: posterior given X >= maxSoFar (max can't be below what's already observed).
-    // Use truncated mean but keep empirically-calibrated σ — the σ formula was tuned to actual error
-    // variance, not to the forecast prior's variance, so don't shrink it via truncation math.
-    mean = truncNormalMean(priorMean, priorStd, maxSoFar);
+    // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =
+    // max(future_peak, maxSoFar), so the right object is E[max(X, maxSoFar)] —
+    // a mixture with mass below maxSoFar collapsed to maxSoFar. Previously used
+    // truncNormalMean (= E[X | X ≥ maxSoFar]) which overshoots when priorMean is
+    // below maxSoFar. Example: Denver 2026-05-05 had bias=−5.3°F → priorMean=44.88
+    // vs maxSoFar=46 (early-morning residual from yesterday's warm cycle). Old
+    // formula → 47.2°F. New formula → 46.30°F (matches Kalshi consensus T48 YES
+    // at 99% = "high ≤ 47"). Empirically-calibrated σ retained — the new formula
+    // is uniformly less aggressive than the old, so existing σ stays valid.
+    mean = expectedMaxNormal(priorMean, priorStd, maxSoFar);
     std = priorStd;
     method = "bias-corrected";
   }
@@ -596,8 +630,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
     const priorLowStd = Math.max(0.4, 0.5 + 0.05 * hrsToTrough_ + 0.05 * biasMag);
-    // Truncate from above: low <= minSoFar.
-    lowMean = truncNormalMeanUpper(priorLowMean, priorLowStd, minSoFar);
+    // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
+    // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
+    // when priorLowMean is above minSoFar. The trough-realized branch above
+    // already handles the post-trough case explicitly; this is the residual
+    // pre-trough path where priorLowMean and minSoFar are both informative.
+    lowMean = expectedMinNormal(priorLowMean, priorLowStd, minSoFar);
     lowStd = priorLowStd;
     lowMethod = "bias-corrected";
   } else if (forecastLowF != null) {
