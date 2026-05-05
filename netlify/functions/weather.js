@@ -576,7 +576,21 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // Uses hrsToTrough (~6 AM local) instead of hrsToPeak.
   const hrsToTrough_ = hoursToTrough(city.tz, now);
   let lowMean = null, lowStd = null, lowMethod = null;
-  if (forecastLowF != null && minSoFar != null) {
+  if (forecastLowF != null && minSoFar != null && hrsToTrough_ < 1.0) {
+    // Trough-collapse: at <1h to (or past) the morning trough, the day's min is
+    // essentially realized — symmetric to the HIGH peak-collapse branch above.
+    // Without this, large negative biases drag priorLowMean several °F below
+    // minSoFar; truncNormalMeanUpper barely shifts the result back up because the
+    // prior is many σ below the truncation bound. Example: Denver 2026-05-05 had
+    // bias=−6.3°F → priorLowMean=29.85°F vs minSoFar=35.1°F (6.4σ below), σ=0.82,
+    // truncated mean stayed at 29.85°F → bot would fire YES on already-impossible
+    // 28-31°F buckets if Kalshi listed them at penny prices.
+    // Small downside budget for residual late-morning cooling that scales with
+    // hrsToTrough_ (matches HIGH formula: maxSoFar + 0.2 + 0.3*hrsToPeak).
+    lowMean = minSoFar - 0.2 - 0.3 * hrsToTrough_;
+    lowStd = Math.max(0.4, 0.4 + 0.3 * hrsToTrough_);
+    lowMethod = "trough-realized";
+  } else if (forecastLowF != null && minSoFar != null) {
     const biasWeight = 0.5;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
