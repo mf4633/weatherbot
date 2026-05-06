@@ -507,12 +507,14 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)) {
       minSoFar = oneMin.minSoFar;
     }
-  }
-  // TEMPORARY debug log — remove after verifying Synoptic is wired up.
-  if (oneMin) {
-    console.log(`[asos1min] ${city.station}: n=${oneMin.n} latest=${oneMin.latestF}F maxSoFar ${maxSoFarBefore1Min}->${maxSoFar} minSoFar ${minSoFarBefore1Min}->${minSoFar}`);
-  } else {
-    console.log(`[asos1min] ${city.station}: no 1-min data (SYNOPTIC_API_TOKEN missing or fetch failed)`);
+    // Observability: log only when 1-min materially tightened the floor or
+    // ceiling by ≥0.5°F. Keeps log volume low while preserving a daily record
+    // of when Synoptic added value vs hourly METAR + RMK alone.
+    const maxGain = (maxSoFarBefore1Min != null) ? maxSoFar - maxSoFarBefore1Min : 0;
+    const minGain = (minSoFarBefore1Min != null) ? minSoFarBefore1Min - minSoFar : 0;
+    if (maxGain >= 0.5 || minGain >= 0.5) {
+      console.log(`[asos1min] ${city.station}: max ${(maxSoFarBefore1Min ?? 0).toFixed(1)}->${maxSoFar.toFixed(1)} (+${maxGain.toFixed(1)}F)  min ${(minSoFarBefore1Min ?? 0).toFixed(1)}->${minSoFar.toFixed(1)} (-${minGain.toFixed(1)}F)  n=${oneMin.n}`);
+    }
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
