@@ -55,9 +55,40 @@ async function fetchPredictions() {
 }
 
 async function fetchKalshiMarkets(eventTicker) {
-  const r = await fetch(`${KALSHI_API}/markets?event_ticker=${eventTicker}&limit=50`);
-  if (!r.ok) return null;
-  return await r.json();
+  // Paginate so we don't silently truncate large bucket lists, AND retry on transient
+  // failures — Kalshi's public markets endpoint flakes intermittently when /api/kalshi
+  // hits 13 cities × 2 events = 26 sequential requests per cache miss. Without retry
+  // the kalshi snapshot was non-deterministic: same query, 10 cities found one cycle,
+  // 5 the next. We retry once with a 600ms backoff on non-2xx OR network throw, and
+  // stop paginating once a page returns short of `PER_PAGE` (since the next cursor
+  // sometimes lies — Kalshi returns a non-empty cursor for events that have nothing
+  // more to fetch, and following it adds wasted requests + more rate-limit pressure).
+  const MAX_PAGES = 3;
+  const PER_PAGE = 200;
+  async function fetchPage(cursor) {
+    const url = `${KALSHI_API}/markets?event_ticker=${eventTicker}&limit=${PER_PAGE}` +
+      (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await fetch(url);
+        if (r.ok) return await r.json();
+      } catch (_) { /* network error — fall through to retry */ }
+      if (attempt === 0) await new Promise(res => setTimeout(res, 600));
+    }
+    return null;
+  }
+  const merged = { markets: [] };
+  let cursor = "";
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const j = await fetchPage(cursor);
+    if (!j) return i === 0 ? null : merged;
+    if (Array.isArray(j.markets)) merged.markets.push(...j.markets);
+    // Stop if we got a short page — next cursor (if any) won't add real data.
+    if (!Array.isArray(j.markets) || j.markets.length < PER_PAGE) break;
+    cursor = j.cursor || "";
+    if (!cursor) break;
+  }
+  return merged;
 }
 
 // Kalshi fee per $1 staked at a given binary contract price.
@@ -201,6 +232,10 @@ export default async () => {
     });
 
     const kelly = (p, price) => Math.max(0, (p - price) / (1 - price));
+    // Holding period for temp: a market for "today's high" settles when next morning's
+    // CLI lands. Practically always within 24h of buy time → use 1 day. Rain is the
+    // distance-asymmetric counterpart that gets actual TVM math (see rain.js).
+    const HOLDING_DAYS = 1;
     const eventBets = [];
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
@@ -208,6 +243,7 @@ export default async () => {
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
           side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
+          evPerDay: b.evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
         });
@@ -218,6 +254,7 @@ export default async () => {
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
           side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
+          evPerDay: b.evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
         });
@@ -239,10 +276,12 @@ export default async () => {
                                   lowMean: city.lowMean, lowStd: city.lowStd, minSoFar: city.minSoFar,
                                   currentTemp: city.currentTemp } };
 
-    // HIGH event.
+    // HIGH event. lowerFloor uses maxSoFarCli (integer °F) not raw maxSoFar — Kalshi
+    // settles on NWS CLI which rounds to integer °F via a °C-internal path, so a raw
+    // 87.8°F obs (= 31.0°C exact) can settle as 87°F. See feedback_weatherbot_cli_settlement.
     if (tickers.high) {
       const r = await processEvent(city, tickers.high, "high", city.mean, city.std,
-                                    city.maxSoFar, null);
+                                    city.maxSoFarCli ?? city.maxSoFar, null);
       if (r) {
         cityRecord.highEvent = r.eventTicker;
         cityRecord.highBuckets = r.buckets;
@@ -251,10 +290,10 @@ export default async () => {
         cityRecord.highEvent = "not found";
       }
     }
-    // LOW event.
+    // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
       const r = await processEvent(city, tickers.low, "low", city.lowMean, city.lowStd,
-                                    null, city.minSoFar);
+                                    null, city.minSoFarCli ?? city.minSoFar);
       if (r) {
         cityRecord.lowEvent = r.eventTicker;
         cityRecord.lowBuckets = r.buckets;

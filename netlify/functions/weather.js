@@ -553,6 +553,15 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     ? sources.reduce((a, s) => a + s.peak, 0) / sources.length : null;
   const troughs = sources.map(s => s.trough).filter(t => t != null);
   const ensembleTrough = troughs.length ? troughs.reduce((a, t) => a + t, 0) / troughs.length : null;
+  // Ensemble disagreement σ — std across the 5 model forecasts. Captures *forecast
+  // uncertainty* in a Bayesian decomposition: combined with σ_resolution below to
+  // give the posterior σ. Sample std (n-1) so we don't underestimate when n is small.
+  const sigmaEnsemblePeak = sources.length > 1
+    ? Math.sqrt(sources.reduce((a, s) => a + (s.peak - ensemblePeak) ** 2, 0) / (sources.length - 1))
+    : null;
+  const sigmaEnsembleTrough = troughs.length > 1
+    ? Math.sqrt(troughs.reduce((a, t) => a + (t - ensembleTrough) ** 2, 0) / (troughs.length - 1))
+    : null;
   const sourcesWithAt = sources.filter(s => s.at != null);
   const ensembleAt = sourcesWithAt.length
     ? sourcesWithAt.reduce((a, s) => a + s.at, 0) / sourcesWithAt.length : null;
@@ -593,7 +602,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // a stale NWS forecast that's already been falsified by maxSoFar mispriced 1°F clusters
     // (CHI/NYC NO positions on 2026-05-02). Small upside budget for late-afternoon warming.
     mean = maxSoFar + 0.2 + 0.3 * hrsToPeak;
-    std = Math.max(0.4, 0.4 + 0.3 * hrsToPeak);
+    // Past-peak σ: only σ_resolution remains (the forecast horizon collapsed). This is
+    // the irreducible MetAR-vs-CLI residual — see σ_resolution comment in bias-corrected
+    // branch. Adds tiny lead-time term for the residual minutes before peak.
+    std = Math.sqrt(1.0 * 1.0 + Math.max(0, 0.3 * hrsToPeak) ** 2);
     method = "peak-realized";
   } else {
     // Bias-corrected forecast prior. Validated on 5y×20cities held-out (n_test=14400).
@@ -619,11 +631,24 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       const w_obs = Math.max(0.1, Math.min(0.4, 0.5 - 0.1 * hrsToPeak));
       priorMean = (1 - w_obs) * priorMean + w_obs * projectedMax;
     }
-    // σ formula re-tuned for the 5-model ensemble. Old: max(0.8, 1.0 + 0.12*lead + 0.10*|bias|)
-    // gave σ̄=1.66 against actual RMSE=1.31 — over-covering 84% in 68% CI (target 68%).
-    // New params from grid-search calibrated to min |cov68-0.68|+|cov95-0.95|:
-    //   TEST: σ̄=1.18, cov68=70%, cov95=93%, RMSE unchanged at 1.31°F.
-    const priorStd = Math.max(0.4, 0.7 + 0.08 * hrsToPeak + 0.10 * biasMag);
+    // Bayesian posterior σ: σ_post² = σ_ensemble² + σ_resolution².
+    //   σ_ensemble = std across the 5 forecast models — captures forecast disagreement
+    //                day-by-day (data-driven, varies as models agree or diverge).
+    //   σ_resolution = irreducible noise between any forecast and actual CLI value
+    //                  (METAR sampling vs CLI continuous, late-day surprises, station
+    //                  rounding). Empirically derived from 5y backtest: total RMSE
+    //                  1.31°F = √(σ_ens_avg² + σ_res²) with σ_ens_avg ≈ 0.8°F →
+    //                  σ_res ≈ 1.0°F. This is the *physically meaningful* floor —
+    //                  it replaces the prior arbitrary 0.4°F floor that produced
+    //                  cluster losses on σ-collapse near-arbs (Chicago/Boston/Dallas
+    //                  on 2026-05-06 lost ~$78 because σ=0.4 stake-piled adjacent
+    //                  buckets that all lost together).
+    // Prior fallback: when n<2 models (sigmaEnsemblePeak null), use 0.8°F as the
+    // typical-case ensemble disagreement so σ_post still reflects realistic spread.
+    const SIGMA_RESOLUTION_F = 1.0;
+    const sigmaEnsembleEffective = sigmaEnsemblePeak ?? 0.8;
+    const priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
+                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F);
     // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =
     // max(future_peak, maxSoFar), so the right object is E[max(X, maxSoFar)] —
     // a mixture with mass below maxSoFar collapsed to maxSoFar. Previously used
@@ -638,8 +663,15 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     method = "bias-corrected";
   }
 
-  // Clip CI lower bound at maxSoFar — physical truncation: today's max can't be < what's already observed.
-  const lowerFloor = maxSoFar != null ? maxSoFar : -Infinity;
+  // CLI-relevant floor: Kalshi settles on NWS Daily Climate Report (CLI), which quantizes
+  // to integer °F via a °C-internal path. ASOS 1-min raw (Synoptic) reports tenths of °C,
+  // and conversions like 31.0°C → 87.8°F are exact-boundary artifacts whose CLI rounding
+  // can land one integer below the displayed °F. Verified 2026-05-06 KSAT: raw 87.8°F →
+  // CLI settled 87°F → 86-87 bucket resolved YES at 99% while bot floored at 87.8°F and
+  // assigned P(86-87)=0. Soften the floor to floor(°F) so settlement-bound logic admits
+  // the integer below the raw reading. Symmetric for LOW (ceil minSoFar).
+  const maxSoFarCli = maxSoFar != null ? Math.floor(maxSoFar) : null;
+  const lowerFloor = maxSoFarCli != null ? maxSoFarCli : -Infinity;
   const ci68 = [Math.max(lowerFloor, mean - std), mean + std];
   const ci95 = [Math.max(lowerFloor, mean - 1.96 * std), mean + 1.96 * std];
   const round = x => Math.round(x * 10) / 10;
@@ -662,14 +694,23 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // Small downside budget for residual late-morning cooling that scales with
     // hrsToTrough_ (matches HIGH formula: maxSoFar + 0.2 + 0.3*hrsToPeak).
     lowMean = minSoFar - 0.2 - 0.3 * hrsToTrough_;
-    lowStd = Math.max(0.4, 0.4 + 0.3 * hrsToTrough_);
+    // Same Bayesian σ_resolution treatment as HIGH peak-realized branch. LOW backtest
+    // RMSE was 0.91°F (LOW is easier than HIGH), so σ_res ≈ 0.7°F is appropriate here.
+    lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2);
     lowMethod = "trough-realized";
   } else if (forecastLowF != null && minSoFar != null) {
     const biasWeight = 0.5;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
-    const priorLowStd = Math.max(0.4, 0.5 + 0.05 * hrsToTrough_ + 0.05 * biasMag);
+    // Bayesian σ for LOW: σ_post² = σ_ensemble_trough² + σ_resolution_low².
+    // 5y backtest TEST RMSE 0.91°F = √(σ_ens_avg² + σ_res²) with σ_ens_avg ≈ 0.5°F →
+    // σ_res ≈ 0.76°F. Use 0.7°F as σ_resolution. Lower than HIGH because nighttime
+    // troughs are more predictable (less convective noise, calmer atmosphere).
+    const SIGMA_LOW_RESOLUTION_F = 0.7;
+    const sigmaEnsembleLowEffective = sigmaEnsembleTrough ?? 0.5;
+    const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
+                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F);
     // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
     // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
     // when priorLowMean is above minSoFar. The trough-realized branch above
@@ -687,8 +728,9 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowStd = 4.5;
     lowMethod = "obs-only";
   }
-  // Clip CI upper bound at minSoFar.
-  const upperFloor = minSoFar != null ? minSoFar : Infinity;
+  // CLI-relevant ceiling for LOW (symmetric to HIGH lowerFloor — see comment above).
+  const minSoFarCli = minSoFar != null ? Math.ceil(minSoFar) : null;
+  const upperFloor = minSoFarCli != null ? minSoFarCli : Infinity;
   const lowCi68 = lowMean != null
     ? [lowMean - lowStd, Math.min(upperFloor, lowMean + lowStd)] : null;
   const lowCi95 = lowMean != null
@@ -708,6 +750,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lastMetarAgeMin,
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
+    maxSoFarCli,
     forecastHighF,
     nwsHighF,
     forecastPeakHourly: ensemblePeak != null ? Math.round(ensemblePeak) : null,
@@ -722,6 +765,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     ci95: [round(ci95[0]), round(ci95[1])],
     // LOW (today's min).
     minSoFar: minSoFar != null ? round(minSoFar) : null,
+    minSoFarCli,
     forecastLowF,
     nwsLowF,
     lowMethod,
