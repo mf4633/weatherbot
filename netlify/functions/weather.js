@@ -498,6 +498,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // Fold in 1-min ASOS observations (real-time, sub-hourly precision via Synoptic API).
   // RMK extremes only refresh at 00/06/12/18 UTC and in backtest lag the actual peak
   // by median 211 min; 1-min closes the gap. No-op when API token absent.
+  const maxSoFarBefore1Min = maxSoFar;
+  const minSoFarBefore1Min = minSoFar;
   if (oneMin) {
     if (oneMin.maxSoFar != null && (maxSoFar == null || oneMin.maxSoFar > maxSoFar)) {
       maxSoFar = oneMin.maxSoFar;
@@ -505,6 +507,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)) {
       minSoFar = oneMin.minSoFar;
     }
+  }
+  // TEMPORARY debug log — remove after verifying Synoptic is wired up.
+  if (oneMin) {
+    console.log(`[asos1min] ${city.station}: n=${oneMin.n} latest=${oneMin.latestF}F maxSoFar ${maxSoFarBefore1Min}->${maxSoFar} minSoFar ${minSoFarBefore1Min}->${minSoFar}`);
+  } else {
+    console.log(`[asos1min] ${city.station}: no 1-min data (SYNOPTIC_API_TOKEN missing or fetch failed)`);
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
