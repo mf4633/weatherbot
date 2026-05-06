@@ -2,6 +2,7 @@
 // For top-20 US cities. Uses NWS hourly forecast + METAR observations + bias correction.
 
 import { getStore } from "@netlify/blobs";
+import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
 
 const CITIES = [
   { name: "New York",       cli: "NYC", station: "KNYC", lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
@@ -162,7 +163,17 @@ function parseTGroup(metar) {
 // truncation and the model concentrates probability on already-impossible buckets.
 function parseRmkExtremes(metar) {
   const rmkIdx = metar.indexOf(" RMK ");
-  const scope = rmkIdx >= 0 ? metar.slice(rmkIdx) : metar;
+  let scope = rmkIdx >= 0 ? metar.slice(rmkIdx) : metar;
+  // Anchor to the position right after the precise T-group (T<sign><temp><sign><dewp>).
+  // NWS RMK ordering puts synoptic 6h/24h extreme groups (1sTTT, 2sTTT, 4sTTTsTTT)
+  // strictly after the T-group, while PK WND tokens precede it. Without this anchor,
+  // a PK WND payload like "21026/1530" (wind 210° at 26 kt) false-matches the 6h-min
+  // regex \b2[01]\d{3}\b and decodes as -2.6°C → 27.3°F, which then floors minSoFar.
+  // Same hazard for 6h-max when wind direction is 100-119°. Verified bug 2026-05-05
+  // on KDFW 1553Z (PK WND 21026/1530) and KCMH 1651Z (PK WND 21026/1610).
+  const tMatch = scope.match(/\bT[01]\d{3}[01]\d{3}\b/);
+  if (tMatch) scope = scope.slice(tMatch.index + tMatch[0].length);
+  else return {};  // no T-group → no synoptic extremes follow
   const decode = (sign, tenths) => (sign === "1" ? -1 : 1) * parseInt(tenths, 10) / 10;
   const out = {};
   const m6max = scope.match(/\b1([01])(\d{3})\b/);
@@ -339,31 +350,39 @@ async function fetchLatestCLI(cli) {
     const isPartial = /VALID\s+(AS\s+OF|TODAY|THROUGH)/i.test(text);
 
     // Find the MAXIMUM row. Try multiple patterns to handle station-specific formatting.
+    // CRITICAL: when the OBSERVED column is "M" / "MM" / "-" (no obs yet on a partial CLI),
+    // patterns 1 + 2 must NOT silently fall through to pattern 3 — that would scan further
+    // along the line and grab the next integer, which is the NORMAL (climatology) column.
+    // Verified bug 2026-05-05 on CLISAT/CLIAUS partial CLIs both reading 71/70 (the
+    // climatological max/min) while live obs was 80°F+. Detect the placeholder and treat
+    // the whole row as no-data.
+    const observedMissing = /^\s*MAXIMUM\s+(?:M+|-+)(?:\s|$)/im.test(text);
     let maxF = null;
     // Pattern 1: "MAXIMUM" followed by an integer in the OBSERVED column.
     let m = text.match(/^\s*MAXIMUM\s+(-?\d+)/im);
     if (m) maxF = parseInt(m[1], 10);
     // Pattern 2: "MAXIMUM TEMPERATURE" or "HIGH TEMP" header followed by value on same/next line.
-    if (maxF == null) {
+    if (maxF == null && !observedMissing) {
       m = text.match(/HIGH(?:EST)?\s+TEMP[A-Z\s\(\)]*\s+(-?\d+)/i);
       if (m) maxF = parseInt(m[1], 10);
     }
     // Pattern 3: scrape "TEMPERATURE" section — find a line with MAXIMUM token followed by 2- or 3-digit number anywhere.
-    if (maxF == null) {
+    if (maxF == null && !observedMissing) {
       const tempBlock = text.split(/PRECIPITATION|SNOW|WIND|SKY/)[0] || text;
       m = tempBlock.match(/MAXIMUM[^\n]*?(-?\d{2,3})/i);
       if (m) maxF = parseInt(m[1], 10);
     }
 
     // Mirror the maxF parser for MINIMUM. Partial CLIs may not have a minimum yet.
+    const minObservedMissing = /^\s*MINIMUM\s+(?:M+|-+)(?:\s|$)/im.test(text);
     let minF = null;
     m = text.match(/^\s*MINIMUM\s+(-?\d+)/im);
     if (m) minF = parseInt(m[1], 10);
-    if (minF == null) {
+    if (minF == null && !minObservedMissing) {
       m = text.match(/LOW(?:EST)?\s+TEMP[A-Z\s\(\)]*\s+(-?\d+)/i);
       if (m) minF = parseInt(m[1], 10);
     }
-    if (minF == null) {
+    if (minF == null && !minObservedMissing) {
       const tempBlock = text.split(/PRECIPITATION|SNOW|WIND|SKY/)[0] || text;
       m = tempBlock.match(/MINIMUM[^\n]*?(-?\d{2,3})/i);
       if (m) minF = parseInt(m[1], 10);
@@ -454,7 +473,7 @@ function resolveRegimeResidual(city, regimeBlob) {
   return REGIME_RESIDUAL_SEED[city.name] ?? 0;
 }
 
-function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob) {
+function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
@@ -474,6 +493,17 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     if (o.sixHrMaxC != null) {
       const f = cToF(o.sixHrMaxC);
       if (maxSoFar == null || f > maxSoFar) maxSoFar = f;
+    }
+  }
+  // Fold in 1-min ASOS observations (real-time, sub-hourly precision via Synoptic API).
+  // RMK extremes only refresh at 00/06/12/18 UTC and in backtest lag the actual peak
+  // by median 211 min; 1-min closes the gap. No-op when API token absent.
+  if (oneMin) {
+    if (oneMin.maxSoFar != null && (maxSoFar == null || oneMin.maxSoFar > maxSoFar)) {
+      maxSoFar = oneMin.maxSoFar;
+    }
+    if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)) {
+      minSoFar = oneMin.minSoFar;
     }
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
@@ -723,15 +753,17 @@ export default async (req) => {
     regimeBlob = await regimeStore.get("global", { type: "json" });
   } catch (e) { /* fall through to seed */ }
 
-  const [forecasts, ensembles, clis] = await Promise.all([
+  const [forecasts, ensembles, clis, oneMinByStation] = await Promise.all([
     Promise.all(CITIES.map(c => fetchNWSForecast(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon))),
-    Promise.all(CITIES.map(c => fetchLatestCLI(c.cli)))
+    Promise.all(CITIES.map(c => fetchLatestCLI(c.cli))),
+    fetch1MinObs()
   ]);
 
   const cities = CITIES.map((c, i) => {
     const metars = parseStationMetars(metarText, c.station);
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob);
+    const oneMin = getTodayMaxMin(oneMinByStation, c.station, c.tz);
+    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin);
   });
 
   CACHE = { ts: now, data: cities };
