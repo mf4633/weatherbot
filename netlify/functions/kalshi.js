@@ -16,7 +16,7 @@ const CITY_TO_KALSHI = {
   "New York":          { high: "KXHIGHNY",   low: "KXLOWNY"     },
   "Los Angeles":       { high: "KXHIGHLAX",  low: "KXLOWLAX"    },
   "Chicago":           { high: "KXHIGHCHI",  low: "KXLOWTCHI"   },
-  "Houston":           { high: "KXHIGHHOU",  low: "KXLOWTHOU"   },
+  "Houston":           { high: "KXHIGHTHOU", low: "KXLOWTHOU"   },
   "Phoenix":           { high: "KXHIGHTPHX", low: "KXLOWTPHX"   },
   "Philadelphia":      { high: "KXHIGHPHIL", low: "KXLOWPHIL"   },
   "San Antonio":       { high: "KXHIGHTSATX", low: "KXLOWTSATX" },
