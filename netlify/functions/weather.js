@@ -3,6 +3,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
+import { fetchIemDailyExtremes } from "./lib/iem.js";
 
 const CITIES = [
   { name: "New York",       cli: "NYC", station: "KNYC", lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
@@ -559,7 +560,7 @@ function resolveRegimeResidual(city, regimeBlob) {
   return REGIME_RESIDUAL_SEED[city.name] ?? 0;
 }
 
-function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin) {
+function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
@@ -621,6 +622,15 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     console.log(`[asos1min] ${city.station}: n=${oneMin.n} cov=${synopticCoverage} ${detail}`);
   } else {
     console.log(`[asos1min] ${city.station}: n=0 cov=none no-data`);
+  }
+  // IEM divergence alarm: if our maxSoFar (METAR + Synoptic-derived) disagrees with
+  // IEM's preliminary daily max by more than 1°F, one of the two has stale or missing
+  // data. Logs only on divergence to keep volume low.
+  if (iem?.dailyMaxF != null && maxSoFar != null) {
+    const delta = iem.dailyMaxF - maxSoFar;
+    if (Math.abs(delta) > 1.0) {
+      console.log(`[iem-divergence] ${city.station}: bot_max=${maxSoFar.toFixed(1)} iem_max=${iem.dailyMaxF.toFixed(1)} delta=${delta.toFixed(1)}F`);
+    }
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
@@ -985,6 +995,14 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // computePrediction for definitions. Values: "1min" / "5min" / "hourly-only" /
     // "stalled" / "none".
     synopticCoverage,
+    // IEM (Iowa Environmental Mesonet) preliminary daily extremes — independent
+    // corroboration source for what tomorrow's CLI will report. Polls the same
+    // NWS LDM feed that generates the official CLI. When iemDailyMaxF diverges
+    // from maxSoFar by more than ~0.5°F, one of the two sources has data the
+    // other missed (silent failure tell).
+    iemDailyMaxF: iem?.dailyMaxF != null ? round(iem.dailyMaxF) : null,
+    iemDailyMinF: iem?.dailyMinF != null ? round(iem.dailyMinF) : null,
+    iemAgeMin: iem?.latestTs ? Math.round((Date.now() - iem.latestTs.getTime()) / 60000) : null,
     // 1-min ASOS (Synoptic) — separate from METAR-derived currentTemp/maxSoFar/minSoFar.
     // Surfaced for card display so we can see precision the integer-Celsius METAR loses
     // (e.g., METAR 17°C ≡ 16.5–17.4°C ≡ 61.7–63.3°F; 1-min ASOS gives the actual tenth).
@@ -1065,17 +1083,19 @@ export default async (req) => {
     regimeBlob = await regimeStore.get("global", { type: "json" });
   } catch (e) { /* fall through to seed */ }
 
-  const [forecasts, ensembles, clis, oneMinByStation] = await Promise.all([
+  const [forecasts, ensembles, clis, oneMinByStation, iemByStation] = await Promise.all([
     Promise.all(CITIES.map(c => fetchNWSForecast(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchLatestCLI(c.cli))),
-    fetch1MinObs()
+    fetch1MinObs(),
+    fetchIemDailyExtremes()
   ]);
 
   const cities = CITIES.map((c, i) => {
     const metars = parseStationMetars(metarText, c.station);
     const oneMin = getTodayMaxMin(oneMinByStation, c.station, c.tz);
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin);
+    const iem = iemByStation?.[c.station] ?? null;
+    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem);
   });
 
   CACHE = { ts: now, data: cities };
