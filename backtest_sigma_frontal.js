@@ -127,21 +127,20 @@ function predict(ctx) {
     : 0.5;
   const SIGMA_RES = 0.7;
 
-  // Use simple bias-corrected mean (matches production bias-corrected branch).
+  // Bias-corrected mean (matches production bias-corrected branch).
   const priorMean = forecastLow + 0.5 * bias;
   let mean = Math.min(minSoFar, priorMean);
-  // Old σ (no σ_frontal): production trough-realized when hrsToTrough < 1, else bias-corrected.
-  let stdOld;
+  // Base σ (production formulas without any σ_frontal): trough-realized when
+  // hrsToTrough < 1, else bias-corrected.
+  let baseStd;
   if (hrsToTrough < 1) {
-    stdOld = Math.sqrt(SIGMA_RES * SIGMA_RES + (0.3 * hrsToTrough) ** 2);
+    baseStd = Math.sqrt(SIGMA_RES * SIGMA_RES + (0.3 * hrsToTrough) ** 2);
     mean = minSoFar - 0.2 - 0.3 * hrsToTrough;  // trough-realized mean
   } else {
-    stdOld = Math.sqrt(sigmaEns * sigmaEns + SIGMA_RES * SIGMA_RES);
+    baseStd = Math.sqrt(sigmaEns * sigmaEns + SIGMA_RES * SIGMA_RES);
   }
-  // New σ (with σ_frontal): same formulas + σ_frontal² added quadratically.
-  const stdNew = Math.sqrt(stdOld * stdOld + sigmaFrontal * sigmaFrontal);
-
-  // Cold-front branch: existing override.
+  // Cold-front check: production fires when ensemble's remaining-day trough is
+  // materially below minSoFar. When fired, sets mean = remTrough and σ floor=1.5.
   let availRem = 0, remAccum = 0;
   for (const m of MODELS) {
     if (modelRemainingLows && modelRemainingLows[m] != null) {
@@ -150,13 +149,26 @@ function predict(ctx) {
     }
   }
   const remTrough = availRem > 0 ? remAccum / availRem : null;
-  let stdOldCF = stdOld, stdNewCF = stdNew, meanCF = mean;
+  let coldFrontFired = false;
+  let meanFinal = mean, postCfStd = baseStd;
   if (remTrough != null && remTrough < minSoFar - 0.5 && remTrough < mean) {
-    meanCF = remTrough;
-    stdOldCF = Math.max(stdOld, 1.5);
-    stdNewCF = Math.max(stdNew, 1.5);
+    meanFinal = remTrough;
+    postCfStd = Math.max(baseStd, 1.5);
+    coldFrontFired = true;
   }
-  return { mean: meanCF, stdOld: stdOldCF, stdNew: stdNewCF, sigmaFrontal };
+
+  // Two policies under comparison:
+  //   STACK (deployed 2026-05-07 morning): σ_frontal added always.
+  //   DEDUP (today's follow-up):            σ_frontal added only if cold-front DIDN'T fire.
+  const stdStack = Math.sqrt(postCfStd * postCfStd + sigmaFrontal * sigmaFrontal);
+  const stdDedup = coldFrontFired
+                   ? postCfStd
+                   : Math.sqrt(postCfStd * postCfStd + sigmaFrontal * sigmaFrontal);
+  // The third reference point: "no σ_frontal at all" (pre-2026-05-07 production).
+  const stdBaseline = postCfStd;
+
+  return { mean: meanFinal, stdBaseline, stdStack, stdDedup,
+           sigmaFrontal, coldFrontFired };
 }
 
 function evaluate() {
@@ -207,13 +219,10 @@ function evaluate() {
                             modelRemainingLows, sigmaFrontal });
         if (!p) continue;
         const err = p.mean - actualMin;
-        out.push({ city: name, date, predHr, sigmaFrontal,
-                   pred: p.mean, stdOld: p.stdOld, stdNew: p.stdNew,
-                   err,
-                   in68_old: Math.abs(err) <= p.stdOld,
-                   in95_old: Math.abs(err) <= 1.96 * p.stdOld,
-                   in68_new: Math.abs(err) <= p.stdNew,
-                   in95_new: Math.abs(err) <= 1.96 * p.stdNew });
+        out.push({ city: name, date, predHr, sigmaFrontal, coldFrontFired: p.coldFrontFired,
+                   pred: p.mean,
+                   stdBaseline: p.stdBaseline, stdStack: p.stdStack, stdDedup: p.stdDedup,
+                   err });
       }
     }
   }
@@ -224,16 +233,20 @@ function summarize(rs, label) {
   const n = rs.length;
   if (!n) return { label, n: 0 };
   const errs = rs.map(x => x.err);
+  const cov = (key, k) => rs.filter(x => Math.abs(x.err) <= k * x[key]).length / n;
   return {
     label, n,
     rmse: Math.sqrt(errs.reduce((a, e) => a + e*e, 0) / n),
     bias: errs.reduce((a, e) => a + e, 0) / n,
-    sigmaOld: rs.reduce((a, x) => a + x.stdOld, 0) / n,
-    sigmaNew: rs.reduce((a, x) => a + x.stdNew, 0) / n,
-    cov68_old: rs.filter(x => x.in68_old).length / n,
-    cov95_old: rs.filter(x => x.in95_old).length / n,
-    cov68_new: rs.filter(x => x.in68_new).length / n,
-    cov95_new: rs.filter(x => x.in95_new).length / n,
+    sigmaBaseline: rs.reduce((a, x) => a + x.stdBaseline, 0) / n,
+    sigmaStack:    rs.reduce((a, x) => a + x.stdStack, 0) / n,
+    sigmaDedup:    rs.reduce((a, x) => a + x.stdDedup, 0) / n,
+    cov68_baseline: cov("stdBaseline", 1),
+    cov68_stack:    cov("stdStack", 1),
+    cov68_dedup:    cov("stdDedup", 1),
+    cov95_baseline: cov("stdBaseline", 1.96),
+    cov95_stack:    cov("stdStack", 1.96),
+    cov95_dedup:    cov("stdDedup", 1.96),
   };
 }
 
@@ -241,9 +254,8 @@ function row(s) {
   if (!s.n) return `${s.label.padEnd(28)} (no data)`;
   return `${s.label.padEnd(28)} n=${String(s.n).padStart(6)}  `
        + `RMSE=${s.rmse.toFixed(2)}  `
-       + `σ̄ ${s.sigmaOld.toFixed(2)}→${s.sigmaNew.toFixed(2)}  `
-       + `68% ${(s.cov68_old*100).toFixed(1)}→${(s.cov68_new*100).toFixed(1)}  `
-       + `95% ${(s.cov95_old*100).toFixed(1)}→${(s.cov95_new*100).toFixed(1)}`;
+       + `σ̄ base/stack/dedup=${s.sigmaBaseline.toFixed(2)}/${s.sigmaStack.toFixed(2)}/${s.sigmaDedup.toFixed(2)}  `
+       + `68%=${(s.cov68_baseline*100).toFixed(0)}/${(s.cov68_stack*100).toFixed(0)}/${(s.cov68_dedup*100).toFixed(0)}`;
 }
 
 console.log("Running A/B...");
@@ -252,6 +264,13 @@ console.log(`Total predictions: ${r.length}\n`);
 
 console.log("=== Overall (all days, all hours) ===");
 console.log(row(summarize(r, "all")));
+
+console.log("\n=== Dedup verification: σ_frontal application by cold-front state ===");
+const cfFired = r.filter(x => x.coldFrontFired);
+const cfNotFired = r.filter(x => !x.coldFrontFired);
+console.log(row(summarize(cfFired, "cold-front fired")));
+console.log(row(summarize(cfNotFired, "cold-front NOT fired")));
+console.log(row(summarize(cfNotFired.filter(x => x.sigmaFrontal > 0), "cf-not-fired & σ_f>0")));
 
 console.log("\n=== Sliced by σ_frontal magnitude ===");
 const buckets = [
@@ -275,29 +294,20 @@ const cityRows = Object.entries(byCity).map(([k, v]) => summarize(v, k));
 cityRows.sort((a, b) => b.n - a.n);
 for (const c of cityRows.slice(0, 20)) console.log(row(c));
 
-console.log("\n=== Calibration error (|cov - 0.68|) on frontal subset ===");
-const fSub = r.filter(x => x.sigmaFrontal > 0.5);
-if (fSub.length) {
-  const sFrontal = summarize(fSub, "frontal");
-  console.log(`  Old σ:  68% coverage ${(sFrontal.cov68_old*100).toFixed(1)}%  |error| = ${(Math.abs(sFrontal.cov68_old - 0.68)*100).toFixed(1)} pp`);
-  console.log(`  New σ:  68% coverage ${(sFrontal.cov68_new*100).toFixed(1)}%  |error| = ${(Math.abs(sFrontal.cov68_new - 0.68)*100).toFixed(1)} pp`);
-  console.log(`  → calibration improvement: ${((Math.abs(sFrontal.cov68_old-0.68) - Math.abs(sFrontal.cov68_new-0.68))*100).toFixed(1)} pp`);
-}
-
 // === Tail-risk (|err| > 2σ): the "near-arb-but-wrong" failure mode the trader
-// gets stake-piled into. Lower is better. This is the metric that maps directly
-// onto the SATX 2026-05-07 dual-loss pattern.
+// gets stake-piled into. Lower is better.
 console.log("\n=== Tail-risk: P(|err| > 2σ) — directly maps to stake-pile failures ===");
-function tailRate(rs, kind) {
-  return rs.filter(x => Math.abs(x.err) > 2 * (kind === "old" ? x.stdOld : x.stdNew)).length / rs.length;
+function tailRate(rs, key) {
+  return rs.filter(x => Math.abs(x.err) > 2 * x[key]).length / rs.length;
 }
 function fmtTail(rs, label) {
   if (!rs.length) return `${label} (no data)`;
-  const tOld = tailRate(rs, "old"), tNew = tailRate(rs, "new");
+  const tB = tailRate(rs, "stdBaseline");
+  const tS = tailRate(rs, "stdStack");
+  const tD = tailRate(rs, "stdDedup");
   return `${label.padEnd(28)} n=${String(rs.length).padStart(6)}  `
-       + `old=${(tOld*100).toFixed(2)}%  new=${(tNew*100).toFixed(2)}%  `
-       + `Δ=${((tOld-tNew)*100).toFixed(2)}pp  `
-       + `(reduction ${tOld > 0 ? ((1 - tNew/tOld)*100).toFixed(0) : "-"}%)`;
+       + `baseline=${(tB*100).toFixed(2)}%  stack=${(tS*100).toFixed(2)}%  dedup=${(tD*100).toFixed(2)}%  `
+       + `(stack-vs-base ${tB > 0 ? ((1 - tS/tB)*100).toFixed(0) : "-"}%, dedup-vs-base ${tB > 0 ? ((1 - tD/tB)*100).toFixed(0) : "-"}%)`;
 }
 console.log(fmtTail(r, "all"));
 console.log(fmtTail(r.filter(x => x.sigmaFrontal === 0), "calm σ_f=0"));
@@ -305,41 +315,26 @@ console.log(fmtTail(r.filter(x => x.sigmaFrontal > 0 && x.sigmaFrontal <= 0.5), 
 console.log(fmtTail(r.filter(x => x.sigmaFrontal > 0.5 && x.sigmaFrontal <= 1.0), "moderate 0.5<σ_f≤1.0"));
 console.log(fmtTail(r.filter(x => x.sigmaFrontal > 1.0), "strong σ_f>1.0"));
 
-// === EXTREME-error events: |err| > 3σ_old. These are the catastrophic stake-pile
-// losses (SATX 2026-05-07 falls here — actual was 60.8°F, μ=59.9, σ=0.7,
-// |err|/σ = 0.9/0.7 = 1.3 — actually within 2σ for SATX, BUT the bot's edge
-// calculation at NO B60.5 still mispriced because pNo got computed at the wrong
-// σ). Look at >2σ events as the trade-relevant tail.
-console.log("\n=== Extreme errors |err| > 2σ_old: how often does σ_frontal help? ===");
-const tail2 = r.filter(x => Math.abs(x.err) > 2 * x.stdOld);
-console.log(`  Total >2σ_old events: ${tail2.length} (${(tail2.length/r.length*100).toFixed(2)}% of all preds)`);
-const rescued = tail2.filter(x => Math.abs(x.err) <= 2 * x.stdNew);
-console.log(`  Rescued by σ_frontal (now within 2σ_new): ${rescued.length} (${(rescued.length/tail2.length*100).toFixed(0)}% of >2σ events)`);
-const rescuedFrontal = rescued.filter(x => x.sigmaFrontal > 0);
-console.log(`    of which σ_frontal>0: ${rescuedFrontal.length} (${(rescuedFrontal.length/rescued.length*100).toFixed(0)}% — confirms σ_frontal does the work)`);
-
-// What's the σ_frontal distribution on the rescued events?
-if (rescued.length) {
-  const sfs = rescued.map(x => x.sigmaFrontal).sort((a,b)=>a-b);
-  console.log(`    σ_frontal on rescued: median=${sfs[Math.floor(sfs.length/2)].toFixed(2)}  `
-            + `p25=${sfs[Math.floor(sfs.length/4)].toFixed(2)}  `
-            + `p75=${sfs[Math.floor(sfs.length*3/4)].toFixed(2)}`);
+console.log("\n=== Conservatism cost: σ̄/RMSE per policy (1.0 = perfectly calibrated) ===");
+function cons(rs, label) {
+  if (!rs.length) return `${label} (no data)`;
+  const rmse = Math.sqrt(rs.reduce((a,x)=>a+x.err*x.err,0)/rs.length);
+  const sB = rs.reduce((a,x)=>a+x.stdBaseline,0)/rs.length;
+  const sS = rs.reduce((a,x)=>a+x.stdStack,0)/rs.length;
+  const sD = rs.reduce((a,x)=>a+x.stdDedup,0)/rs.length;
+  return `${label.padEnd(28)} RMSE=${rmse.toFixed(2)}  `
+       + `σ̄/RMSE baseline=${(sB/rmse).toFixed(2)}  stack=${(sS/rmse).toFixed(2)}  dedup=${(sD/rmse).toFixed(2)}`;
 }
+console.log(cons(r, "all"));
+console.log(cons(r.filter(x => x.sigmaFrontal > 0), "any σ_f>0"));
+console.log(cons(r.filter(x => x.coldFrontFired), "cold-front fired"));
+console.log(cons(r.filter(x => !x.coldFrontFired && x.sigmaFrontal > 0), "cf-not-fired & σ_f>0"));
 
-// What's left after the rescue? These are the events still mispriced — model
-// fundamentally wrong, σ_frontal can't help.
-const stillBad = tail2.filter(x => Math.abs(x.err) > 2 * x.stdNew);
-console.log(`  Still >2σ_new (model errors σ_frontal can't fix): ${stillBad.length}`);
-
-// === Cost of conservatism: how much do we shrink σ̄ below RMSE on calm days?
-console.log("\n=== Conservatism cost (over-coverage shrinks edges, fewer trades) ===");
-const calm = r.filter(x => x.sigmaFrontal === 0);
-const calmRmse = Math.sqrt(calm.reduce((a,x)=>a+x.err*x.err,0)/calm.length);
-const calmSigOld = calm.reduce((a,x)=>a+x.stdOld,0)/calm.length;
-console.log(`  Calm subset:    σ̄=${calmSigOld.toFixed(2)}  RMSE=${calmRmse.toFixed(2)}  (σ unchanged when σ_frontal=0)`);
-const front = r.filter(x => x.sigmaFrontal > 0);
-const frontRmse = Math.sqrt(front.reduce((a,x)=>a+x.err*x.err,0)/front.length);
-const frontSigOld = front.reduce((a,x)=>a+x.stdOld,0)/front.length;
-const frontSigNew = front.reduce((a,x)=>a+x.stdNew,0)/front.length;
-console.log(`  Frontal subset: σ̄ ${frontSigOld.toFixed(2)}→${frontSigNew.toFixed(2)}  RMSE=${frontRmse.toFixed(2)}`);
-console.log(`  σ̄/RMSE old=${(frontSigOld/frontRmse).toFixed(2)} new=${(frontSigNew/frontRmse).toFixed(2)} (1.0 = perfectly calibrated, >1 = over-conservative)`);
+console.log("\n=== Stake-pile rescue: what >2σ_baseline events are rescued? ===");
+const tail2 = r.filter(x => Math.abs(x.err) > 2 * x.stdBaseline);
+const rescStack = tail2.filter(x => Math.abs(x.err) <= 2 * x.stdStack).length;
+const rescDedup = tail2.filter(x => Math.abs(x.err) <= 2 * x.stdDedup).length;
+console.log(`  >2σ_baseline events: ${tail2.length} (${(tail2.length/r.length*100).toFixed(2)}% of all)`);
+console.log(`  Rescued by stack:    ${rescStack} (${(rescStack/tail2.length*100).toFixed(0)}%)`);
+console.log(`  Rescued by dedup:    ${rescDedup} (${(rescDedup/tail2.length*100).toFixed(0)}%)`);
+console.log(`  Lost by dedup vs stack: ${rescStack - rescDedup} events the dedup gives up to recover stake-size on calm-front days`);

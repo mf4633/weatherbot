@@ -803,11 +803,9 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowMean = minSoFar - 0.2 - 0.3 * hrsToTrough_;
     // Same Bayesian σ_resolution treatment as HIGH peak-realized branch. LOW backtest
     // RMSE was 0.91°F (LOW is easier than HIGH), so σ_res ≈ 0.7°F is appropriate here.
-    // Frontal σ_frontal layered on top — trough-realized doesn't mean atmosphere is
-    // calm. SATX 2026-05-07 lost on this exact mismatch: morning trough at 60.8°F
-    // appeared "realized" but obs were still volatile from a passing front.
-    lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2
-                       + sigmaFrontal * sigmaFrontal);
+    // σ_frontal applied below as fallback when cold-front branch doesn't fire — see
+    // the cold-front block for the dedup logic.
+    lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2);
     lowMethod = "trough-realized";
   } else if (forecastLowF != null && minSoFar != null) {
     // Bias decay symmetric to HIGH: weight diminishes as we approach trough since
@@ -825,9 +823,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // troughs are more predictable (less convective noise, calmer atmosphere).
     const SIGMA_LOW_RESOLUTION_F = 0.7;
     const sigmaEnsembleLowEffective = sigmaEnsembleTrough ?? 0.5;
+    // σ_frontal applied below as fallback after cold-front check, not here — avoids
+    // double-inflating when cold-front branch already widens σ to 1.5°F floor.
     const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
-                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F
-                                 + sigmaFrontal * sigmaFrontal);
+                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F);
     // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
     // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
     // when priorLowMean is above minSoFar. The trough-realized branch above
@@ -838,11 +837,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowMethod = "bias-corrected";
   } else if (forecastLowF != null) {
     lowMean = forecastLowF;
-    lowStd = Math.sqrt(3.0 * 3.0 + sigmaFrontal * sigmaFrontal);
+    lowStd = 3.0;  // σ_frontal applied below conditionally
     lowMethod = "forecast-only";
   } else if (minSoFar != null) {
     lowMean = minSoFar;
-    lowStd = Math.sqrt(4.5 * 4.5 + sigmaFrontal * sigmaFrontal);
+    lowStd = 4.5;  // σ_frontal applied below conditionally
     lowMethod = "obs-only";
   }
 
@@ -854,6 +853,16 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // the day's actual min will likely be that evening value, not morning's.
   // Threshold: 0.5°F to filter forecast noise. Widen σ because front timing/
   // magnitude is uncertain.
+  //
+  // σ_frontal dedup (added 2026-05-07 follow-up): when this branch fires, σ is
+  // already widened to ≥1.5°F to absorb frontal uncertainty — adding σ_frontal
+  // on top double-counts and makes the model over-conservative (1y backtest
+  // showed σ̄/RMSE = 2.10 when both stacked, vs 1.34 with cold-front alone).
+  // So treat σ_frontal as a FALLBACK: apply it only when this branch DOESN'T
+  // fire, i.e., when the ensemble forecast missed the front. That fallback
+  // path is the SATX 2026-05-07 case — forecast didn't predict the cold push,
+  // ensembleRemainingTrough ≈ minSoFar, but obs-window volatility caught it.
+  let coldFrontFired = false;
   if (ensembleRemainingTrough != null && minSoFar != null && lowMean != null
       && ensembleRemainingTrough < minSoFar - 0.5) {
     const coldFrontLow = ensembleRemainingTrough;
@@ -861,7 +870,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       lowMean = coldFrontLow;
       lowStd = Math.max(lowStd ?? 1.0, 1.5);
       lowMethod = (lowMethod || "") + "+cold-front";
+      coldFrontFired = true;
     }
+  }
+  if (!coldFrontFired && lowStd != null && sigmaFrontal > 0) {
+    lowStd = Math.sqrt(lowStd * lowStd + sigmaFrontal * sigmaFrontal);
+    lowMethod = (lowMethod || "") + "+frontal";
   }
 
   // Defensive minSoFar ceiling on LOW prediction (symmetric to HIGH maxSoFar
