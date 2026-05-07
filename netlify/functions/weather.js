@@ -961,6 +961,19 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     currentTemp: currentTemp != null ? round(currentTemp) : null,
     lastMetarTime,
     lastMetarAgeMin,
+    // 1-min ASOS (Synoptic) — separate from METAR-derived currentTemp/maxSoFar/minSoFar.
+    // Surfaced for card display so we can see precision the integer-Celsius METAR loses
+    // (e.g., METAR 17°C ≡ 16.5–17.4°C ≡ 61.7–63.3°F; 1-min ASOS gives the actual tenth).
+    // Also shows when 1-min ASOS catches a peak/trough between METAR cycles. The bot's
+    // maxSoFar/minSoFar already fold these in — these fields just expose the raw signal.
+    oneMinAsos: oneMin ? {
+      maxSoFar: oneMin.maxSoFar != null ? round(oneMin.maxSoFar) : null,
+      minSoFar: oneMin.minSoFar != null ? round(oneMin.minSoFar) : null,
+      latestF: oneMin.latestF != null ? round(oneMin.latestF) : null,
+      latestTs: oneMin.latestTs ? new Date(oneMin.latestTs).toISOString() : null,
+      ageMin: oneMin.latestTs ? Math.round((Date.now() - new Date(oneMin.latestTs).getTime()) / 60000) : null,
+      n: oneMin.n,
+    } : null,
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     maxSoFarCli,
