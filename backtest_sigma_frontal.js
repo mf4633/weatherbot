@@ -1,5 +1,12 @@
-// σ_frontal A/B backtest: compare prediction calibration with and without
-// the new σ_frontal third term added to weather.js on 2026-05-07.
+// σ_frontal A/B/C backtest: compare prediction calibration across three policies:
+//   baseline = no σ_frontal
+//   stack    = σ_frontal always added (yesterday's policy before dedup)
+//   dedup    = σ_frontal added only when cold-front branch DOESN'T fire
+//
+// Production LOW uses DEDUP (LOW_DEDUP_ALPHA=0 in weather.js). Cold-front-fired
+// days are well-calibrated at the 1.5°F floor alone — stacking σ_frontal cost
+// 11pp σ̄/RMSE inflation for only 5pp tail-risk reduction. Asymmetric to HIGH
+// (which stacks) — see backtest_sigma_frontal_high.js for that side's policy.
 //
 // We don't expect mean (RMSE) to change — σ_frontal only affects σ. The
 // hypothesis is that σ_frontal improves CALIBRATION (68%/95% coverage)

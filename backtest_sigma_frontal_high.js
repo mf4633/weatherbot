@@ -1,3 +1,11 @@
+// Production HIGH uses STACK (HIGH_DEDUP_ALPHA=1.0 in weather.js). Warm-front-fired
+// days are intrinsically noisy (RMSE 1.64°F vs 0.95°F on calm days), so the σ_frontal
+// contribution is genuinely informative even when warm-front fires — pure dedup cost
+// 26pp tail-risk regression on the strong-frontal subset, much worse than LOW's 5pp.
+// Asymmetric to LOW (which dedups) — see backtest_sigma_frontal.js for that side's
+// policy. The dedup-vs-stack choice is calibrated per side, proportional to the
+// measured tail-risk cost of dedup.
+//
 // HIGH-market analog of backtest_sigma_frontal.js. Verifies that:
 //   1. The new warm-front branch fires when ensemble's remaining-day peak is
 //      materially above maxSoFar (mirror of cold-front for LOW).

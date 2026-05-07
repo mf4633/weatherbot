@@ -785,8 +785,15 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // front, foehn/downsloping, marine inversion break, late-afternoon convective
   // peak — the day's actual max will likely be that future value, not what's been
   // observed. Peak-realized branch anchors mean ≈ maxSoFar and misses this.
-  // σ_frontal dedup (same as LOW): when this branch fires, σ already widened to
-  // ≥1.5°F; treat σ_frontal as fallback for the not-fired path.
+  //
+  // σ_frontal dedup policy on HIGH: STACK (HIGH_DEDUP_ALPHA=1). Backtest showed
+  // warm-front-fired days are intrinsically noisy (RMSE 1.64°F vs 0.95°F on calm
+  // days) and pure dedup costs 26pp tail-risk regression on the strong-frontal
+  // subset — much worse than LOW's 5pp regression with cold-front. The σ_frontal
+  // contribution is genuinely informative even when warm-front fires, so we keep
+  // it (α=1.0). Compare LOW_DEDUP_ALPHA=0 below — asymmetric by design, calibrated
+  // per side from the backtest's tail-risk impact.
+  const HIGH_DEDUP_ALPHA = 1.0;
   let warmFrontFired = false;
   if (ensembleRemainingPeak != null && maxSoFar != null && mean != null
       && ensembleRemainingPeak > maxSoFar + 0.5) {
@@ -798,9 +805,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       warmFrontFired = true;
     }
   }
-  if (!warmFrontFired && std != null && sigmaFrontal > 0) {
-    std = Math.sqrt(std * std + sigmaFrontal * sigmaFrontal);
-    method = (method || "") + "+frontal";
+  if (std != null && sigmaFrontal > 0) {
+    const alpha = warmFrontFired ? HIGH_DEDUP_ALPHA : 1.0;
+    if (alpha > 0) {
+      std = Math.sqrt(std * std + alpha * sigmaFrontal * sigmaFrontal);
+      method = (method || "") + (warmFrontFired ? "+frontal-stack" : "+frontal");
+    }
   }
 
   // Defensive maxSoFar floor on HIGH prediction. The day's max can NEVER be below
@@ -897,14 +907,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // Threshold: 0.5°F to filter forecast noise. Widen σ because front timing/
   // magnitude is uncertain.
   //
-  // σ_frontal dedup (added 2026-05-07 follow-up): when this branch fires, σ is
-  // already widened to ≥1.5°F to absorb frontal uncertainty — adding σ_frontal
-  // on top double-counts and makes the model over-conservative (1y backtest
-  // showed σ̄/RMSE = 2.10 when both stacked, vs 1.34 with cold-front alone).
-  // So treat σ_frontal as a FALLBACK: apply it only when this branch DOESN'T
-  // fire, i.e., when the ensemble forecast missed the front. That fallback
-  // path is the SATX 2026-05-07 case — forecast didn't predict the cold push,
-  // ensembleRemainingTrough ≈ minSoFar, but obs-window volatility caught it.
+  // σ_frontal dedup policy on LOW: FULL DEDUP (LOW_DEDUP_ALPHA=0). Backtest
+  // showed cold-front-fired days are well-calibrated by the 1.5°F floor alone
+  // (σ̄/RMSE = 1.43 baseline), and stacking σ_frontal pushes to 1.54 — wasted
+  // conservatism with only 5pp tail-risk regression on dedup. Cheap to dedup.
+  // Compare HIGH_DEDUP_ALPHA=1.0 above — asymmetric by design, calibrated per
+  // side from the backtest's tail-risk impact (LOW 5pp vs HIGH 26pp regression).
+  const LOW_DEDUP_ALPHA = 0.0;
   let coldFrontFired = false;
   if (ensembleRemainingTrough != null && minSoFar != null && lowMean != null
       && ensembleRemainingTrough < minSoFar - 0.5) {
@@ -916,9 +925,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       coldFrontFired = true;
     }
   }
-  if (!coldFrontFired && lowStd != null && sigmaFrontal > 0) {
-    lowStd = Math.sqrt(lowStd * lowStd + sigmaFrontal * sigmaFrontal);
-    lowMethod = (lowMethod || "") + "+frontal";
+  if (lowStd != null && sigmaFrontal > 0) {
+    const alpha = coldFrontFired ? LOW_DEDUP_ALPHA : 1.0;
+    if (alpha > 0) {
+      lowStd = Math.sqrt(lowStd * lowStd + alpha * sigmaFrontal * sigmaFrontal);
+      lowMethod = (lowMethod || "") + (coldFrontFired ? "+frontal-stack" : "+frontal");
+    }
   }
 
   // Defensive minSoFar ceiling on LOW prediction (symmetric to HIGH maxSoFar
