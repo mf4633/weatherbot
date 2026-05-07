@@ -462,6 +462,18 @@ function forecastRemainingTroughToday(hourly, tzMidnight, now) {
   if (!remaining.length) return null;
   return Math.min(...remaining.map(p => p.tempF));
 }
+// Remaining-day peak: highest forecast temp from `now` through end-of-today-local.
+// Mirror of forecastRemainingTroughToday for HIGH markets. Catches late-day warm
+// pushes (warm fronts, foehn/downsloping, marine inversion break, late convective
+// peak) that drive the calendar-day max above an already-observed maxSoFar — the
+// peak-realized branch anchors mean ≈ maxSoFar in this regime and misses them.
+function forecastRemainingPeakToday(hourly, tzMidnight, now) {
+  if (!hourly?.length) return null;
+  const tomorrowMidnight = new Date(tzMidnight.getTime() + 24 * 3600 * 1000);
+  const remaining = hourly.filter(p => p.ts >= now && p.ts < tomorrowMidnight);
+  if (!remaining.length) return null;
+  return Math.max(...remaining.map(p => p.tempF));
+}
 // Truncated normal mean for X | X <= a (upper-bound truncation; mirror of truncNormalMean).
 function truncNormalMeanUpper(mu, sigma, a) {
   // Mirror around 0 and reuse the lower-bound function.
@@ -605,10 +617,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const peak = forecastPeakToday(forecast.hourly, localMidnight) ?? forecast.dailyHigh ?? null;
     const trough = forecastTroughToday(forecast.hourly, localMidnight);
     const remainingTrough = forecastRemainingTroughToday(forecast.hourly, localMidnight, now);
+    const remainingPeak = forecastRemainingPeakToday(forecast.hourly, localMidnight, now);
     const at = (currentTemp != null && forecast.hourly?.length && todayObs.length)
       ? forecastTempAt(forecast.hourly, todayObs[todayObs.length - 1].ts) : null;
     if (peak != null) {
-      sources.push({ model: "nws", peak, trough, remainingTrough, at });
+      sources.push({ model: "nws", peak, trough, remainingTrough, remainingPeak, at });
       nwsHighF = Math.round(peak);
       nwsLowF = trough != null ? Math.round(trough) : null;
     }
@@ -620,9 +633,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       const peak = forecastPeakToday(hourly, localMidnight);
       const trough = forecastTroughToday(hourly, localMidnight);
       const remainingTrough = forecastRemainingTroughToday(hourly, localMidnight, now);
+      const remainingPeak = forecastRemainingPeakToday(hourly, localMidnight, now);
       const at = (currentTemp != null && todayObs.length)
         ? forecastTempAt(hourly, todayObs[todayObs.length - 1].ts) : null;
-      if (peak != null) sources.push({ model: m, peak, trough, remainingTrough, at });
+      if (peak != null) sources.push({ model: m, peak, trough, remainingTrough, remainingPeak, at });
     }
   }
   const ensemblePeak = sources.length
@@ -633,6 +647,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   const remainingTroughs = sources.map(s => s.remainingTrough).filter(t => t != null);
   const ensembleRemainingTrough = remainingTroughs.length
     ? remainingTroughs.reduce((a, t) => a + t, 0) / remainingTroughs.length : null;
+  // Remaining-day peak — for late-day warm-push detection (mirror of remainingTrough).
+  const remainingPeaks = sources.map(s => s.remainingPeak).filter(t => t != null);
+  const ensembleRemainingPeak = remainingPeaks.length
+    ? remainingPeaks.reduce((a, t) => a + t, 0) / remainingPeaks.length : null;
   // Ensemble disagreement σ — std across the 5 model forecasts. Captures *forecast
   // uncertainty* in a Bayesian decomposition: combined with σ_resolution below to
   // give the posterior σ. Sample std (n-1) so we don't underestimate when n is small.
@@ -675,12 +693,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   if (forecastHighF == null) {
     // No forecast: persistence + warming residual.
     mean = (maxSoFar ?? currentTemp) + Math.min(hrsToPeak, 6) * 1.2;
-    std = Math.sqrt(4.5 * 4.5 + sigmaFrontal * sigmaFrontal);
+    std = 4.5;  // σ_frontal applied below conditionally
     method = "persistence";
   } else if (maxSoFar == null) {
     // No obs yet (overnight or station gap): trust forecast.
     mean = forecastHighF;
-    std = Math.sqrt(3.0 * 3.0 + sigmaFrontal * sigmaFrontal);
+    std = 3.0;  // σ_frontal applied below conditionally
     method = "forecast-only";
   } else if (hrsToPeak < 1.0) {
     // Peak-collapse: at <1h to peak, the day's max is essentially realized — anchoring on
@@ -689,9 +707,9 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     mean = maxSoFar + 0.2 + 0.3 * hrsToPeak;
     // Past-peak σ: only σ_resolution remains (the forecast horizon collapsed). This is
     // the irreducible MetAR-vs-CLI residual — see σ_resolution comment in bias-corrected
-    // branch. Adds tiny lead-time term for the residual minutes before peak. Frontal
-    // σ_frontal layered on top — peak-realized doesn't mean atmosphere is calm.
-    std = Math.sqrt(1.0 * 1.0 + Math.max(0, 0.3 * hrsToPeak) ** 2 + sigmaFrontal * sigmaFrontal);
+    // branch. Adds tiny lead-time term for the residual minutes before peak. σ_frontal
+    // applied below as fallback when late-warming branch doesn't fire.
+    std = Math.sqrt(1.0 * 1.0 + Math.max(0, 0.3 * hrsToPeak) ** 2);
     method = "peak-realized";
   } else {
     // Bias-corrected forecast prior. Validated on 5y×20cities held-out (n_test=14400).
@@ -743,9 +761,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // typical-case ensemble disagreement so σ_post still reflects realistic spread.
     const SIGMA_RESOLUTION_F = 1.0;
     const sigmaEnsembleEffective = sigmaEnsemblePeak ?? 0.8;
+    // σ_frontal applied below as fallback after late-warming check, not here —
+    // avoids double-inflating when the warm-front branch already widens σ to 1.5°F.
     const priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
-                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F
-                              + sigmaFrontal * sigmaFrontal);
+                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F);
     // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =
     // max(future_peak, maxSoFar), so the right object is E[max(X, maxSoFar)] —
     // a mixture with mass below maxSoFar collapsed to maxSoFar. Previously used
@@ -758,6 +777,30 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     mean = expectedMaxNormal(priorMean, priorStd, maxSoFar);
     std = priorStd;
     method = "bias-corrected";
+  }
+
+  // Late-warming check (added 2026-05-07 follow-up): mirror of the LOW cold-front
+  // branch. Calendar-day high is max over the entire day, not just morning peak. If
+  // ensemble forecast predicts a remaining-day peak materially above maxSoFar — warm
+  // front, foehn/downsloping, marine inversion break, late-afternoon convective
+  // peak — the day's actual max will likely be that future value, not what's been
+  // observed. Peak-realized branch anchors mean ≈ maxSoFar and misses this.
+  // σ_frontal dedup (same as LOW): when this branch fires, σ already widened to
+  // ≥1.5°F; treat σ_frontal as fallback for the not-fired path.
+  let warmFrontFired = false;
+  if (ensembleRemainingPeak != null && maxSoFar != null && mean != null
+      && ensembleRemainingPeak > maxSoFar + 0.5) {
+    const warmFrontHigh = ensembleRemainingPeak;
+    if (warmFrontHigh > mean) {
+      mean = warmFrontHigh;
+      std = Math.max(std ?? 1.0, 1.5);
+      method = (method || "") + "+warm-front";
+      warmFrontFired = true;
+    }
+  }
+  if (!warmFrontFired && std != null && sigmaFrontal > 0) {
+    std = Math.sqrt(std * std + sigmaFrontal * sigmaFrontal);
+    method = (method || "") + "+frontal";
   }
 
   // Defensive maxSoFar floor on HIGH prediction. The day's max can NEVER be below
