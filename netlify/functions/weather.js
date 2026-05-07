@@ -44,7 +44,12 @@ const CITY_OFFSETS_RAW = {
   "Jacksonville":         0.27, "Austin":               0.80, "Tampa":                0.64,
   "San Jose":            -0.98, "Columbus":             0.88, "Charlotte":            0.09,
   "Indianapolis":         0.29, "Seattle":              0.02, "Denver":               0.01,
-  "Washington DC":        0.53, "Boston":               0.64
+  // Boston bumped 0.64 → 2.5 on 2026-05-07: 3 settled-bet days showed consistent
+  // +2-3°F warm bias (May 5 high model 81.3 vs actual ~78-79; May 6 high model
+  // 81.3 vs actual 78-79 per Kalshi resolution). 5y backtest offset doesn't match
+  // recent regime. After 0.5 scale: +1.25°F correction. Conservative; regime seed
+  // adds another ~0.45°F. Re-evaluate after 7+ days of data.
+  "Washington DC":        0.53, "Boston":               2.5
 };
 const CITY_OFFSETS = Object.fromEntries(
   Object.entries(CITY_OFFSETS_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
@@ -72,7 +77,11 @@ const CITY_OFFSETS_LOW_RAW = {
   "Seattle":              0.29,
   "Denver":              -0.10,
   "Washington DC":        0.24,
-  "Boston":              -0.29
+  // Boston LOW: SIGN FLIP on 2026-05-07. Old value -0.29 (negative = model
+  // cold-biased on low). Settled data shows Boston low is WARM-biased: model 51.8
+  // vs actual 49-50 on May 6 (+2°F warm). Updated to +0.7 raw → +0.35 after scale.
+  // Sample is 1 day; conservative correction. Watch for confirmation.
+  "Boston":               0.7
 };
 const CITY_OFFSETS_LOW = Object.fromEntries(
   Object.entries(CITY_OFFSETS_LOW_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
@@ -96,7 +105,11 @@ const REGIME_RESIDUAL_SEED = {
   "Jacksonville":        -1.0, "Austin":              -1.5, "Tampa":               -1.0,
   "San Jose":            -1.0, "Columbus":            -1.0, "Charlotte":           -1.0,
   "Indianapolis":        -1.0, "Seattle":             -1.0, "Denver":              -1.0,
-  "Washington DC":       -1.3, "Boston":              -1.0
+  // Boston regime: SIGN FLIP on 2026-05-07. Other cities show MODEL-COLD bias
+  // (cold-mean-tail on May 2-3); Boston's recent settled bets show MODEL-WARM
+  // bias instead. Seed +1.5 reflects this opposite regime; logger.js will refine
+  // as more daily CLI captures land.
+  "Washington DC":       -1.3, "Boston":               1.5
 };
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
@@ -438,6 +451,17 @@ function forecastTroughToday(hourly, tzMidnight) {
   if (!todayPeriods.length) return null;
   return Math.min(...todayPeriods.map(p => p.tempF));
 }
+// Remaining-day trough: lowest forecast temp from `now` through end-of-today-local.
+// Captures evening cold fronts that can drive the calendar-day min below the
+// already-observed minSoFar (which usually reflects the morning trough only).
+// Distinct from forecastTroughToday which scans the full day including past hours.
+function forecastRemainingTroughToday(hourly, tzMidnight, now) {
+  if (!hourly?.length) return null;
+  const tomorrowMidnight = new Date(tzMidnight.getTime() + 24 * 3600 * 1000);
+  const remaining = hourly.filter(p => p.ts >= now && p.ts < tomorrowMidnight);
+  if (!remaining.length) return null;
+  return Math.min(...remaining.map(p => p.tempF));
+}
 // Truncated normal mean for X | X <= a (upper-bound truncation; mirror of truncNormalMean).
 function truncNormalMeanUpper(mu, sigma, a) {
   // Mirror around 0 and reuse the lower-bound function.
@@ -460,6 +484,56 @@ function computeWarmingRate(todayObs) {
   const den = xs.reduce((a, x) => a + (x - xMean) ** 2, 0);
   if (den < 0.01) return null;
   return Math.max(-3, Math.min(5, num / den));
+}
+
+// Frontal-volatility σ contribution. Returns °F to be quadratically combined with
+// σ_ensemble and σ_resolution. Captures uncertainty that the existing decomposition
+// underestimates during synoptic transitions:
+//
+//   1. UPCOMING front — forecast.hourly predicts a sharp temp shift in the next 3h.
+//      Ensemble disagreement σ alone undersamples this case: all 5 models can agree
+//      on the existence of a drop while still being off on its timing or magnitude
+//      by 1-2°F. Diurnal range over 3h on a calm day is typically <2°F, so wider
+//      ranges in the forward window indicate frontal forcing.
+//
+//   2. RECENT front — todayObs show a sharp temp shift in the last 90min. The
+//      trough-realized / peak-realized branches collapse σ to ~σ_resolution at this
+//      point on the assumption that the day's extremum is locked in, but a passing
+//      front leaves residual aleatoric uncertainty for hours afterward (the day's
+//      actual extremum may be the just-realized minSoFar OR a further drop as the
+//      front continues advecting cold air). Calm-air variation in this window is
+//      typically <0.5°F; >1°F implies recent frontal activity.
+//
+// Regimes are correlated (both indicate front-driven instability) — take max not
+// sum. Returns 0 on calm conditions.
+//
+// Calibrated against SATX 2026-05-07: forecast hourly window predicted ~3-4°F range
+// (front + post-front warming) → σ_forecast ≈ 0.5-1.0°F. Obs at 12:40+ showed 1.8°F
+// range over <30min → σ_obs ≈ 1.3°F. Combined with σ_res=0.7°F gives σ_post ≈ 1.5°F
+// vs the 0.7°F that drove the dual-loss trade.
+function computeFrontalSigma(todayObs, hourlyForecast, now) {
+  let sigmaForecast = 0;
+  let sigmaObs = 0;
+  if (hourlyForecast?.length) {
+    const horizon = new Date(now.getTime() + 3 * 3600 * 1000);
+    const fwd = hourlyForecast.filter(p => p.ts >= now && p.ts <= horizon
+                                            && Number.isFinite(p.tempF));
+    if (fwd.length >= 2) {
+      const temps = fwd.map(p => p.tempF);
+      const range = Math.max(...temps) - Math.min(...temps);
+      if (range > 2.0) sigmaForecast = Math.min(1.5, (range - 2.0) * 0.5);
+    }
+  }
+  if (todayObs?.length >= 2) {
+    const cutoff = now.getTime() - 90 * 60 * 1000;
+    const recent = todayObs.filter(o => o.ts.getTime() >= cutoff);
+    if (recent.length >= 2) {
+      const tempsF = recent.map(o => cToF(o.tempC));
+      const range = Math.max(...tempsF) - Math.min(...tempsF);
+      if (range > 1.0) sigmaObs = Math.min(1.5, range - 0.5);
+    }
+  }
+  return Math.max(sigmaForecast, sigmaObs);
 }
 
 // Resolve the regime correction (recent 7-day rolling residual mean) for a city.
@@ -530,10 +604,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   {
     const peak = forecastPeakToday(forecast.hourly, localMidnight) ?? forecast.dailyHigh ?? null;
     const trough = forecastTroughToday(forecast.hourly, localMidnight);
+    const remainingTrough = forecastRemainingTroughToday(forecast.hourly, localMidnight, now);
     const at = (currentTemp != null && forecast.hourly?.length && todayObs.length)
       ? forecastTempAt(forecast.hourly, todayObs[todayObs.length - 1].ts) : null;
     if (peak != null) {
-      sources.push({ model: "nws", peak, trough, at });
+      sources.push({ model: "nws", peak, trough, remainingTrough, at });
       nwsHighF = Math.round(peak);
       nwsLowF = trough != null ? Math.round(trough) : null;
     }
@@ -544,15 +619,20 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       if (!hourly?.length) continue;
       const peak = forecastPeakToday(hourly, localMidnight);
       const trough = forecastTroughToday(hourly, localMidnight);
+      const remainingTrough = forecastRemainingTroughToday(hourly, localMidnight, now);
       const at = (currentTemp != null && todayObs.length)
         ? forecastTempAt(hourly, todayObs[todayObs.length - 1].ts) : null;
-      if (peak != null) sources.push({ model: m, peak, trough, at });
+      if (peak != null) sources.push({ model: m, peak, trough, remainingTrough, at });
     }
   }
   const ensemblePeak = sources.length
     ? sources.reduce((a, s) => a + s.peak, 0) / sources.length : null;
   const troughs = sources.map(s => s.trough).filter(t => t != null);
   const ensembleTrough = troughs.length ? troughs.reduce((a, t) => a + t, 0) / troughs.length : null;
+  // Remaining-day trough across the ensemble — for evening cold-front detection.
+  const remainingTroughs = sources.map(s => s.remainingTrough).filter(t => t != null);
+  const ensembleRemainingTrough = remainingTroughs.length
+    ? remainingTroughs.reduce((a, t) => a + t, 0) / remainingTroughs.length : null;
   // Ensemble disagreement σ — std across the 5 model forecasts. Captures *forecast
   // uncertainty* in a Bayesian decomposition: combined with σ_resolution below to
   // give the posterior σ. Sample std (n-1) so we don't underestimate when n is small.
@@ -583,6 +663,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     };
   }
 
+  // Frontal-volatility σ — added 2026-05-07 after SATX dual-loss on cold-front day.
+  // Quadratically combined with σ_ens and σ_res in every branch below. See
+  // computeFrontalSigma() header for regime descriptions and calibration.
+  const sigmaFrontal = computeFrontalSigma(todayObs, forecast?.hourly, now);
+
   // Posterior: forecast prior + bias-correction, then truncated at maxSoFar.
   // σ shrinks smoothly as hrsToPeak → 0; no special "realized" mode (was creating a
   // discontinuous jump and over-tight CIs at peak).
@@ -590,12 +675,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   if (forecastHighF == null) {
     // No forecast: persistence + warming residual.
     mean = (maxSoFar ?? currentTemp) + Math.min(hrsToPeak, 6) * 1.2;
-    std = 4.5;
+    std = Math.sqrt(4.5 * 4.5 + sigmaFrontal * sigmaFrontal);
     method = "persistence";
   } else if (maxSoFar == null) {
     // No obs yet (overnight or station gap): trust forecast.
     mean = forecastHighF;
-    std = 3.0;
+    std = Math.sqrt(3.0 * 3.0 + sigmaFrontal * sigmaFrontal);
     method = "forecast-only";
   } else if (hrsToPeak < 1.0) {
     // Peak-collapse: at <1h to peak, the day's max is essentially realized — anchoring on
@@ -604,12 +689,23 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     mean = maxSoFar + 0.2 + 0.3 * hrsToPeak;
     // Past-peak σ: only σ_resolution remains (the forecast horizon collapsed). This is
     // the irreducible MetAR-vs-CLI residual — see σ_resolution comment in bias-corrected
-    // branch. Adds tiny lead-time term for the residual minutes before peak.
-    std = Math.sqrt(1.0 * 1.0 + Math.max(0, 0.3 * hrsToPeak) ** 2);
+    // branch. Adds tiny lead-time term for the residual minutes before peak. Frontal
+    // σ_frontal layered on top — peak-realized doesn't mean atmosphere is calm.
+    std = Math.sqrt(1.0 * 1.0 + Math.max(0, 0.3 * hrsToPeak) ** 2 + sigmaFrontal * sigmaFrontal);
     method = "peak-realized";
   } else {
     // Bias-corrected forecast prior. Validated on 5y×20cities held-out (n_test=14400).
-    const biasWeight = 0.4;
+    // Bias DECAY (added 2026-05-07): the obs-vs-forecast bias measured at this hour
+    // is informative but its persistence to peak is uncertain. Boundary-layer mixing
+    // and solar forcing tend to "burn off" morning cool/warm bias by afternoon, so
+    // the bias should be applied with full weight far from peak (when it's the only
+    // signal we have) and with diminishing weight as we approach peak (when maxSoFar
+    // becomes the dominant evidence). Exponential decay with τ=5h: at hrsToPeak=12,
+    // weight ≈ 0.91; at 5h ≈ 0.63; at 1h ≈ 0.18; at 0 = 0. Pre-decay base 0.4 retained.
+    const BIAS_BASE = 0.4;
+    const BIAS_TAU_HR = 5;
+    const biasDecay = 1 - Math.exp(-Math.max(0, hrsToPeak) / BIAS_TAU_HR);
+    const biasWeight = BIAS_BASE * biasDecay;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
@@ -648,7 +744,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const SIGMA_RESOLUTION_F = 1.0;
     const sigmaEnsembleEffective = sigmaEnsemblePeak ?? 0.8;
     const priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
-                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F);
+                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F
+                              + sigmaFrontal * sigmaFrontal);
     // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =
     // max(future_peak, maxSoFar), so the right object is E[max(X, maxSoFar)] —
     // a mixture with mass below maxSoFar collapsed to maxSoFar. Previously used
@@ -661,6 +758,16 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     mean = expectedMaxNormal(priorMean, priorStd, maxSoFar);
     std = priorStd;
     method = "bias-corrected";
+  }
+
+  // Defensive maxSoFar floor on HIGH prediction. The day's max can NEVER be below
+  // what's already been observed today. expectedMaxNormal correctly enforces this
+  // in the bias-corrected branch, but the peak-realized branch's `maxSoFar + 0.2 +
+  // 0.3 * hrsToPeak` formula goes negative-relative-to-maxSoFar when hrsToPeak < -0.67
+  // (e.g., 3 hours past peak → mean = maxSoFar - 0.7°F). That under-prediction is
+  // logically impossible. Clamp here regardless of which branch produced the value.
+  if (maxSoFar != null && mean != null && mean < maxSoFar) {
+    mean = maxSoFar;
   }
 
   // CLI-relevant floor: Kalshi settles on NWS Daily Climate Report (CLI), which quantizes
@@ -696,10 +803,19 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowMean = minSoFar - 0.2 - 0.3 * hrsToTrough_;
     // Same Bayesian σ_resolution treatment as HIGH peak-realized branch. LOW backtest
     // RMSE was 0.91°F (LOW is easier than HIGH), so σ_res ≈ 0.7°F is appropriate here.
-    lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2);
+    // Frontal σ_frontal layered on top — trough-realized doesn't mean atmosphere is
+    // calm. SATX 2026-05-07 lost on this exact mismatch: morning trough at 60.8°F
+    // appeared "realized" but obs were still volatile from a passing front.
+    lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2
+                       + sigmaFrontal * sigmaFrontal);
     lowMethod = "trough-realized";
   } else if (forecastLowF != null && minSoFar != null) {
-    const biasWeight = 0.5;
+    // Bias decay symmetric to HIGH: weight diminishes as we approach trough since
+    // late-night/early-morning bias often shifts as boundary layer settles.
+    const BIAS_BASE_LOW = 0.5;
+    const BIAS_TAU_HR_LOW = 5;
+    const biasDecayLow = 1 - Math.exp(-Math.max(0, hrsToTrough_) / BIAS_TAU_HR_LOW);
+    const biasWeight = BIAS_BASE_LOW * biasDecayLow;
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
@@ -710,7 +826,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const SIGMA_LOW_RESOLUTION_F = 0.7;
     const sigmaEnsembleLowEffective = sigmaEnsembleTrough ?? 0.5;
     const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
-                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F);
+                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F
+                                 + sigmaFrontal * sigmaFrontal);
     // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
     // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
     // when priorLowMean is above minSoFar. The trough-realized branch above
@@ -721,13 +838,40 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowMethod = "bias-corrected";
   } else if (forecastLowF != null) {
     lowMean = forecastLowF;
-    lowStd = 3.0;
+    lowStd = Math.sqrt(3.0 * 3.0 + sigmaFrontal * sigmaFrontal);
     lowMethod = "forecast-only";
   } else if (minSoFar != null) {
     lowMean = minSoFar;
-    lowStd = 4.5;
+    lowStd = Math.sqrt(4.5 * 4.5 + sigmaFrontal * sigmaFrontal);
     lowMethod = "obs-only";
   }
+
+  // Late-day cold-front check (added 2026-05-07): the calendar-day min reported
+  // in CLI is min over the entire day, including any post-morning-trough cold air
+  // arriving with a frontal passage or marine push. The trough-realized branch
+  // anchors lowMean ≈ minSoFar after morning trough, missing this case. If the
+  // ensemble forecast predicts a remaining-day trough materially below minSoFar,
+  // the day's actual min will likely be that evening value, not morning's.
+  // Threshold: 0.5°F to filter forecast noise. Widen σ because front timing/
+  // magnitude is uncertain.
+  if (ensembleRemainingTrough != null && minSoFar != null && lowMean != null
+      && ensembleRemainingTrough < minSoFar - 0.5) {
+    const coldFrontLow = ensembleRemainingTrough;
+    if (coldFrontLow < lowMean) {
+      lowMean = coldFrontLow;
+      lowStd = Math.max(lowStd ?? 1.0, 1.5);
+      lowMethod = (lowMethod || "") + "+cold-front";
+    }
+  }
+
+  // Defensive minSoFar ceiling on LOW prediction (symmetric to HIGH maxSoFar
+  // floor above). Trough-realized branch can produce lowMean > minSoFar when
+  // hrsToTrough_ is negative (past trough), which is logically impossible —
+  // the day's min cannot be higher than what's already been observed.
+  if (minSoFar != null && lowMean != null && lowMean > minSoFar) {
+    lowMean = minSoFar;
+  }
+
   // CLI-relevant ceiling for LOW (symmetric to HIGH lowerFloor — see comment above).
   const minSoFarCli = minSoFar != null ? Math.ceil(minSoFar) : null;
   const upperFloor = minSoFarCli != null ? minSoFarCli : Infinity;
@@ -757,6 +901,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     biasF: biasF != null ? round(biasF) : null,
     hrsToPeak: Math.round(hrsToPeak * 10) / 10,
     method,
+    sigmaFrontal: Math.round(sigmaFrontal * 100) / 100,
     mean: round(mean),
     median: round(mean),
     mode: round(mean),
