@@ -4,6 +4,7 @@
 import { getStore } from "@netlify/blobs";
 import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
 import { fetchIemDailyExtremes } from "./lib/iem.js";
+import { fetchDsmExtremes } from "./lib/dsm.js";
 
 const CITIES = [
   { name: "New York",       cli: "NYC", station: "KNYC", lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
@@ -560,7 +561,7 @@ function resolveRegimeResidual(city, regimeBlob) {
   return REGIME_RESIDUAL_SEED[city.name] ?? 0;
 }
 
-function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem) {
+function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
@@ -630,6 +631,25 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const delta = iem.dailyMaxF - maxSoFar;
     if (Math.abs(delta) > 1.0) {
       console.log(`[iem-divergence] ${city.station}: bot_max=${maxSoFar.toFixed(1)} iem_max=${iem.dailyMaxF.toFixed(1)} delta=${delta.toFixed(1)}F`);
+    }
+  }
+  // DSM fold-in: the NWS Daily Summary Message reports max/min from ASOS DI-1
+  // internal continuous data — the same source the official CLI is generated from.
+  // When DSM exceeds maxSoFar (or undershoots minSoFar), it has captured a
+  // between-METAR sensor extreme that all other sources missed. Authoritative
+  // for settlement; fold into maxSoFar/minSoFar so the prediction model and the
+  // trader's bucket-margin checks use it directly. KNYC 2026-05-07 incident: DSM
+  // showed max=64°F at 14:34 EDT while every METAR/SPECI/Synoptic/IEM ob said 63°F.
+  if (dsm) {
+    if (dsm.dailyMaxF != null && (maxSoFar == null || dsm.dailyMaxF > maxSoFar)) {
+      const dsmGain = maxSoFar != null ? dsm.dailyMaxF - maxSoFar : 0;
+      console.log(`[dsm-fold] ${city.station}: maxSoFar ${maxSoFar?.toFixed(1) ?? "null"} -> ${dsm.dailyMaxF} (+${dsmGain.toFixed(1)}F at ${dsm.maxTimeLocal} local, issued ${dsm.issuedAt})`);
+      maxSoFar = dsm.dailyMaxF;
+    }
+    if (dsm.dailyMinF != null && (minSoFar == null || dsm.dailyMinF < minSoFar)) {
+      const dsmDrop = minSoFar != null ? minSoFar - dsm.dailyMinF : 0;
+      console.log(`[dsm-fold] ${city.station}: minSoFar ${minSoFar?.toFixed(1) ?? "null"} -> ${dsm.dailyMinF} (-${dsmDrop.toFixed(1)}F at ${dsm.minTimeLocal} local)`);
+      minSoFar = dsm.dailyMinF;
     }
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
@@ -1003,6 +1023,17 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     iemDailyMaxF: iem?.dailyMaxF != null ? round(iem.dailyMaxF) : null,
     iemDailyMinF: iem?.dailyMinF != null ? round(iem.dailyMinF) : null,
     iemAgeMin: iem?.latestTs ? Math.round((Date.now() - iem.latestTs.getTime()) / 60000) : null,
+    // DSM (NWS Daily Summary Message) — closest public source to actual CLI settlement.
+    // Polled per-office; reports max/min from ASOS DI-1 internal continuous data
+    // (the same source the official CLI is generated from). When dsmDailyMaxF
+    // diverges from maxSoFar, the DSM is the authoritative number — our maxSoFar
+    // missed a between-METAR spike. KNYC 2026-05-07 incident: market repriced
+    // hours before any non-DSM source caught it.
+    dsmDailyMaxF: dsm?.dailyMaxF ?? null,
+    dsmDailyMinF: dsm?.dailyMinF ?? null,
+    dsmMaxTimeLocal: dsm?.maxTimeLocal ?? null,
+    dsmMinTimeLocal: dsm?.minTimeLocal ?? null,
+    dsmIssuedAt: dsm?.issuedAt ?? null,
     // 1-min ASOS (Synoptic) — separate from METAR-derived currentTemp/maxSoFar/minSoFar.
     // Surfaced for card display so we can see precision the integer-Celsius METAR loses
     // (e.g., METAR 17°C ≡ 16.5–17.4°C ≡ 61.7–63.3°F; 1-min ASOS gives the actual tenth).
@@ -1083,19 +1114,21 @@ export default async (req) => {
     regimeBlob = await regimeStore.get("global", { type: "json" });
   } catch (e) { /* fall through to seed */ }
 
-  const [forecasts, ensembles, clis, oneMinByStation, iemByStation] = await Promise.all([
+  const [forecasts, ensembles, clis, oneMinByStation, iemByStation, dsmByStation] = await Promise.all([
     Promise.all(CITIES.map(c => fetchNWSForecast(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon))),
     Promise.all(CITIES.map(c => fetchLatestCLI(c.cli))),
     fetch1MinObs(),
-    fetchIemDailyExtremes()
+    fetchIemDailyExtremes(),
+    fetchDsmExtremes(CITIES.map(c => c.station))
   ]);
 
   const cities = CITIES.map((c, i) => {
     const metars = parseStationMetars(metarText, c.station);
     const oneMin = getTodayMaxMin(oneMinByStation, c.station, c.tz);
     const iem = iemByStation?.[c.station] ?? null;
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem);
+    const dsm = dsmByStation?.[c.station] ?? null;
+    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem, dsm);
   });
 
   CACHE = { ts: now, data: cities };
