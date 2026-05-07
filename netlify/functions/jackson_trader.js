@@ -10,7 +10,7 @@
 // Same SAFETY guards as jackson.js: allowlist + denylist on Kalshi endpoints.
 // No deposits, withdrawals, or transfers under any circumstance.
 
-import { kalshiAuthedFetch, getBalance, getPositions } from "./jackson.js";
+import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketResult } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
@@ -26,12 +26,37 @@ const MAX_CONCURRENT = 20;
 // hit (model was running 1.5-2.3°F cold across cities).
 const MIN_EDGE = 0.20;
 const MIN_HALF_KELLY = 0.10;
+// Cheap-tail floor: settled-bet audit on 2026-05-06 (28 trades total) showed every
+// single catastrophic loss ($85 / 7 trades) was at price=$0.01 exactly. Set floor
+// at 4¢ — comfortably above the catastrophic 1¢ band, but doesn't over-prune the
+// 4-7¢ region where data is thin AND a current B88.5 YES trade at 6¢ is up 7x.
+// Re-evaluate after each settlement: if 4-5¢ trades lose consistently, raise back
+// to 5¢ or higher. Symmetric — applies to YES price AND NO price (NO at 3¢ is the
+// same tail-bet shape).
+const MIN_PRICE = 0.04;
+// Volume floor: skip orders on markets with paper-thin orderbook depth. Daily
+// volume is a proxy for liquidity (true book-depth isn't in our snapshot).
+// 20 contracts traded today = at least minimal interest; below that, partial
+// fills become probable. SATX bet on 2026-05-06 hit this exact pattern: 7-contract
+// intent at 63¢, 1-share fill, 6 contracts canceled at expiration.
+const MIN_VOLUME = 20;
 const PER_CITY_FRESHNESS_MAX_MIN = 180;
 // Don't re-enter a ticker+side within this window after selling it.
 const COOLDOWN_MIN = 60;
-// Sell-loser hysteresis. Require expected hold value to be at least this fraction
-// below the sell-now proceeds before paying round-trip fees on a flip.
-const SELL_HYSTERESIS = 0.10;
+// After ANY successful buy on (city, variable), block ALL further buys on the same
+// (city, variable) for this many minutes, even on different strikes/sides. Catches
+// model thrashing across runs — e.g., SATX low 2026-05-07 placed YES on B62.5 at
+// 11:46 (model μ≈62), then NO on B60.5 at 12:40 (model μ≈59.9) when the cold front
+// shifted the forecast. tileConflict is supposed to catch dual-loss across runs but
+// depends on Kalshi-position visibility + ledger blob propagation, both of which can
+// lag. This cooldown is a strict structural backstop independent of state-store sync.
+const BUY_CITYVAR_COOLDOWN_MIN = 60;
+// Sell hysteresis. Require expected hold value to be at least this fraction below
+// the current market bid before flipping. Higher = bot rides through more noise
+// before giving up winners. 2026-05-05 raised 0.10 → 0.20 per user preference to
+// not surrender winners cheaply; clears round-trip fees comfortably and ignores
+// typical per-cycle model wiggle.
+const SELL_HYSTERESIS = 0.20;
 // Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
@@ -75,40 +100,64 @@ function betWinsAt(bet, x) {
   return bet.side?.toLowerCase() === "yes" ? inRange : !inRange;
 }
 
-// Bucket-rounding-boundary margin for NO bets that lean on already-observed extremes.
+// Bucket-rounding-boundary margin for B-bucket bets that lean on already-observed extremes.
 // CLI rounds to integer °F; B-bucket "[N, N+1]" catches any continuous CLI in [N-0.5, N+1.5).
-// For LOW NO: daily low ≤ minSoFar. To win, CLI must be < N-0.5 (rounds below bucket) OR
-//   > N+1.5 (rounds above bucket). Since low ≤ minSoFar, the achievable side is below.
-//   Margin = (N - 0.5) - minSoFar. Negative or thin margin = high upset risk.
-// For HIGH NO: symmetric on the upper side. Margin = maxSoFar - (N + 1.5).
-// Returns null only when truly inapplicable (no observation yet, wrong bucket type).
-// 2026-05-04: previous version bailed out when observation was inside/above the bucket;
+//
+// NO side (existing): bet wins if CLI rounds OUTSIDE the bucket. For LOW NO, achievable
+//   side is below (since low ≤ minSoFar). Margin = (N - 0.5) - minSoFar. HIGH NO mirror.
+//
+// YES side (added 2026-05-07): bet wins if CLI rounds INSIDE the bucket.
+//   For LOW YES: minSoFar=m is upper bound on low. m < N-0.5 → YES auto-loses (low is
+//     already below bucket; can only stay or drop further). m in [N-0.5, N+1.5) → margin =
+//     m - (N - 0.5) = headroom before further drop kicks low below the bucket. m ≥ N+1.5 →
+//     bucket is reachable from above; model drives.
+//   HIGH YES symmetric.
+//
+// Threshold splits: NO bets use 0.6°F (CHI B48.5 NO calibration). YES bets use 1.5°F because
+// YES headroom is not bounded — frontal events can keep dropping the low another 2-3°F well
+// past minSoFar. SATX 2026-05-07 ate this exact pattern: YES on B62.5 with minSoFar=62.6
+// (margin 1.1°F) lost when a cold front pushed the low to 60.8°F.
+//
+// Returns null only when truly inapplicable (no observation yet, wrong bucket type, or obs
+// far from bucket so model drives).
+// 2026-05-04: previous NO version bailed out when observation was inside/above the bucket;
 // that missed the CHI low B48.5 NO failure mode where minSoFar landed inside the bucket.
-const BUCKET_MARGIN_MIN_F = 0.6;
+const BUCKET_MARGIN_MIN_F = 0.6;       // NO-side threshold
+const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see header)
 function bucketBoundaryMargin(b, weatherCity) {
-  if (b.side?.toLowerCase() !== "no") return null;  // kalshi.js emits uppercase "NO"
+  const side = b.side?.toLowerCase();
+  if (side !== "yes" && side !== "no") return null;
   const code = b.ticker;
   if (!code || !code.startsWith("B")) return null;
   const v = parseFloat(code.slice(1));
   if (!Number.isFinite(v)) return null;
   const N = Math.floor(v);  // continuous bucket = [N - 0.5, N + 1.5) after rounding
-  // The filter targets the "near-arb" failure mode where the already-observed extremum
-  // sits in or right below the bucket's rounding boundary, making the bet structurally
-  // dangerous regardless of model probability. For observations far away, the model
-  // drives — return null and don't filter.
+
   if (b.variable === "low") {
     const m = weatherCity?.minSoFar;
     if (m == null) return null;
-    if (m >= N + 1.5) return null;  // minSoFar far above bucket — not the near-arb shape
-    if (m >= N - 0.5) return -Math.abs(N - 0.5 - m) - 0.01;  // minSoFar in/at bucket → neg margin (reject)
-    return (N - 0.5) - m;  // minSoFar safely below bucket → return margin (must exceed threshold)
+    if (side === "no") {
+      if (m >= N + 1.5) return null;
+      if (m >= N - 0.5) return -Math.abs(N - 0.5 - m) - 0.01;
+      return (N - 0.5) - m;
+    }
+    // side === "yes"
+    if (m >= N + 1.5) return null;                          // obs above bucket → reachable from above; model drives
+    if (m < N - 0.5) return -Math.abs(N - 0.5 - m) - 0.01;  // obs below bucket → YES auto-loses
+    return m - (N - 0.5);                                    // obs in bucket → headroom before further drop
   }
   if (b.variable === "high" || !b.variable) {
     const m = weatherCity?.maxSoFar;
     if (m == null) return null;
-    if (m <= N - 0.5) return null;  // maxSoFar far below bucket — not the near-arb shape
-    if (m <= N + 1.5) return -Math.abs(m - (N + 1.5)) - 0.01;  // maxSoFar in/at bucket → neg margin (reject)
-    return m - (N + 1.5);  // maxSoFar safely above bucket → return margin
+    if (side === "no") {
+      if (m <= N - 0.5) return null;
+      if (m <= N + 1.5) return -Math.abs(m - (N + 1.5)) - 0.01;
+      return m - (N + 1.5);
+    }
+    // side === "yes"
+    if (m <= N - 0.5) return null;                          // obs below bucket → reachable from below; model drives
+    if (m > N + 1.5) return -Math.abs(m - (N + 1.5)) - 0.01; // obs above bucket → YES auto-loses
+    return (N + 1.5) - m;                                    // obs in bucket → headroom before further rise
   }
   return null;
 }
@@ -153,7 +202,13 @@ async function placeBuyOrder(ticker, side, count, priceCents) {
     count: Math.max(1, Math.round(count)),
     type: "limit",
     [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 5,  // 5-minute IOC-ish
+    // 15-min expiration (extended from 5-min on 2026-05-07): on illiquid temp
+    // markets the 5-min window often expired with partial or zero fills (SATX
+    // 7-contract intent → 1-share fill). 15 min lets resting orders catch new
+    // offers as they post. Phantom-grace reconcile (jackson_trader.js) keeps
+    // ledger entries alive within 1h, so the longer expiration doesn't cause
+    // double-buys on the next 5-min cycle.
+    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
     client_order_id: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   };
   const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
@@ -170,7 +225,7 @@ async function placeSellOrder(ticker, side, count, priceCents) {
     count: Math.max(1, Math.round(count)),
     type: "limit",
     [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 5,
+    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
     client_order_id: `wb-sell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   };
   const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
@@ -204,6 +259,7 @@ export default async () => {
 
   const placements = [], sales = [], errors = [], skipped = [];
   const ledgerStore = getStore("jackson_open_bets");
+  const settledStore = getStore("jackson_settled_bets");
   const cooldownStore = getStore("jackson_cooldown");
   try {
     // 1. Read live state from Kalshi + bot ledger + cooldown map.
@@ -215,13 +271,18 @@ export default async () => {
       ledgerStore.list().catch(() => ({ blobs: [] })),
       cooldownStore.get("map.json", { type: "json" }).catch(() => ({}))
     ]);
-    // Prune expired cooldown entries.
+    // Prune expired cooldown entries. Two key shapes:
+    //   "<ticker>-<SIDE>"      → after-sell ticker+side cooldown (TTL = COOLDOWN_MIN)
+    //   "cv:<city>:<variable>" → after-buy city+variable cooldown (TTL = BUY_CITYVAR_COOLDOWN_MIN)
     const cooldownMap = cooldownRaw || {};
     const nowMs = Date.now();
-    const cooldownMs = COOLDOWN_MIN * 60 * 1000;
+    const sellCooldownMs = COOLDOWN_MIN * 60 * 1000;
+    const buyCvCooldownMs = BUY_CITYVAR_COOLDOWN_MIN * 60 * 1000;
     for (const k of Object.keys(cooldownMap)) {
-      if (nowMs - new Date(cooldownMap[k]).getTime() > cooldownMs) delete cooldownMap[k];
+      const ttl = k.startsWith("cv:") ? buyCvCooldownMs : sellCooldownMs;
+      if (nowMs - new Date(cooldownMap[k]).getTime() > ttl) delete cooldownMap[k];
     }
+    const cityVarKey = (city, variable) => `cv:${city}:${variable || "high"}`;
 
     const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
     const cashDollars = cashCents / 100;
@@ -242,17 +303,104 @@ export default async () => {
     )).filter(Boolean);
     const botKey = (ticker, side) => `${ticker}-${side}`;
 
-    // Reconcile: remove ledger entries for positions Kalshi no longer has (settled/sold).
+    // Reconcile: ledger entries no longer held by Kalshi are settled or fully sold.
+    // Kalshi's /portfolio/positions does NOT return closed rows on the elections API
+    // (settlement_status=all has no effect — verified 2026-05-05), so we cannot read
+    // realized_pnl_dollars from the position. Instead, query /markets/{ticker} for
+    // the settlement result and compute realized P&L ourselves from the ledger's
+    // cost basis. Sold-before-settlement entries fall back to sell-fill proceeds.
     const heldByKalshi = new Set();
     for (const p of positions) {
       if (p.qty > 0) heldByKalshi.add(botKey(p.ticker, "YES"));
       if (p.qty < 0) heldByKalshi.add(botKey(p.ticker, "NO"));
     }
     const liveLedger = [];
+    const settlingEntries = [];
     for (const entry of ledger) {
       const key = botKey(entry.ticker, entry.side);
       if (heldByKalshi.has(key)) liveLedger.push(entry);
-      else await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+      else settlingEntries.push(entry);
+    }
+    if (settlingEntries.length > 0) {
+      // Pull recent fills once for fee + sell-proceeds attribution. Limit 200
+      // covers ~3-4 days of bot activity at current pace; longer-tail sells will
+      // miss fee data but the realized payout from /markets is still authoritative.
+      let fillsByTicker = {};
+      try {
+        const fillsResp = await getRecentFills(200);
+        for (const f of (fillsResp.fills || [])) {
+          (fillsByTicker[f.ticker] ??= []).push(f);
+        }
+      } catch (e) {
+        errors.push({ where: "fills-fetch", err: String(e) });
+      }
+      // Look up market settlement results in parallel.
+      const results = await Promise.all(settlingEntries.map(e => getMarketResult(e.ticker)));
+      for (let i = 0; i < settlingEntries.length; i++) {
+        const entry = settlingEntries[i];
+        const result = results[i];
+        const fills = fillsByTicker[entry.ticker] || [];
+        const sideLower = (entry.side || "").toLowerCase();
+        const matchingFills = fills.filter(f => f.side === sideLower);
+        const totalFees = matchingFills.reduce((s, f) => s + parseFloat(f.fee_cost || "0"), 0);
+
+        let realized = null, outcome = "UNKNOWN";
+        if (result === "yes" || result === "no") {
+          const won = (sideLower === result);
+          realized = (won ? 1.0 : 0.0) * (entry.contracts || 0) - (entry.stake_dollars || 0);
+          outcome = won ? "WIN" : "LOSS";
+        } else {
+          // Market not yet settled — must have been sold. Compute proceeds from sell fills.
+          const sellFills = matchingFills.filter(f => f.action === "sell");
+          if (sellFills.length > 0) {
+            const proceeds = sellFills.reduce((s, f) => {
+              const price = parseFloat((f.side === "yes" ? f.yes_price_dollars : f.no_price_dollars) || "0");
+              const count = parseFloat(f.count_fp || "0");
+              return s + price * count;
+            }, 0);
+            realized = proceeds - (entry.stake_dollars || 0);
+            outcome = "SOLD";
+          }
+        }
+
+        // Phantom-or-pending guard: if outcome is UNKNOWN, the entry is either
+        // (a) phantom — limit order never filled, ledger has a ghost write, OR
+        // (b) Kalshi positions endpoint had a transient miss (eventual consistency).
+        // Either way, prematurely writing to settledStore as UNKNOWN pollutes the
+        // analytics and we lose the ability to recover via re-discovery next cycle.
+        // Audit on 2026-05-06: 13 of 28 settled bets were UNKNOWN — most of those
+        // were SATX/NY/DC entries placed minutes before the reconcile fired, where
+        // Kalshi's positions endpoint hadn't reflected the new fill yet.
+        // Fix: keep recent UNKNOWNs alive in liveLedger; let next cycle retry.
+        // After PHANTOM_GRACE_MS (1 hour) with still-no-result-and-no-fills, treat
+        // as confirmed phantom — delete from ledger but DON'T write to settled (it
+        // was never a real position).
+        const PHANTOM_GRACE_MS = 60 * 60 * 1000;
+        if (outcome === "UNKNOWN") {
+          const placedAt = entry.placedAtUTC ? new Date(entry.placedAtUTC).getTime() : 0;
+          const ageMs = Date.now() - placedAt;
+          if (ageMs < PHANTOM_GRACE_MS) {
+            // Restore to live ledger — retry reconcile next cycle.
+            liveLedger.push(entry);
+            continue;
+          }
+          // Confirmed phantom. Delete from ledger silently; don't write to settled.
+          await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+          continue;
+        }
+
+        const settledRecord = {
+          ...entry,
+          settledAtUTC: new Date().toISOString(),
+          realized_pnl: realized != null ? Math.round(realized * 100) / 100 : null,
+          fees_paid: Math.round(totalFees * 100) / 100,
+          outcome,
+          marketResult: result
+        };
+        await settledStore.setJSON(`${entry.betId}.json`, settledRecord)
+          .catch(err => errors.push({ where: "settled-write", betId: entry.betId, err: String(err) }));
+        await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+      }
     }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
     const botOpenCount = liveLedger.length;
@@ -273,7 +421,9 @@ export default async () => {
       if (p.qty < 0) heldKey.add(botKey(p.ticker, "NO"));
     }
 
-    // 2. Sell would-be losers — ONLY among bot-placed positions.
+    // 2. Sell positions where forward EV diverges from the current market bid by
+    // more than SELL_HYSTERESIS (in either direction — losers AND overshooting
+    // winners). ONLY among bot-placed positions.
     if (kalshiData?.cities) {
       const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
       for (const p of positions) {
@@ -282,12 +432,12 @@ export default async () => {
         const side = p.qty > 0 ? "YES" : "NO";
         if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
         // Find this market in our Kalshi snapshot to get current bid + model probability.
-        let bucket = null, citySide = null;
+        let bucket = null, citySide = null, soldVariable = null;
         for (const c of kalshiData.cities) {
-          for (const variant of [c.highBuckets, c.lowBuckets]) {
+          for (const [varName, variant] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
             if (!variant) continue;
             const found = variant.find(b => ticker.endsWith("-" + b.ticker));
-            if (found) { bucket = found; citySide = c; break; }
+            if (found) { bucket = found; citySide = c; soldVariable = varName; break; }
           }
           if (bucket) break;
         }
@@ -302,12 +452,12 @@ export default async () => {
         const avgEntry = p.exposure / contracts;
         if (avgEntry <= 0) continue;
         const sellProceeds = contracts * sellPrice;     // dollars (1 contract = $1 max payout)
-        const stakePaid = p.exposure;
         const holdEV = contracts * pNow;
-        if (sellProceeds >= stakePaid) continue;        // winning vs entry, hold
-        if (holdEV >= stakePaid) continue;              // model expects breakeven, hold
-        // Hysteresis: only sell if hold value is meaningfully below sell-now value.
-        // Avoids paying round-trip Kalshi fees on tiny noise-level model flips.
+        // Forward-looking sell criterion only. The original entry price is sunk cost
+        // and must NOT enter this decision — anchoring on it caused the bot to keep
+        // YES positions even after the model flipped to favor NO on the same market
+        // (2026-05-05 user report). Sell when current market bid exceeds the model's
+        // expected payout by enough to cover round-trip fees (10% hysteresis).
         if (holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
         // SELL. In dry-run, fake the order response.
         const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
@@ -315,7 +465,18 @@ export default async () => {
                              : await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents, dryRun: isDryRun, ok: res.ok });
         if (!res.ok) errors.push({ where: "sell", ticker, response: res.body });
-        else if (!isDryRun) cooldownMap[botKey(ticker, isYes ? "YES" : "NO")] = new Date().toISOString();
+        else if (!isDryRun) {
+          cooldownMap[botKey(ticker, isYes ? "YES" : "NO")] = new Date().toISOString();
+          // ALSO lock the (city, variable) so the buy loop later in this same run can't
+          // re-enter the same event on a different strike/side. A sell driven by a model
+          // flip is exactly when the model is most untrustworthy on this event — sit out
+          // until the cooldown expires or new info arrives. Catches the SATX 2026-05-07
+          // pattern where YES on B62.5 was sold mid-run, then NO on B60.5 was bought
+          // immediately after on the same SATX-low event.
+          if (citySide?.name && soldVariable) {
+            cooldownMap[cityVarKey(citySide.name, soldVariable)] = new Date().toISOString();
+          }
+        }
       }
     }
 
@@ -328,7 +489,9 @@ export default async () => {
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
-      const qualifying = (kalshiData.topBets || []).filter(b => b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY);
+      const qualifying = (kalshiData.topBets || []).filter(b =>
+        b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
+        && (b.volume == null || b.volume >= MIN_VOLUME));
       // Skip-reason log so we can see exactly how high vs low were weighed each run.
       // Listed in priority order matching the iteration below.
       const briefBet = b => ({ city: b.city, variable: b.variable || "high", bucket: b.bucket,
@@ -341,6 +504,11 @@ export default async () => {
       let committed = 0;
       // Track committed bets per event-ticker for tile-coverage checks across the run.
       const committedByEvent = {};
+      // (city, variable) pairs that received a NEW buy this run. Cooldown set at the
+      // END of the buy loop so multiple complementary bets in the same event are still
+      // allowed within one run. Sells set the cooldown immediately (during sell loop)
+      // because a sell-driven re-entry is the high-risk case we want to block.
+      const boughtCityVarKeys = new Set();
       // Index every kalshi.js bucket by its bucket code (e.g. "T52" → {loInt:53,hiInt:null}),
       // grouped by event ticker. Used by the seed loop below to recover numeric bounds for
       // already-held positions whose botKey only carries the ticker code, not bucket bounds.
@@ -393,26 +561,38 @@ export default async () => {
         const dedupKey = botKey(fullTicker, b.side);
         if (heldKey.has(dedupKey)) { skipped.push({ ...briefBet(b), reason: "already-held" }); continue; }
         if (cooldownMap[dedupKey]) { skipped.push({ ...briefBet(b), reason: "in-cooldown" }); continue; }
+        // City+variable buy-cooldown: blocks any further buys on the same (city, variable)
+        // pair within BUY_CITYVAR_COOLDOWN_MIN of the last successful buy. Independent of
+        // ticker/side, so it catches model-thrash patterns that would otherwise slip past
+        // dedup (different strike) and tileConflict (state-store lag on prior position).
+        const cvLockKey = cityVarKey(b.city, b.variable);
+        if (cooldownMap[cvLockKey]) {
+          skipped.push({ ...briefBet(b), reason: "city-var-cooldown",
+                         lockedSince: cooldownMap[cvLockKey], lockKey: cvLockKey });
+          continue;
+        }
         // Tile-coverage check: skip if buying this on top of already-committed bets in the
         // same event would create a dual-loss zone inside ±1.5σ of model mean.
         const tile = tileConflict(b, committedByEvent[eventTicker]);
         if (!tile.ok) { skipped.push({ ...briefBet(b), reason: "tile-conflict", detail: tile.reason }); continue; }
-        // Bucket-rounding-boundary margin: for cheap-tail NO bets that look like near-arbs
-        // (observed already rules out the bucket), require ≥0.6°F margin to the CLI rounding
-        // boundary. Prevents METAR-vs-CLI integer-rounding upsets where METAR shows e.g.
-        // 58.5°F observed and CLI ends up rounding to 59°F → bucket [59,60] triggers → NO loses.
+        // Bucket-rounding-boundary margin: rejects B-bucket bets where the already-observed
+        // extremum sits in a structurally dangerous region of the bucket. NO side requires
+        // ≥0.6°F margin (METAR/CLI rounding upsets); YES side requires ≥1.5°F margin (frontal
+        // drops past minSoFar — SATX 2026-05-07 lost B62.5 YES at minSoFar=62.6 when a cold
+        // front pushed the low to 60.8°F).
         const cityWeather = (weatherData.cities || []).find(c => c.name === b.city);
         const margin = bucketBoundaryMargin(b, cityWeather);
-        // Debug instrumentation: tag every NO-on-B-bucket decision with the margin computation
-        // so we can see post-hoc whether the filter saw the right inputs. Removable once verified.
-        const marginDebug = (b.side?.toLowerCase() === "no" && b.ticker?.startsWith("B")) ? {
-          ticker: b.ticker, variable: b.variable,
+        const marginThreshold = b.side?.toLowerCase() === "yes" ? BUCKET_YES_MARGIN_MIN_F : BUCKET_MARGIN_MIN_F;
+        // Debug instrumentation: tag every B-bucket decision (YES or NO) with the margin
+        // computation so we can see post-hoc whether the filter saw the right inputs.
+        const marginDebug = b.ticker?.startsWith("B") ? {
+          ticker: b.ticker, variable: b.variable, side: b.side,
           minSoFar: cityWeather?.minSoFar, maxSoFar: cityWeather?.maxSoFar,
           cityName: b.city, weatherCityFound: !!cityWeather,
-          computedMargin: margin
+          computedMargin: margin, threshold: marginThreshold
         } : null;
-        if (margin != null && margin < BUCKET_MARGIN_MIN_F) {
-          skipped.push({ ...briefBet(b), reason: "bucket-margin-thin", marginF: margin.toFixed(2), marginDebug });
+        if (margin != null && margin < marginThreshold) {
+          skipped.push({ ...briefBet(b), reason: "bucket-margin-thin", marginF: margin.toFixed(2), thresholdF: marginThreshold, marginDebug });
           continue;
         }
         if (marginDebug) {
@@ -456,6 +636,11 @@ export default async () => {
             loInt: b.loInt, hiInt: b.hiInt,
             modelMean: b.modelMean, modelStd: b.modelStd
           });
+          // Mark the (city, variable) for end-of-run cv cooldown. We don't set it now
+          // because intra-run we want to allow complementary bets in the same event
+          // (e.g., NO on both B45 and B85 tails). The cv lock is a CROSS-RUN backstop;
+          // sells set it immediately because a sell-driven flip is the dangerous case.
+          if (!isDryRun) boughtCityVarKeys.add(cvLockKey);
           // Save to bot ledger so future runs know we own this position. Skip in dry-run.
           if (isDryRun) continue;
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
@@ -470,6 +655,12 @@ export default async () => {
           }).catch(err => errors.push({ where: "ledger-write", err: String(err) }));
         }
       }
+      // End-of-buy-loop: stamp cv cooldown for every (city, variable) that received a
+      // new buy this run. Blocks subsequent runs from re-entering the same event for
+      // BUY_CITYVAR_COOLDOWN_MIN minutes regardless of whether the position is still
+      // held, was sold, or settled.
+      const cvStamp = new Date().toISOString();
+      for (const k of boughtCityVarKeys) cooldownMap[k] = cvStamp;
     }
     // Persist updated cooldown map (sells written above; expired pruned at top).
     await cooldownStore.setJSON("map.json", cooldownMap)
