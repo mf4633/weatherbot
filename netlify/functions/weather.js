@@ -586,21 +586,41 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // by median 211 min; 1-min closes the gap. No-op when API token absent.
   const maxSoFarBefore1Min = maxSoFar;
   const minSoFarBefore1Min = minSoFar;
+  // synopticCoverage classifies whether this station is being meaningfully monitored
+  // by Synoptic 1-min/5-min ASOS, or has fallen back to hourly-only / stalled / blind.
+  // Drives downstream gating in jackson_trader.js — degraded coverage means the
+  // model's maxSoFar can miss between-METAR spikes that still affect CLI settlement,
+  // so position sizing should be reduced. KNYC 2026-05-07 incident: station ran with
+  // a `$` maintenance flag → Synoptic returned 4 obs in 240 min (hourly snapshots),
+  // but the dashboard surfaced no warning. Trader could have sized full Kelly into
+  // a bucket bet whose monitor was effectively offline.
+  let synopticCoverage = "none";
   if (oneMin) {
+    const ageMin = oneMin.latestTs ? (Date.now() - new Date(oneMin.latestTs).getTime()) / 60000 : null;
+    const n = oneMin.n ?? 0;
+    if (n < 30) synopticCoverage = "hourly-only";
+    else if (ageMin == null || ageMin > 30) synopticCoverage = "stalled";
+    else if (ageMin > 10) synopticCoverage = "5min";
+    else synopticCoverage = "1min";
+
     if (oneMin.maxSoFar != null && (maxSoFar == null || oneMin.maxSoFar > maxSoFar)) {
       maxSoFar = oneMin.maxSoFar;
     }
     if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)) {
       minSoFar = oneMin.minSoFar;
     }
-    // Observability: log only when 1-min materially tightened the floor or
-    // ceiling by ≥0.5°F. Keeps log volume low while preserving a daily record
-    // of when Synoptic added value vs hourly METAR + RMK alone.
+    // Observability: log every invocation so we can grep `[asos1min] <station>: n=0`
+    // to find silent failures (vs `n=N agree` for working-but-quiet, vs gain detail
+    // for working-and-material). Previous gain-only filter masked the KNYC degraded
+    // case — couldn't distinguish working-with-no-gain from broken-no-data.
     const maxGain = (maxSoFarBefore1Min != null) ? maxSoFar - maxSoFarBefore1Min : 0;
     const minGain = (minSoFarBefore1Min != null) ? minSoFarBefore1Min - minSoFar : 0;
-    if (maxGain >= 0.5 || minGain >= 0.5) {
-      console.log(`[asos1min] ${city.station}: max ${(maxSoFarBefore1Min ?? 0).toFixed(1)}->${maxSoFar.toFixed(1)} (+${maxGain.toFixed(1)}F)  min ${(minSoFarBefore1Min ?? 0).toFixed(1)}->${minSoFar.toFixed(1)} (-${minGain.toFixed(1)}F)  n=${oneMin.n}`);
-    }
+    const detail = (maxGain >= 0.5 || minGain >= 0.5)
+      ? `max ${(maxSoFarBefore1Min ?? 0).toFixed(1)}->${maxSoFar.toFixed(1)} (+${maxGain.toFixed(1)}F) min ${(minSoFarBefore1Min ?? 0).toFixed(1)}->${minSoFar.toFixed(1)} (-${minGain.toFixed(1)}F)`
+      : `agree`;
+    console.log(`[asos1min] ${city.station}: n=${oneMin.n} cov=${synopticCoverage} ${detail}`);
+  } else {
+    console.log(`[asos1min] ${city.station}: n=0 cov=none no-data`);
   }
   const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
   const hrsToPeak = hoursToPeak(city.tz, now);
@@ -961,6 +981,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     currentTemp: currentTemp != null ? round(currentTemp) : null,
     lastMetarTime,
     lastMetarAgeMin,
+    // Synoptic ASOS coverage classifier — drives trader sizing de-rate. See
+    // computePrediction for definitions. Values: "1min" / "5min" / "hourly-only" /
+    // "stalled" / "none".
+    synopticCoverage,
     // 1-min ASOS (Synoptic) — separate from METAR-derived currentTemp/maxSoFar/minSoFar.
     // Surfaced for card display so we can see precision the integer-Celsius METAR loses
     // (e.g., METAR 17°C ≡ 16.5–17.4°C ≡ 61.7–63.3°F; 1-min ASOS gives the actual tenth).

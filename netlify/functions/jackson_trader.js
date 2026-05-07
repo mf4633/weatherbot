@@ -599,11 +599,29 @@ export default async () => {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
         }
+        // Synoptic coverage gate: when the settlement station's 1-min ASOS feed is
+        // degraded, our maxSoFar/minSoFar can miss between-METAR spikes that still
+        // affect CLI settlement. KNYC 2026-05-07 incident: station ran on hourly-only
+        // Synoptic for hours; trader had no signal that its monitor was offline.
+        // Coverage classes are produced by weather.js → computePrediction.
+        const cov = cityWeather?.synopticCoverage;
+        const coverageDeRate = (cov === "1min" || cov === "5min") ? 1.0
+                             : (cov === "hourly-only") ? 0.5
+                             : 0.0;  // "stalled" / "none" / undefined → skip the bet
+        if (coverageDeRate === 0.0) {
+          skipped.push({ ...briefBet(b), reason: "synoptic-coverage-degraded",
+                         coverage: cov ?? "unknown" });
+          continue;
+        }
         // Conviction-weighted stake: halfKelly × bankroll, floored & capped, and
         // bounded by the cash actually still available after prior placements in this run.
+        // Coverage de-rate scales the Kelly fraction (not the EV gate, not the price):
+        // a 50% de-rate on hourly-only coverage means we bet half size, preserving the
+        // edge but reducing variance from the unmonitored window.
+        const effectiveHalfKelly = b.halfKelly * coverageDeRate;
         const remaining = cashDollars - committed;
         const stake_dollars = Math.max(STAKE_FLOOR,
-          Math.min(cashDollars * STAKE_CEIL_FRAC, b.halfKelly * cashDollars, remaining));
+          Math.min(cashDollars * STAKE_CEIL_FRAC, effectiveHalfKelly * cashDollars, remaining));
         if (stake_dollars < STAKE_FLOOR) break;
         const contracts = Math.max(1, Math.floor(stake_dollars / b.price));
         const priceCents = Math.max(1, Math.min(99, Math.round(b.price * 100)));
