@@ -973,6 +973,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       latestTs: oneMin.latestTs ? new Date(oneMin.latestTs).toISOString() : null,
       ageMin: oneMin.latestTs ? Math.round((Date.now() - new Date(oneMin.latestTs).getTime()) / 60000) : null,
       n: oneMin.n,
+      // 5-min weighted (Kalshi/CLI settlement basis — see asos1min.js header).
+      max5MinSoFar: oneMin.max5MinSoFar != null ? round(oneMin.max5MinSoFar) : null,
+      min5MinSoFar: oneMin.min5MinSoFar != null ? round(oneMin.min5MinSoFar) : null,
+      max5MinTs: oneMin.max5MinTs ? oneMin.max5MinTs.toISOString() : null,
+      min5MinTs: oneMin.min5MinTs ? oneMin.min5MinTs.toISOString() : null,
+      latest5MinAvg: oneMin.latest5MinAvg != null ? round(oneMin.latest5MinAvg) : null,
+      nBuckets5Min: oneMin.nBuckets5Min,
     } : null,
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,

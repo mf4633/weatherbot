@@ -106,11 +106,43 @@ export function getTodayMaxMin(byStation, station, tzName, now = new Date()) {
 
   const temps = todayObs.map(o => o.tempF);
   const last = todayObs[todayObs.length - 1];
+
+  // 5-min weighted bucketing: NWS CLI (which Kalshi settles on) extracts daily
+  // max/min from ASOS's 5-min weighted observations, NOT raw 1-min. A 1-min
+  // spike that doesn't sustain over 5 minutes never becomes the settlement
+  // value. Approximation: bucket the 1-min obs into clock-aligned 5-min windows
+  // (e.g., 12:00-12:04, 12:05-12:09), average each bucket, take max/min across
+  // buckets. Closer to CLI than raw 1-min max/min, especially on volatile days.
+  const buckets = new Map();
+  for (const o of todayObs) {
+    const ms = o.ts.getTime();
+    const bucketStart = Math.floor(ms / (5 * 60 * 1000)) * (5 * 60 * 1000);
+    if (!buckets.has(bucketStart)) buckets.set(bucketStart, { sum: 0, n: 0 });
+    const b = buckets.get(bucketStart);
+    b.sum += o.tempF;
+    b.n++;
+  }
+  let max5 = -Infinity, min5 = Infinity, max5Ts = null, min5Ts = null;
+  for (const [bs, b] of buckets) {
+    const avg = b.sum / b.n;
+    if (avg > max5) { max5 = avg; max5Ts = bs; }
+    if (avg < min5) { min5 = avg; min5Ts = bs; }
+  }
+  const latest5MinBucket = Math.floor(last.ts.getTime() / (5 * 60 * 1000)) * (5 * 60 * 1000);
+  const latest5MinAvg = buckets.has(latest5MinBucket)
+    ? buckets.get(latest5MinBucket).sum / buckets.get(latest5MinBucket).n : null;
+
   return {
     maxSoFar: Math.max(...temps),
     minSoFar: Math.min(...temps),
     latestF: last.tempF,
     latestTs: last.ts,
     n: todayObs.length,
+    max5MinSoFar: isFinite(max5) ? max5 : null,
+    min5MinSoFar: isFinite(min5) ? min5 : null,
+    max5MinTs: max5Ts ? new Date(max5Ts) : null,
+    min5MinTs: min5Ts ? new Date(min5Ts) : null,
+    latest5MinAvg,
+    nBuckets5Min: buckets.size,
   };
 }

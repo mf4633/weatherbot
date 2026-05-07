@@ -57,7 +57,8 @@ function renderCard(c) {
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
     <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}</span></div>
     ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS latest <span class="muted small">(n=${c.oneMinAsos.n}, ${c.oneMinAsos.ageMin}m ago)</span></span><span>${fmtF(c.oneMinAsos.latestF)}</span></div>
-    <div class="row"><span>1-min ASOS max today</span><span>${fmtF(c.oneMinAsos.maxSoFar)}</span></div>` : ""}
+    <div class="row"><span>1-min ASOS max today</span><span>${fmtF(c.oneMinAsos.maxSoFar)}</span></div>
+    <div class="row"><span>5-min weighted max <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.max5MinSoFar)}</span></div>` : ""}
     <div class="row"><span>max so far today (obs)</span><span>${fmtF(c.maxSoFar)}</span></div>
     <div class="row"><span>NWS daily high (forecast)</span><span>${c.forecastHighF == null ? "—" : c.forecastHighF + "°F"}</span></div>
     <div class="row"><span>NWS hourly peak (forecast)</span><span>${c.forecastPeakHourly == null ? "—" : c.forecastPeakHourly + "°F"}</span></div>
@@ -74,7 +75,8 @@ function renderCard(c) {
       <div class="pred-label">LOW <span class="tag">${c.lowMethod || ""}</span></div>
       <div class="big ${c.lowMean >= 50 ? '' : 'cool'}">${c.lowMean.toFixed(1)}°F</div>
       <div class="row"><span>min so far today (obs)</span><span>${fmtF(c.minSoFar)}</span></div>
-      ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS min today</span><span>${fmtF(c.oneMinAsos.minSoFar)}</span></div>` : ""}
+      ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS min today</span><span>${fmtF(c.oneMinAsos.minSoFar)}</span></div>
+      <div class="row"><span>5-min weighted min <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.min5MinSoFar)}</span></div>` : ""}
       <div class="row"><span>NWS daily low (forecast)</span><span>${c.forecastLowF == null ? "—" : c.forecastLowF + "°F"}</span></div>
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.lowStd.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${loCeiled ? `<span class="muted small"> obs-ceiled</span>` : ""}</span><span>${fmtPair(c.lowCi68)}</span></div>
