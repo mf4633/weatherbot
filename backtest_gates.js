@@ -251,7 +251,11 @@ function parseBucketStr(s) {
 // shift we only need the *ratio* pYes_eff / pYes_orig).
 function pYesRaw(mean, std, bb) { return bucketProb(mean, std, bb.loInt, bb.hiInt); }
 
+// Variants:
+//   floor=X     : σ_eff = max(σ_orig, X)   (current production at X=1.0)
+//   irred=X     : σ_eff = sqrt(σ_orig² + X²)   (hierarchical prior on member error)
 const FLOOR_VARIANTS = [0.5, 1.0, 1.5, 2.0];
+const IRRED_VARIANTS = [0.7, 1.0, 1.3, 1.5];
 console.log(`\n=== σ-FLOOR A/B (${candidates.length} settled bets — *delta* vs no floor) ===`);
 console.log(`Trader gate: ev ≥ ${MIN_EDGE}, halfKelly ≥ ${MIN_HALF_KELLY}, price ≥ ${MIN_PRICE}`);
 console.log(`Floor   | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
@@ -291,4 +295,86 @@ for (const floor of FLOOR_VARIANTS) {
       console.log(`    ${out} ${s.bet.ticker} ${s.bet.variable}/${s.bet.side} σ_orig=${s.sigmaOrig.toFixed(2)} → ev=${s.evEff.toFixed(3)}, halfK=${s.halfKEff.toFixed(3)} pnl=$${s.bet.realized_pnl}`);
     });
   }
+}
+
+// ===========================================================================
+// HIERARCHICAL σ A/B (replacement for floor — never collapses, always smooth)
+// σ_eff = sqrt(σ_orig² + σ_irreducible²)
+// ===========================================================================
+console.log(`\n=== HIERARCHICAL σ A/B (σ_eff = √(σ_orig² + σ_irred²)) ===`);
+console.log(`Floor   | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+console.log(`--------+---------------+-----------+----------+----------------+--------------+------`);
+for (const irred of IRRED_VARIANTS) {
+  let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+  for (const bet of candidates) {
+    const sigmaOrig = bet.modelStd ?? 0;
+    const sigmaEff  = Math.sqrt(sigmaOrig*sigmaOrig + irred*irred);
+    if (sigmaEff <= sigmaOrig + 1e-9) continue;
+    const bb = parseBucketStr(bet.bucket);
+    if (!bb) continue;
+    const side = (bet.side || "").toLowerCase();
+    const fee = 0.07 * (1 - bet.price);
+    const pWinOrig = bet.ev + bet.price + fee;
+    const pYesOrig = side === "yes" ? pWinOrig : (1 - pWinOrig);
+    const rawOrig  = pYesRaw(bet.modelMean, sigmaOrig, bb);
+    const rawEff   = pYesRaw(bet.modelMean, sigmaEff, bb);
+    if (rawOrig <= 0) continue;
+    const pYesEff  = Math.max(0, Math.min(1, pYesOrig * (rawEff / rawOrig)));
+    const pWinEff  = side === "yes" ? pYesEff : (1 - pYesEff);
+    const evEff    = (pWinEff - bet.price) - fee;
+    const kEff     = bet.price < 1 ? Math.max(0, (pWinEff - bet.price) / (1 - bet.price)) : 0;
+    const passes   = evEff >= MIN_EDGE && (kEff/2) >= MIN_HALF_KELLY && bet.price >= MIN_PRICE;
+    if (!passes) {
+      if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+      else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+    }
+  }
+  const net = lossRec - winForgone;
+  console.log(` ${irred.toFixed(1)}°F |       ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}`);
+}
+
+// ===========================================================================
+// LIQUIDITY PROXY AUDIT — settled records lack at-trade volume/spread, so we
+// approximate by city (per-city volume is stable in days-scale) and by bucket
+// type (T-tail typically thinner than B-bucket near forecast mean). The aim
+// is to find where the loss density is concentrated, not to measure slippage.
+// ===========================================================================
+console.log(`\n=== LIQUIDITY-PROXY AUDIT — by city ===`);
+const byCity = {};
+for (const b of bets) {
+  const c = b.city || "?";
+  byCity[c] ??= { n: 0, w: 0, l: 0, pnl: 0, staked: 0, tail: 0 };
+  byCity[c].n++;
+  if (b.outcome === "WIN")  byCity[c].w++;
+  if (b.outcome === "LOSS") byCity[c].l++;
+  byCity[c].pnl    += b.realized_pnl || 0;
+  byCity[c].staked += b.stake_dollars || 0;
+  if ((b.ticker?.split("-").pop() || "").startsWith("T")) byCity[c].tail++;
+}
+const cityRows = Object.entries(byCity).sort((a,b) => a[1].pnl - b[1].pnl);
+console.log(`city            | n  | W-L  | tail% | staked  | pnl       | roi`);
+console.log(`----------------+----+------+-------+---------+-----------+--------`);
+for (const [c, r] of cityRows) {
+  const roi = r.staked > 0 ? (r.pnl / r.staked) * 100 : 0;
+  console.log(` ${c.padEnd(15)}| ${String(r.n).padStart(2)} | ${String(r.w).padStart(2)}-${String(r.l).padStart(2)} | ${(100*r.tail/r.n).toFixed(0).padStart(3)}%  | $${r.staked.toFixed(2).padStart(6)} | $${r.pnl.toFixed(2).padStart(7)}  | ${roi.toFixed(0)}%`);
+}
+
+console.log(`\n=== LIQUIDITY-PROXY AUDIT — tail vs B-bucket ===`);
+const buckets = { T: { n: 0, w: 0, l: 0, pnl: 0, staked: 0 }, B: { n: 0, w: 0, l: 0, pnl: 0, staked: 0 } };
+for (const b of bets) {
+  const code = (b.ticker?.split("-").pop() || "")[0];
+  if (code !== "T" && code !== "B") continue;
+  const r = buckets[code];
+  r.n++;
+  if (b.outcome === "WIN")  r.w++;
+  if (b.outcome === "LOSS") r.l++;
+  r.pnl    += b.realized_pnl || 0;
+  r.staked += b.stake_dollars || 0;
+}
+console.log(`type | n  | W-L  | staked  | pnl       | roi    | implied per-bet edge`);
+console.log(`-----+----+------+---------+-----------+--------+---------------------`);
+for (const [k, r] of Object.entries(buckets)) {
+  const roi = r.staked > 0 ? (r.pnl / r.staked) * 100 : 0;
+  const perBet = r.n > 0 ? r.pnl / r.n : 0;
+  console.log(`  ${k}  | ${String(r.n).padStart(2)} | ${String(r.w).padStart(2)}-${String(r.l).padStart(2)} | $${r.staked.toFixed(2).padStart(6)} | $${r.pnl.toFixed(2).padStart(7)}  | ${roi.toFixed(0)}%   | $${perBet.toFixed(2)}/bet`);
 }

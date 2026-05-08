@@ -91,12 +91,16 @@ async function fetchKalshiMarkets(eventTicker) {
   return merged;
 }
 
-// σ floor for trader pWin/EV computation. Raw model σ can collapse below 1°F when
-// the ensemble agrees, but next-day forecast-revision noise alone is ~1°F, so the
-// truncated-normal mass at the strike is unrealistically thin. Calibrated 2026-05-08
-// from settled-bet backtest (see backtest_gates.js σ-floor A/B). Revisit once we
-// have ~150 settled bets — current calibration sample is only 49.
-const SIGMA_FLOOR_F = 1.0;
+// σ_irreducible: quadrature-add a member-error prior so that even when the ensemble
+// agrees, the predictive σ stays at or above the prior's natural width. Replaces a
+// hard `max(σ, 1.0)` floor with a smooth hierarchical formulation:
+//   σ_eff = √(σ_ensemble² + σ_irreducible²)
+// Calibrated 2026-05-08 against the σ-floor A/B in backtest_gates.js — at irred=1.0
+// the historical 49-bet sample shows +$82 net vs +$52 for the old floor (same scale).
+// Theoretically justified by ensemble-mean RMSE 1.67°F (analyze.log) factored against
+// typical ensemble-disagreement ~1°F: irreducible component ≈ √(1.67² − 1²) = 1.34°F.
+// We ship 1.0 first for continuity; revisit upward to 1.3 once we have ~150 bets.
+const SIGMA_IRREDUCIBLE_F = 1.0;
 
 // Kalshi fee per $1 staked at a given binary contract price.
 // Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
@@ -286,12 +290,11 @@ export default async () => {
     // HIGH event. lowerFloor uses maxSoFarCli (integer °F) not raw maxSoFar — Kalshi
     // settles on NWS CLI which rounds to integer °F via a °C-internal path, so a raw
     // 87.8°F obs (= 31.0°C exact) can settle as 87°F. See feedback_weatherbot_cli_settlement.
-    // σ floor: when ensemble agrees, raw model σ can collapse to 0.4°F (SATX 2026-05-06
-    // T68 NO at 18σ "from strike" — lost). Pin to SIGMA_FLOOR_F so EV/Kelly cascade
-    // reflects realistic forecast-revision noise. Calibrate against backtest_gates.js.
+    // σ_eff = √(σ_ensemble² + σ_irreducible²): hierarchical-prior formulation that
+    // never collapses below the prior. See SIGMA_IRREDUCIBLE_F header.
     if (tickers.high) {
-      const r = await processEvent(city, tickers.high, "high", city.mean,
-                                    Math.max(city.std ?? 0, SIGMA_FLOOR_F),
+      const sigmaEff = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
+      const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
                                     city.maxSoFarCli ?? city.maxSoFar, null);
       if (r) {
         cityRecord.highEvent = r.eventTicker;
@@ -303,8 +306,8 @@ export default async () => {
     }
     // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
-      const r = await processEvent(city, tickers.low, "low", city.lowMean,
-                                    Math.max(city.lowStd, SIGMA_FLOOR_F),
+      const sigmaEff = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
+      const r = await processEvent(city, tickers.low, "low", city.lowMean, sigmaEff,
                                     null, city.minSoFarCli ?? city.minSoFar);
       if (r) {
         cityRecord.lowEvent = r.eventTicker;
