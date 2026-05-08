@@ -7,8 +7,8 @@ import { writeFileSync } from "node:fs";
 const CITIES = [
   { name: "NYC",  lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
   { name: "LAX",  lat: 33.9425, lon: -118.4081, tz: "America/Los_Angeles" },
-  { name: "ORD",  lat: 41.9742, lon: -87.9073, tz: "America/Chicago" },
-  { name: "IAH",  lat: 29.9844, lon: -95.3414, tz: "America/Chicago" },
+  { name: "MDW",  lat: 41.7860, lon: -87.7524, tz: "America/Chicago" },
+  { name: "HOU",  lat: 29.6454, lon: -95.2769, tz: "America/Chicago" },
   { name: "PHX",  lat: 33.4342, lon: -112.0116, tz: "America/Phoenix" },
   { name: "PHL",  lat: 39.8729, lon: -75.2437, tz: "America/New_York" },
   { name: "SAT",  lat: 29.5337, lon: -98.4698, tz: "America/Chicago" },

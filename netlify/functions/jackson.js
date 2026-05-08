@@ -11,6 +11,7 @@
 //   This is enforced regardless of caller intent.
 
 import { createSign, constants } from "node:crypto";
+import { getStore } from "@netlify/blobs";
 
 const KALSHI_API_BASE = "https://api.elections.kalshi.com";
 const ACCOUNT_NAME = "royal.greyhound5665";
@@ -23,7 +24,7 @@ const ENDPOINT_ALLOWLIST = [
   /^\/trade-api\/v2\/portfolio\/orders\/[\w-]+$/,
   /^\/trade-api\/v2\/portfolio\/fills(\?.*)?$/,
   /^\/trade-api\/v2\/markets(\?.*)?$/,
-  /^\/trade-api\/v2\/markets\/[\w-]+$/,
+  /^\/trade-api\/v2\/markets\/[\w.\-]+$/,
   /^\/trade-api\/v2\/events(\?.*)?$/
 ];
 
@@ -104,8 +105,12 @@ export async function getBalance() {
   return await r.json();
 }
 
+// settlement_status=all includes closed (qty=0) positions with their final
+// realized_pnl_dollars + fees_paid_dollars. Default is "unsettled" which hides
+// every settled position — that breaks both the dashboard's realized P&L line
+// and jackson_trader's settled-store capture, which keys off this response.
 export async function getPositions() {
-  const r = await kalshiAuthedFetch("GET", "/trade-api/v2/portfolio/positions?limit=200");
+  const r = await kalshiAuthedFetch("GET", "/trade-api/v2/portfolio/positions?limit=200&settlement_status=all");
   if (!r.ok) throw new Error(`positions ${r.status}: ${await r.text()}`);
   return await r.json();
 }
@@ -122,11 +127,47 @@ export async function getOpenOrders() {
   return await r.json();
 }
 
+// Lookup a single Kalshi market's settlement state. Returns "yes" / "no" if the
+// market resolved, null if still open or on lookup error. Used by jackson_trader
+// at reconcile time to compute realized P&L for ledger entries that left the
+// open-position list (Kalshi's /portfolio/positions does not return closed rows
+// even with settlement_status=all on the elections API).
+export async function getMarketResult(ticker) {
+  try {
+    const r = await kalshiAuthedFetch("GET", `/trade-api/v2/markets/${ticker}`);
+    if (!r.ok) return null;
+    const j = await r.json();
+    const result = j?.market?.result;
+    return (result === "yes" || result === "no") ? result : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Fetch current Kalshi market state from our internal /api/kalshi.
 async function fetchMarketSnapshot() {
   try {
     const auth = "Basic " + btoa("internal:hydro");
     const r = await fetch("https://weatherbot-mf.netlify.app/api/kalshi", { headers: { authorization: auth } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+// Fetch rainbot's /api/markets directly (not via our /api/rain proxy — the proxy
+// requires the same RAINBOT_BASIC_AUTH and would just add an extra hop). Returns
+// null on any error so enrichPositions degrades gracefully (rain entries get
+// city/variable but null sellPrice/unrealized, same as before this change).
+async function fetchRainSnapshot() {
+  const auth = process.env.RAINBOT_BASIC_AUTH;
+  if (!auth) return null;
+  const headers = auth.startsWith("Basic ") ? { authorization: auth }
+                                             : { authorization: `Basic ${auth}` };
+  try {
+    const base = process.env.RAINBOT_BASE_URL || "https://rainbot-mf.netlify.app";
+    const r = await fetch(`${base}/api/markets`, {
+      headers, signal: AbortSignal.timeout(20_000)
+    });
     if (!r.ok) return null;
     return await r.json();
   } catch (e) { return null; }
@@ -141,7 +182,11 @@ const SERIES_LOOKUP = {
   "KXLOWLAX":     { city: "Los Angeles",       variable: "low"  },
   "KXHIGHCHI":    { city: "Chicago",           variable: "high" },
   "KXLOWTCHI":    { city: "Chicago",           variable: "low"  },
+  // Houston HIGH was renamed KXHIGHHOU → KXHIGHTHOU (per ticker audit, see
+  // feedback_weatherbot_kalshi_ticker_audit). Keep the legacy key so historical
+  // ledger entries on the old series still resolve.
   "KXHIGHHOU":    { city: "Houston",           variable: "high" },
+  "KXHIGHTHOU":   { city: "Houston",           variable: "high" },
   "KXLOWTHOU":    { city: "Houston",           variable: "low"  },
   "KXHIGHTPHX":   { city: "Phoenix",           variable: "high" },
   "KXLOWTPHX":    { city: "Phoenix",           variable: "low"  },
@@ -159,7 +204,20 @@ const SERIES_LOOKUP = {
   "KXLOWDEN":     { city: "Denver",            variable: "low"  },
   "KXHIGHTDC":    { city: "Washington DC",     variable: "high" },
   "KXHIGHTBOS":   { city: "Boston",            variable: "high" },
-  "KXLOWTBOS":    { city: "Boston",            variable: "low"  }
+  "KXLOWTBOS":    { city: "Boston",            variable: "low"  },
+  // Rain series (jackson_rain_trader). Mirror of CITIES in rainbot/lib/cities.js.
+  // KXRAIN<code>  = daily binary "any rain"; KXRAIN<code>M = monthly tiered totals.
+  "KXRAINNYC":    { city: "New York",          variable: "rain" },
+  "KXRAINNYCM":   { city: "New York",          variable: "rain" },
+  "KXRAINHOUM":   { city: "Houston",           variable: "rain" },
+  "KXRAINMIAM":   { city: "Miami",             variable: "rain" },
+  "KXRAINSEAM":   { city: "Seattle",           variable: "rain" },
+  "KXRAINCHIM":   { city: "Chicago",           variable: "rain" },
+  "KXRAINLAXM":   { city: "Los Angeles",       variable: "rain" },
+  "KXRAINDALM":   { city: "Dallas-Fort Worth", variable: "rain" },
+  "KXRAINAUSM":   { city: "Austin",            variable: "rain" },
+  "KXRAINDENM":   { city: "Denver",            variable: "rain" },
+  "KXRAINSFOM":   { city: "San Francisco",     variable: "rain" }
 };
 
 // Parse a Kalshi market ticker like "KXLOWTCHI-26MAY01-B36.5" into its parts.
@@ -171,19 +229,58 @@ function parseKalshiTicker(ticker) {
 
 // Mark-to-market + enrichment. For each Kalshi position, find current bid, model context,
 // and human-readable city/variable/bucket. Returns per-ticker enrichment.
-function enrichPositions(positions, kalshi) {
+// Accepts an optional `rain` payload (rainbot's /api/markets shape) for rain-ticker support.
+function enrichPositions(positions, kalshi, rain) {
   const result = {};
   let totalUnrealized = 0;
   if (!kalshi?.cities) return { byTicker: result, totalUnrealized: 0 };
 
   // Build per-bucket lookup keyed by ticker suffix, with city/variable context.
-  const bucketByCityKey = {};  // "<cityName>-<variable>-<bucketTicker>" → bucket
+  // kalshi.js sets b.ticker to the FULL Kalshi ticker (e.g., "KXHIGHNY-26MAY05-B79.5"),
+  // but parseKalshiTicker below extracts the SHORT bucket code ("B79.5") for the lookup.
+  // Index by the short code on both sides so the lookup actually hits.
+  const bucketByCityKey = {};  // "<cityName>-<variable>-<bucketCode>" → bucket
   const cityByName = {};
   for (const c of kalshi.cities) {
     cityByName[c.name] = c;
     for (const [variant, list] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
       if (!list) continue;
-      for (const b of list) bucketByCityKey[`${c.name}-${variant}-${b.ticker}`] = b;
+      for (const b of list) {
+        const code = (b.ticker || "").split("-").pop();
+        if (code) bucketByCityKey[`${c.name}-${variant}-${code}`] = b;
+      }
+    }
+  }
+
+  // Build a rain-side lookup: full Kalshi ticker → { yes_bid, no_bid, p_yes_model, gamma }.
+  // rainbot returns full tickers in cities[].daily.bets / cities[].monthly.bets[*].ticker,
+  // and gamma posterior at cities[].monthly.gamma. We carry gamma separately so the
+  // per-position enrichment can surface modelMean/modelStd (= total monthly rainfall
+  // posterior, not bucket-specific — rain is tiered, not bucketed).
+  const rainByTicker = {};
+  const rainGammaBySeries = {};   // series prefix (e.g. "KXRAINNYCM") → gamma {shape, scale}
+  if (rain?.cities) {
+    for (const c of rain.cities) {
+      const gamma = c?.monthly?.gamma;
+      // Map gamma onto the series prefix. eventTicker is shaped like
+      // "KXRAINNYCM-26MAY" — we want only the series part ("KXRAINNYCM") because
+      // parseKalshiTicker splits a full market ticker into series + eventDate +
+      // bucketTicker, and `series` here is what we look up against.
+      if (gamma && c?.monthly?.eventTicker) {
+        const seriesPrefix = c.monthly.eventTicker.split("-")[0];
+        rainGammaBySeries[seriesPrefix] = gamma;
+      }
+      for (const sec of [c.daily, c.monthly]) {
+        if (!sec?.bets) continue;
+        for (const b of sec.bets) {
+          if (!b.ticker) continue;
+          const e = rainByTicker[b.ticker] ??= { city: c.code, kind: sec === c.daily ? "daily" : "monthly" };
+          e.yes_bid = b.yes_bid; e.no_bid = b.no_bid;
+          e.threshold = b.threshold;
+          if (b.side === "YES") e.p_yes_model = b.p_model;
+          else if (b.side === "NO" && e.p_yes_model == null) e.p_yes_model = 1 - b.p_model;
+        }
+      }
     }
   }
 
@@ -195,33 +292,118 @@ function enrichPositions(positions, kalshi) {
     const seriesInfo = SERIES_LOOKUP[series];
     const cityName = seriesInfo?.city || null;
     const variable = seriesInfo?.variable || null;
-    const cityModel = cityName ? cityByName[cityName]?.model : null;
-    const bucket = (cityName && variable && bucketTicker)
-      ? bucketByCityKey[`${cityName}-${variable}-${bucketTicker}`]
-      : null;
     const isYes = qty > 0;
-    const sellPrice = bucket
-      ? (isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid)
-      : null;
-    let unrealized = null, sellProceeds = null;
+
+    let sellPrice = null, sellProceeds = null, unrealized = null;
+    let modelMean = null, modelStd = null;
+    let bucketLabel = bucketTicker;
+
+    if (variable === "rain") {
+      // Rain branch: bid/p come from rainbot's full-ticker lookup. modelMean/modelStd
+      // are the gamma posterior's mean/std for total monthly rainfall in that city —
+      // NOT bucket-specific (rain is tiered, so a single posterior covers all strikes).
+      const rainEntry = rainByTicker[p.ticker];
+      if (rainEntry) {
+        sellPrice = isYes ? rainEntry.yes_bid : rainEntry.no_bid;
+        if (rainEntry.threshold != null) {
+          bucketLabel = `≥ ${rainEntry.threshold}″`;
+        }
+      }
+      const gamma = rainGammaBySeries[series];
+      if (gamma) {
+        modelMean = gamma.shape * gamma.scale;
+        modelStd = gamma.scale * Math.sqrt(gamma.shape);
+      }
+    } else {
+      // Temperature branch (HIGH/LOW): existing logic against kalshi.js bucket data.
+      const cityModel = cityName ? cityByName[cityName]?.model : null;
+      const bucket = (cityName && variable && bucketTicker)
+        ? bucketByCityKey[`${cityName}-${variable}-${bucketTicker}`]
+        : null;
+      // Field names on the kalshi.js bucket object are yes_bid / no_bid (not
+      // kalshi_yes_bid / kalshi_no_bid — that older name never existed). Reading
+      // the wrong key returned undefined and silently zeroed totalUnrealizedPnl.
+      sellPrice = bucket ? (isYes ? bucket.yes_bid : bucket.no_bid) : null;
+      bucketLabel = bucket?.bucket || bucketTicker;
+      modelMean = (variable === "high") ? cityModel?.highMean
+                : (variable === "low")  ? cityModel?.lowMean  : null;
+      modelStd  = (variable === "high") ? cityModel?.highStd
+                : (variable === "low")  ? cityModel?.lowStd   : null;
+    }
+
     if (sellPrice != null) {
       sellProceeds = Math.abs(qty) * sellPrice;
       unrealized = sellProceeds - exposure;
       totalUnrealized += unrealized;
     }
-    const modelMean = (variable === "high") ? cityModel?.highMean
-                    : (variable === "low")  ? cityModel?.lowMean : null;
-    const modelStd  = (variable === "high") ? cityModel?.highStd
-                    : (variable === "low")  ? cityModel?.lowStd  : null;
     result[p.ticker] = {
-      city: cityName, variable, bucket: bucket?.bucket || bucketTicker,
-      modelMean, modelStd,
+      city: cityName, variable, bucket: bucketLabel,
+      modelMean: modelMean != null ? Math.round(modelMean * 100) / 100 : null,
+      modelStd:  modelStd  != null ? Math.round(modelStd  * 100) / 100 : null,
       sellPrice,
       sellProceeds: sellProceeds != null ? Math.round(sellProceeds * 100) / 100 : null,
       unrealized_pnl: unrealized != null ? Math.round(unrealized * 100) / 100 : null
     };
   }
   return { byTicker: result, totalUnrealized: Math.round(totalUnrealized * 100) / 100 };
+}
+
+// Aggregate per-city performance. Settled rows come from the persistent
+// jackson_settled_bets blob store (written by jackson_trader on reconcile);
+// unrealized rows come from the live mark-to-market computed above.
+// Returns an array sorted by total P&L descending.
+async function aggregateByCity(markToMarket) {
+  const store = getStore("jackson_settled_bets");
+  const { blobs } = await store.list().catch(() => ({ blobs: [] }));
+  const settled = (await Promise.all(
+    blobs.map(b => store.get(b.key, { type: "json" }).catch(() => null))
+  )).filter(Boolean);
+
+  const agg = {};
+  for (const s of settled) {
+    const city = s.city || "Unknown";
+    const a = agg[city] ??= {
+      city, n_settled: 0, wins: 0, losses: 0, sold: 0, unknown: 0,
+      realized_pnl: 0, fees_paid: 0, total_staked: 0,
+      open_count: 0, unrealized_pnl: 0
+    };
+    a.n_settled += 1;
+    if (s.outcome === "WIN") a.wins += 1;
+    else if (s.outcome === "LOSS") a.losses += 1;
+    else if (s.outcome === "SOLD") a.sold += 1;
+    else a.unknown += 1;
+    if (s.realized_pnl != null) a.realized_pnl += s.realized_pnl;
+    a.fees_paid += s.fees_paid || 0;
+    a.total_staked += s.stake_dollars || 0;
+  }
+  for (const ticker of Object.keys(markToMarket || {})) {
+    const m = markToMarket[ticker];
+    const city = m.city || "Unknown";
+    const a = agg[city] ??= {
+      city, n_settled: 0, wins: 0, losses: 0, sold: 0, unknown: 0,
+      realized_pnl: 0, fees_paid: 0, total_staked: 0,
+      open_count: 0, unrealized_pnl: 0
+    };
+    a.open_count += 1;
+    a.unrealized_pnl += m.unrealized_pnl || 0;
+  }
+  const round2 = v => Math.round(v * 100) / 100;
+  return Object.values(agg).map(a => {
+    const decided = a.wins + a.losses;  // exclude SOLD/UNKNOWN from win-rate denominator
+    return {
+      city: a.city,
+      n_settled: a.n_settled,
+      wins: a.wins, losses: a.losses, sold: a.sold, unknown: a.unknown,
+      open_count: a.open_count,
+      realized_pnl: round2(a.realized_pnl),
+      unrealized_pnl: round2(a.unrealized_pnl),
+      total_pnl: round2(a.realized_pnl + a.unrealized_pnl),
+      fees_paid: round2(a.fees_paid),
+      total_staked: round2(a.total_staked),
+      win_rate_pct: decided ? Math.round(a.wins / decided * 1000) / 10 : 0,
+      roi_pct: a.total_staked ? Math.round(a.realized_pnl / a.total_staked * 1000) / 10 : 0
+    };
+  }).sort((a, b) => b.total_pnl - a.total_pnl);
 }
 
 // Public read endpoint for dashboard. Returns a snapshot of the real account state.
@@ -238,8 +420,9 @@ export default async () => {
   }
   out.configured = true;
   try {
-    const [bal, pos, fills, orders, kalshi] = await Promise.allSettled([
-      getBalance(), getPositions(), getRecentFills(50), getOpenOrders(), fetchMarketSnapshot()
+    const [bal, pos, fills, orders, kalshi, rain] = await Promise.allSettled([
+      getBalance(), getPositions(), getRecentFills(50), getOpenOrders(),
+      fetchMarketSnapshot(), fetchRainSnapshot()
     ]);
     out.balance = bal.status === "fulfilled" ? bal.value : { error: String(bal.reason) };
     out.positions = pos.status === "fulfilled" ? pos.value : { error: String(pos.reason) };
@@ -256,8 +439,11 @@ export default async () => {
       out.totalRealizedPnl = Math.round(totalRealized * 100) / 100;
       out.totalFeesPaid = Math.round(totalFees * 100) / 100;
       // Unrealized P&L from market quotes + per-position enrichment (city/variable/bucket/model).
+      // Rain snapshot (rainbot /api/markets) provides bid/ask + gamma posterior for rain
+      // tickers; falls back to null gracefully if the rain fetch failed or is unavailable.
       if (kalshi.status === "fulfilled") {
-        const enr = enrichPositions(out.positions.market_positions, kalshi.value);
+        const rainPayload = rain.status === "fulfilled" ? rain.value : null;
+        const enr = enrichPositions(out.positions.market_positions, kalshi.value, rainPayload);
         out.markToMarket = enr.byTicker;
         out.totalUnrealizedPnl = enr.totalUnrealized;
       } else {
@@ -266,6 +452,7 @@ export default async () => {
       }
       out.totalPnl = Math.round((totalRealized + (out.totalUnrealizedPnl || 0)) * 100) / 100;
     }
+    out.byCity = await aggregateByCity(out.markToMarket || {});
     out.fetchedAtUTC = new Date().toISOString();
     return new Response(JSON.stringify(out, null, 2), {
       status: 200,

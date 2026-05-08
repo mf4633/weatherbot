@@ -36,6 +36,15 @@ main {
   padding-top: 10px;
   border-top: 1px dashed var(--border);
 }
+.card .pred.low { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.card .pred-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.card .pred.low .big { font-size: 22px; }
 .card .big { font-size: 28px; font-weight: 600; color: var(--warm); letter-spacing: -0.02em; }
 .card .big.cool { color: var(--cool); }
 .card .row { display: flex; justify-content: space-between; padding: 2px 0; }

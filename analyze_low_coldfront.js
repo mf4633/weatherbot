@@ -73,7 +73,8 @@ function hoursToTrough(localHr) {
 }
 
 function predict(params, ctx, offsets = null) {
-  const { hrsToTrough, minSoFar, currentTemp, modelForecastLows, modelForecastNows, cityName } = ctx;
+  const { hrsToTrough, minSoFar, currentTemp, modelForecastLows, modelForecastNows,
+          modelRemainingLows, cityName } = ctx;
   let sumW = 0, flAccum = 0, fnAccum = 0;
   for (const m of MODELS) {
     const w = 1 / MODELS.length;
@@ -88,8 +89,25 @@ function predict(params, ctx, offsets = null) {
   const bias = (currentTemp != null && forecastNow != null) ? (currentTemp - forecastNow) : 0;
   let priorMean = forecastLow + params.biasWeight * bias;
   if (offsets && offsets[cityName] != null) priorMean -= offsets[cityName];
-  const mean = Math.min(minSoFar, priorMean);  // truncate from above (low can't exceed observed min)
-  const std = Math.max(params.stdMin, params.stdBase + params.stdLeadCoef * hrsToTrough + params.stdBiasCoef * Math.abs(bias));
+  let mean = Math.min(minSoFar, priorMean);
+  let std = Math.max(params.stdMin, params.stdBase + params.stdLeadCoef * hrsToTrough + params.stdBiasCoef * Math.abs(bias));
+
+  // Cold-front check: if ensemble's remaining-day min is materially below minSoFar,
+  // an evening cold front is expected. Lower mean to that and widen σ.
+  let availRemSum = 0, remAccum = 0;
+  for (const m of MODELS) {
+    if (modelRemainingLows && modelRemainingLows[m] != null) {
+      const w = 1 / MODELS.length;
+      availRemSum += w;
+      remAccum += w * modelRemainingLows[m];
+    }
+  }
+  const remainingTrough = availRemSum > 0 ? remAccum / availRemSum : null;
+  if (remainingTrough != null && remainingTrough < minSoFar - 0.5 && remainingTrough < mean) {
+    mean = remainingTrough;
+    std = Math.max(std, 1.5);
+  }
+
   return { mean, std };
 }
 
@@ -102,10 +120,12 @@ function evaluate(params, dateFilter, offsets) {
       const actualMin = Math.min(...dayObs.map(o => o.tempF));
       const modelForecastLows = {};
       const modelForecastNowByHr = {};
+      const modelHourly = {};   // model → array of {localHr, tempF}, used for remaining-low computation
       for (const m of MODELS) {
         const dayFc = c.fcByModel[m]?.[date] || [];
         if (dayFc.length) {
           modelForecastLows[m] = Math.min(...dayFc.map(o => o.tempF));
+          modelHourly[m] = dayFc;
           for (const f of dayFc) (modelForecastNowByHr[f.localHr] ??= {})[m] = f.tempF;
         } else modelForecastLows[m] = null;
       }
@@ -115,9 +135,16 @@ function evaluate(params, dateFilter, offsets) {
         const minSoFar = Math.min(...obs.map(o => o.tempF));
         const currentTemp = obs[obs.length - 1].tempF;
         const modelForecastNows = modelForecastNowByHr[predHr] || {};
+        // Compute per-model remaining-day min (forecast for hours > predHr).
+        const modelRemainingLows = {};
+        for (const m of MODELS) {
+          const future = (modelHourly[m] || []).filter(f => f.localHr > predHr);
+          modelRemainingLows[m] = future.length ? Math.min(...future.map(f => f.tempF)) : null;
+        }
         const hrs = hoursToTrough(predHr);
         const p = predict(params, { hrsToTrough: hrs, minSoFar, currentTemp,
-                                     modelForecastLows, modelForecastNows, cityName: name }, offsets);
+                                     modelForecastLows, modelForecastNows,
+                                     modelRemainingLows, cityName: name }, offsets);
         if (!p) continue;
         const err = p.mean - actualMin;
         out.push({ city: name, predHr, hrsToTrough: hrs, pred: p.mean, std: p.std, actual: actualMin, err,

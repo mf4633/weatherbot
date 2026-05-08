@@ -20,7 +20,7 @@ export default async () => {
   const settledStore = getStore("settled_bets");
 
   const state = await stateStore.get("global", { type: "json" }).catch(() => null) || {
-    bankroll: 20, n_bets_total: 0, n_wins_total: 0, total_staked: 0, total_pnl: 0,
+    bankroll: 100, n_bets_total: 0, n_wins_total: 0, total_staked: 0, total_pnl: 0,
     win_rate: 0, roi: 0
   };
 
@@ -37,19 +37,27 @@ export default async () => {
   )).filter(Boolean).sort((a, b) => (a.settledAtUTC < b.settledAtUTC ? 1 : -1));
 
   // Mark-to-market: for each open bet, find its current Kalshi bid and compute unrealized P&L.
+  // kalshi.js b.ticker is the FULL Kalshi ticker; bet.ticker (from logger) is the short
+  // bucket code. Index by the short code on both sides so the lookup hits.
   if (kalshi?.cities) {
     const bucketByTicker = {};
     for (const c of kalshi.cities) {
       for (const arr of [c.highBuckets, c.lowBuckets]) {
         if (!arr) continue;
-        for (const b of arr) bucketByTicker[`${c.name}-${b.ticker}`] = b;
+        for (const b of arr) {
+          const code = (b.ticker || "").split("-").pop();
+          if (code) bucketByTicker[`${c.name}-${code}`] = b;
+        }
       }
     }
     for (const bet of open) {
-      const key = `${bet.city}-${bet.ticker}`;
+      const betCode = (bet.ticker || "").split("-").pop();
+      const key = `${bet.city}-${betCode}`;
       const bucket = bucketByTicker[key];
       if (!bucket) continue;
-      const sellPrice = bet.side === "YES" ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+      // Field names on the kalshi.js bucket object are yes_bid / no_bid (not
+      // kalshi_yes_bid / kalshi_no_bid).
+      const sellPrice = bet.side === "YES" ? bucket.yes_bid : bucket.no_bid;
       if (sellPrice == null) continue;
       const contracts = bet.stake_dollars / bet.price;
       const sellProceeds = contracts * sellPrice;
@@ -84,6 +92,7 @@ export default async () => {
   const totalSold = settled.filter(s => s.outcome === "SOLD").length;
 
   return new Response(JSON.stringify({
+    currency: "dollar-bucks",
     state: {
       ...state,
       bet_size_dollars: Math.round(bet_size * 100) / 100,

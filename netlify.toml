@@ -8,8 +8,14 @@
 [functions."jackson_trader"]
   schedule = "*/5 * * * *"
 
+[functions."jackson_rain_trader"]
+  schedule = "7,37 * * * *"
+
 [functions."logger"]
   schedule = "*/5 * * * *"
+
+[functions."combo_trader"]
+  schedule = "*/30 * * * *"
 
 [[edge_functions]]
   path = "/*"
@@ -41,6 +47,41 @@
   status = 200
 
 [[redirects]]
+  from = "/api/jackson_audit"
+  to = "/.netlify/functions/jackson_audit"
+  status = 200
+
+[[redirects]]
   from = "/api/jackson_trader"
   to = "/.netlify/functions/jackson_trader"
+  status = 200
+
+[[redirects]]
+  from = "/api/jackson_rain_trader"
+  to = "/.netlify/functions/jackson_rain_trader"
+  status = 200
+
+[[redirects]]
+  from = "/api/rain"
+  to = "/.netlify/functions/rain"
+  status = 200
+
+[[redirects]]
+  from = "/api/paper_logger"
+  to = "/.netlify/functions/logger"
+  status = 200
+
+[[redirects]]
+  from = "/api/trader_log"
+  to = "/.netlify/functions/trader_log"
+  status = 200
+
+[[redirects]]
+  from = "/api/combo"
+  to = "/.netlify/functions/combo"
+  status = 200
+
+[[redirects]]
+  from = "/api/combo_trader"
+  to = "/.netlify/functions/combo_trader"
   status = 200
