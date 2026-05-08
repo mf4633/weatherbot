@@ -150,12 +150,10 @@ console.log(`  by variable:`, Object.entries(
 const totalPnl = bets.reduce((a, b) => a + (b.realized_pnl ?? 0), 0);
 console.log(`  total realized P&L: $${totalPnl.toFixed(2)}`);
 
-const candidates = bets.filter(b =>
-  b.variable === "low" && b.side === "YES" && b.outcome !== "SOLD"
-);
-console.log(`\nLOW-YES bets eligible for gate replay: ${candidates.length}`);
+const candidates = bets.filter(b => b.outcome !== "SOLD");
+console.log(`\nBets eligible for gate replay: ${candidates.length}`);
 
-const results = { tailHits: [], bucketHits: [], untouched: [] };
+const results = { tailYesHits: [], tailNoHits: [], bucketHits: [], untouched: [] };
 let i = 0;
 for (const bet of candidates) {
   i++;
@@ -166,23 +164,23 @@ for (const bet of candidates) {
 
   const tailGap = tailBucketObsGap(bet, obs);
   if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
-    results.tailHits.push({ ...enriched, gapF: tailGap.gapF, kind: "tail-obs-floor" });
+    results.tailYesHits.push({ ...enriched, gapF: tailGap.gapF, obs: tailGap.obs, kind: "tail-obs-floor" });
     continue;
   }
   if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
-    results.tailHits.push({ ...enriched, safetyMarginF: tailGap.safetyMargin, kind: "tail-obs-ceiling" });
+    results.tailNoHits.push({ ...enriched, safetyMarginF: tailGap.safetyMargin, obs: tailGap.obs, kind: "tail-obs-ceiling" });
     continue;
   }
   const bucketGap = bucketAboveObsGap(bet, obs);
   if (bucketGap && bucketGap.gapF > BUCKET_ABOVE_OBS_GAP_MAX_F) {
-    results.bucketHits.push({ ...enriched, gapF: bucketGap.gapF, kind: "bucket-above-obs" });
+    results.bucketHits.push({ ...enriched, gapF: bucketGap.gapF, obs: bucketGap.obs, kind: "bucket-above-obs" });
     continue;
   }
   results.untouched.push(enriched);
 }
 console.log("");
 
-function summarize(label, hits) {
+function summarize(label, hits, gapField) {
   const losses = hits.filter(h => h.outcome === "LOSS");
   const wins = hits.filter(h => h.outcome === "WIN");
   const lossPnl = losses.reduce((a, b) => a + (b.realized_pnl || 0), 0);
@@ -193,17 +191,104 @@ function summarize(label, hits) {
   console.log(`  Win P&L forgone:   $${winPnl.toFixed(2)}`);
   console.log(`  Net impact:        $${(-lossPnl - winPnl).toFixed(2)}`);
   for (const h of hits) {
-    console.log(`    ${h.outcome === "LOSS" ? "✓" : "✗"} ${h.ticker}  ${h.bucket}  pWin=${h.modelMean ? `μ=${h.modelMean}±${h.modelStd}` : "?"}  m=${h.weatherCity.minSoFar}  gap=${h.gapF.toFixed(2)}°F  pnl=$${h.realized_pnl}`);
+    const v = h[gapField];
+    console.log(`    ${h.outcome === "LOSS" ? "✓" : "✗"} ${h.ticker} ${h.variable}/${h.side} μ=${h.modelMean}±${h.modelStd} obs=${h.obs?.toFixed(1)} ${gapField}=${v?.toFixed(2)}°F pnl=$${h.realized_pnl}`);
   }
 }
 
-summarize("TAIL-OBS-FLOOR (T-bucket YES, gap > 1.5°F)", results.tailHits);
-summarize("BUCKET-ABOVE-OBS (B-bucket LOW YES, gap > 0.4°F)", results.bucketHits);
-const allHits = [...results.tailHits, ...results.bucketHits];
+summarize("TAIL-OBS-FLOOR  (YES, gapF > 1.5°F)",      results.tailYesHits, "gapF");
+summarize("TAIL-OBS-CEILING (NO, safetyMargin < 1.5°F)", results.tailNoHits, "safetyMarginF");
+summarize("BUCKET-ABOVE-OBS (LOW YES, gapF > 0.4°F)",   results.bucketHits, "gapF");
+const allHits = [...results.tailYesHits, ...results.tailNoHits, ...results.bucketHits];
 const totalLossRecouped = allHits.filter(h => h.outcome === "LOSS").reduce((a, b) => a - (b.realized_pnl || 0), 0);
 const totalWinForgone = allHits.filter(h => h.outcome === "WIN").reduce((a, b) => a + (b.realized_pnl || 0), 0);
 console.log(`\n=== TOTAL GATE IMPACT ===`);
 console.log(`Loss P&L recouped:  $${totalLossRecouped.toFixed(2)}`);
 console.log(`Win P&L forgone:    $${totalWinForgone.toFixed(2)}`);
 console.log(`Net P&L improvement: $${(totalLossRecouped - totalWinForgone).toFixed(2)}`);
-console.log(`(${results.untouched.length} LOW-YES bets passed through unchanged)`);
+console.log(`(${results.untouched.length} bets passed through unchanged)`);
+
+// ===========================================================================
+// σ-floor A/B: for each settled bet, recompute EV/Kelly under candidate floors
+// and tally which bets would have been skipped (and their realized P&L).
+// Mirrors jackson_trader.js gate: ev ≥ 0.20, halfKelly ≥ 0.10, price ≥ 0.04.
+// ===========================================================================
+const MIN_EDGE = 0.20, MIN_HALF_KELLY = 0.10, MIN_PRICE = 0.04;
+function erf(x) {
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const sign = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * Math.exp(-x*x);
+  return sign * y;
+}
+const normCdf = z => 0.5 * (1 + erf(z / Math.SQRT2));
+function bucketProb(mean, std, loInt, hiInt, lowerFloor, upperFloor) {
+  let effLo = loInt === -Infinity || loInt == null ? -Infinity : loInt - 0.5;
+  let effHi = hiInt === Infinity  || hiInt == null ? Infinity  : hiInt + 0.5;
+  if (lowerFloor != null) { if (effHi < lowerFloor) return 0; if (effLo < lowerFloor) effLo = lowerFloor; }
+  if (upperFloor != null) { if (effLo > upperFloor) return 0; if (effHi > upperFloor) effHi = upperFloor; }
+  const pHi = effHi === Infinity ? 1 : normCdf((effHi - mean) / std);
+  const pLo = effLo === -Infinity ? 0 : normCdf((effLo - mean) / std);
+  return Math.max(0, pHi - pLo);
+}
+function parseBucketStr(s) {
+  if (!s) return null;
+  s = s.replace(/°F?/g, "").trim();
+  let m = s.match(/^(-?\d+)\s*[–-]\s*(-?\d+)$/);
+  if (m) return { loInt: +m[1], hiInt: +m[2] };
+  m = s.match(/^≤\s*(-?\d+)$/) || s.match(/^<=?\s*(-?\d+)$/);
+  if (m) return { loInt: -Infinity, hiInt: +m[1] };
+  m = s.match(/^≥\s*(-?\d+)$/) || s.match(/^>=?\s*(-?\d+)$/);
+  if (m) return { loInt: +m[1], hiInt: Infinity };
+  m = s.match(/^(-?\d+)$/);
+  if (m) return { loInt: +m[1], hiInt: +m[1] };
+  return null;
+}
+
+// For each bet, derive pWin_orig from its recorded ev: ev = (pWin - price) - fee.
+// Then for each candidate floor, compute pWin_eff using bucketProb at σ=floor (ignoring
+// probSum/truncation since both cancel as a multiplicative scaling — for a relative
+// shift we only need the *ratio* pYes_eff / pYes_orig).
+function pYesRaw(mean, std, bb) { return bucketProb(mean, std, bb.loInt, bb.hiInt); }
+
+const FLOOR_VARIANTS = [0.5, 1.0, 1.5, 2.0];
+console.log(`\n=== σ-FLOOR A/B (${candidates.length} settled bets — *delta* vs no floor) ===`);
+console.log(`Trader gate: ev ≥ ${MIN_EDGE}, halfKelly ≥ ${MIN_HALF_KELLY}, price ≥ ${MIN_PRICE}`);
+console.log(`Floor   | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+console.log(`--------+---------------+-----------+----------+----------------+--------------+------`);
+for (const floor of FLOOR_VARIANTS) {
+  let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+  const skipped = [];
+  for (const bet of candidates) {
+    const sigmaOrig = bet.modelStd ?? 0;
+    if (sigmaOrig >= floor) continue;  // floor doesn't bite
+    const bb = parseBucketStr(bet.bucket);
+    if (!bb) continue;
+    const side = (bet.side || "").toLowerCase();
+    const fee = 0.07 * (1 - bet.price);
+    const pWinOrig = bet.ev + bet.price + fee;
+    const pYesOrig = side === "yes" ? pWinOrig : (1 - pWinOrig);
+    const rawOrig  = pYesRaw(bet.modelMean, sigmaOrig, bb);
+    const rawEff   = pYesRaw(bet.modelMean, floor,    bb);
+    if (rawOrig <= 0) continue;
+    const pYesEff  = Math.max(0, Math.min(1, pYesOrig * (rawEff / rawOrig)));
+    const pWinEff  = side === "yes" ? pYesEff : (1 - pYesEff);
+    const evEff    = (pWinEff - bet.price) - fee;
+    const kEff     = bet.price < 1 ? Math.max(0, (pWinEff - bet.price) / (1 - bet.price)) : 0;
+    const passes   = evEff >= MIN_EDGE && (kEff/2) >= MIN_HALF_KELLY && bet.price >= MIN_PRICE;
+    if (!passes) {
+      if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+      else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+      skipped.push({ bet, sigmaOrig, evEff, halfKEff: kEff/2 });
+    }
+  }
+  const net = lossRec - winForgone;
+  console.log(` ${floor.toFixed(1)}°F |       ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}`);
+  if (floor === 1.0) {
+    console.log(`  (σ=1.0 detail:)`);
+    skipped.forEach(s => {
+      const out = s.bet.outcome === "LOSS" ? "✓" : "✗";
+      console.log(`    ${out} ${s.bet.ticker} ${s.bet.variable}/${s.bet.side} σ_orig=${s.sigmaOrig.toFixed(2)} → ev=${s.evEff.toFixed(3)}, halfK=${s.halfKEff.toFixed(3)} pnl=$${s.bet.realized_pnl}`);
+    });
+  }
+}

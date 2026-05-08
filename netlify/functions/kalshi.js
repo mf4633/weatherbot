@@ -91,6 +91,13 @@ async function fetchKalshiMarkets(eventTicker) {
   return merged;
 }
 
+// σ floor for trader pWin/EV computation. Raw model σ can collapse below 1°F when
+// the ensemble agrees, but next-day forecast-revision noise alone is ~1°F, so the
+// truncated-normal mass at the strike is unrealistically thin. Calibrated 2026-05-08
+// from settled-bet backtest (see backtest_gates.js σ-floor A/B). Revisit once we
+// have ~150 settled bets — current calibration sample is only 49.
+const SIGMA_FLOOR_F = 1.0;
+
 // Kalshi fee per $1 staked at a given binary contract price.
 // Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
 // Per $1 staked at price P: fee ≈ 0.07 × (1−P) dollars (continuous approximation).
@@ -279,8 +286,12 @@ export default async () => {
     // HIGH event. lowerFloor uses maxSoFarCli (integer °F) not raw maxSoFar — Kalshi
     // settles on NWS CLI which rounds to integer °F via a °C-internal path, so a raw
     // 87.8°F obs (= 31.0°C exact) can settle as 87°F. See feedback_weatherbot_cli_settlement.
+    // σ floor: when ensemble agrees, raw model σ can collapse to 0.4°F (SATX 2026-05-06
+    // T68 NO at 18σ "from strike" — lost). Pin to SIGMA_FLOOR_F so EV/Kelly cascade
+    // reflects realistic forecast-revision noise. Calibrate against backtest_gates.js.
     if (tickers.high) {
-      const r = await processEvent(city, tickers.high, "high", city.mean, city.std,
+      const r = await processEvent(city, tickers.high, "high", city.mean,
+                                    Math.max(city.std ?? 0, SIGMA_FLOOR_F),
                                     city.maxSoFarCli ?? city.maxSoFar, null);
       if (r) {
         cityRecord.highEvent = r.eventTicker;
@@ -292,7 +303,8 @@ export default async () => {
     }
     // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
-      const r = await processEvent(city, tickers.low, "low", city.lowMean, city.lowStd,
+      const r = await processEvent(city, tickers.low, "low", city.lowMean,
+                                    Math.max(city.lowStd, SIGMA_FLOOR_F),
                                     null, city.minSoFarCli ?? city.minSoFar);
       if (r) {
         cityRecord.lowEvent = r.eventTicker;
