@@ -133,6 +133,18 @@ const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see head
 // BUCKET_YES_MARGIN_MIN_F because the underlying physical phenomenon (post-min frontal
 // drop / post-max frontal rise) is the same.
 const BUCKET_TAIL_OBS_GAP_MAX_F = 1.5;
+
+// Tighter threshold for B-bucket-above-obs YES bets (LOW YES on bucket below minSoFar,
+// or HIGH YES on bucket above maxSoFar). The tail-tail gate above is "drop into the tail
+// at all"; this gate is "drop into a 1°F window AND stop there" — strictly harder, hence
+// stricter threshold. Calibrated 2026-05-08 against same-day SAT B60.5 YES (μ=61.8,
+// minSoFar=62.0, gap=0.5°F → skip) and DFW B58.5 YES (μ=60.6, minSoFar=60.8,
+// gap=1.3°F → skip), where the existing B-YES margin filter only fires when obs is
+// INSIDE the bucket and lets these "obs above bucket" cases through to the model. Set
+// just under 0.5°F so a single-degree drop required (gap = 0.5°F exactly, the most
+// common "barely past upper edge" case) is gated; gaps below 0.4°F (i.e., <half a
+// rounding tick past the bucket) still defer to the model.
+const BUCKET_ABOVE_OBS_GAP_MAX_F = 0.4;
 function bucketBoundaryMargin(b, weatherCity) {
   const side = b.side?.toLowerCase();
   if (side !== "yes" && side !== "no") return null;
@@ -224,6 +236,45 @@ function tailBucketObsGap(b, weatherCity) {
     return null;
   }
   return null;
+}
+
+// B-bucket "obs already past bucket" gate for LOW YES bets — symmetric to tailBucketObsGap
+// but for B-buckets where the bucket sits entirely below minSoFar. These cases are NOT
+// covered by bucketBoundaryMargin: that function returns null when obs is past the bucket
+// on the reachable side, deferring to the model. The model's truncated normal can still
+// produce confident pWin here, but conditional on minSoFar being already above the bucket
+// AND the diurnal min having physically passed (post-sunrise on a normal day), additional
+// cooling enough to enter the bucket is uncommon.
+//
+// LOW YES: bucket = [N-0.5, N+1.5). Bet wins iff low rounds to N or N+1.
+//   m = minSoFar bounds low from above. m >= N+1.5 means bucket entirely below obs.
+//   Drop required to enter bucket at all = m - (N+1.5).
+//   Drop required to land within bucket window = m - (N+1.5) to m - (N-0.5).
+//   Threshold gates the "drop to enter" gap.
+//
+// LOW only (no HIGH symmetric). The HIGH analog would require post-peak detection: at
+// sunrise, maxSoFar is naturally far below the forecasted high, and gating that case
+// would block every morning bet on a hot-day high. The min-side gate works any time of
+// day because once minSoFar is observed, "low can only stay or decrease" — but mid-day
+// we know it can't decrease much without an evening cold push, and the model doesn't
+// distinguish those. A future HIGH-side version should require localHour > sunset+1h
+// or similar.
+function bucketAboveObsGap(b, weatherCity) {
+  const side = b.side?.toLowerCase();
+  if (side !== "yes") return null;
+  if (b.variable !== "low") return null;
+  const code = b.ticker;
+  if (!code || !code.startsWith("B")) return null;
+  const v = parseFloat(code.slice(1));
+  if (!Number.isFinite(v)) return null;
+  const N = Math.floor(v);
+
+  const m = weatherCity?.minSoFar;
+  if (m == null) return null;
+  if (m < N + 1.5) return null;  // obs in or below bucket → bucketBoundaryMargin handles
+  const boundary = N + 1.5;
+  const gapF = m - boundary;
+  return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed-to-enter" };
 }
 
 // Tile-coverage check: would adding `candidate` to `committed` create a dual-loss zone
@@ -675,6 +726,21 @@ export default async () => {
                          thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
                          tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
                                       kind: tailGap.kind } });
+          continue;
+        }
+        // B-bucket "obs past bucket" gate: catches LOW YES on B-bucket where minSoFar is
+        // already above the bucket's upper edge (or HIGH YES below maxSoFar). Existing
+        // bucketBoundaryMargin defers to the model in this regime; the model's truncated
+        // normal overweights diurnal-mode-passed cooling/warming. Stricter threshold than
+        // the tail gate because B-buckets are width-bounded — the drop has to land in a
+        // 1°F window, not just past a threshold.
+        const bucketGap = bucketAboveObsGap(b, cityWeather);
+        if (bucketGap && bucketGap.gapF > BUCKET_ABOVE_OBS_GAP_MAX_F) {
+          skipped.push({ ...briefBet(b), reason: "bucket-above-obs",
+                         gapF: bucketGap.gapF.toFixed(2),
+                         thresholdF: BUCKET_ABOVE_OBS_GAP_MAX_F,
+                         bucketDebug: { ...bucketGap, ticker: b.ticker, cityName: b.city,
+                                        kind: bucketGap.kind } });
           continue;
         }
         // Synoptic coverage gate: when the settlement station's 1-min ASOS feed is
