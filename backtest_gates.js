@@ -298,6 +298,46 @@ for (const floor of FLOOR_VARIANTS) {
 }
 
 // ===========================================================================
+// KELLY-UNDER-UNCERTAINTY A/B (Bayes work order #5)
+// p_LCB = p_hat − z_α × σ_p  where σ_p ≈ φ(z_strike) × σ_μ / σ
+// Shrink stake by using LCB instead of point estimate. σ_μ ≈ 0.5°F (forecast
+// revision noise). z_α tunes confidence: 0.5 = mild, 1.0 = standard, 1.65 = 95%.
+// ===========================================================================
+function pdfStdNorm(z) { return Math.exp(-z*z/2) / Math.sqrt(2*Math.PI); }
+console.log(`\n=== KELLY-LCB A/B (49 settled bets, σ_μ=0.5°F) ===`);
+console.log(`z_α   | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+console.log(`------+---------------+-----------+----------+----------------+--------------+------`);
+for (const zAlpha of [0.5, 1.0, 1.65]) {
+  let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+  for (const bet of candidates) {
+    const bb = parseBucketStr(bet.bucket);
+    if (!bb) continue;
+    const sigma = bet.modelStd ?? 0;
+    if (sigma <= 0) continue;
+    const fee  = 0.07 * (1 - bet.price);
+    const pHat = bet.ev + bet.price + fee;
+    // Proper σ_p: ∂p_YES/∂μ = (φ_lo − φ_hi)/σ for B-bucket [a,b],
+    //                          single-edge for tails (other φ → 0).
+    const zLo = (bb.loInt === -Infinity) ? null : (bb.loInt - 0.5 - bet.modelMean) / sigma;
+    const zHi = (bb.hiInt === Infinity)  ? null : (bb.hiInt + 0.5 - bet.modelMean) / sigma;
+    const phiLo = zLo == null ? 0 : pdfStdNorm(zLo);
+    const phiHi = zHi == null ? 0 : pdfStdNorm(zHi);
+    const dPdMu = Math.abs(phiLo - phiHi) / sigma;
+    const sigmaP = dPdMu * 0.5;  // σ_μ = 0.5°F
+    const pLCB   = Math.max(0, pHat - zAlpha * sigmaP);
+    const evLCB   = (pLCB - bet.price) - fee;
+    const kLCB    = bet.price < 1 ? Math.max(0, (pLCB - bet.price) / (1 - bet.price)) : 0;
+    const passes  = evLCB >= MIN_EDGE && (kLCB/2) >= MIN_HALF_KELLY && bet.price >= MIN_PRICE;
+    if (!passes) {
+      if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+      else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+    }
+  }
+  const net = lossRec - winForgone;
+  console.log(`  ${zAlpha.toFixed(2)} |       ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}`);
+}
+
+// ===========================================================================
 // HIERARCHICAL σ A/B (replacement for floor — never collapses, always smooth)
 // σ_eff = sqrt(σ_orig² + σ_irreducible²)
 // ===========================================================================

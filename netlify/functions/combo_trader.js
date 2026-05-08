@@ -265,6 +265,24 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
 const SIGMA_COOLING_F = 0.7;
 const PI_TAIL_SKIP    = 0.10;
 
+// Kelly-LCB (Bayes work order #5): see jackson_trader.js header for math.
+const SIGMA_FORECAST_REVISION_F = 0.5;
+const KELLY_LCB_Z = 0.5;
+function kellyLcbAdjust(b) {
+  const σ = b.modelStd, μ = b.modelMean;
+  if (!Number.isFinite(σ) || σ <= 0 || !Number.isFinite(μ)) return null;
+  const lo = b.loInt, hi = b.hiInt;
+  const zLo = (lo == null || lo === -Infinity) ? null : (lo - 0.5 - μ) / σ;
+  const zHi = (hi == null || hi === Infinity)  ? null : (hi + 0.5 - μ) / σ;
+  const phi = z => Math.exp(-z*z/2) / Math.sqrt(2*Math.PI);
+  const phiLo = zLo == null ? 0 : phi(zLo);
+  const phiHi = zHi == null ? 0 : phi(zHi);
+  const sigmaP = (Math.abs(phiLo - phiHi) / σ) * SIGMA_FORECAST_REVISION_F;
+  const pHat = b.pWin ?? b.p_model;
+  if (!Number.isFinite(pHat)) return null;
+  return { pHat, pLCB: Math.max(0, pHat - KELLY_LCB_Z * sigmaP), sigmaP };
+}
+
 // T-tail obs-vs-boundary gate. YES → gapF (residual drop/rise needed to reach the tail).
 // NO → safetyMargin (room above/below tail before bet flips to auto-loss). Tail bounds
 // in JSON are null after JSON.stringify of ±Infinity. NO branch added 2026-05-08 after
@@ -515,6 +533,20 @@ export default async () => {
       if (bucketGap && bucketGap.gapF > BUCKET_ABOVE_OBS_GAP_MAX_F) {
         skipped.push({ ...c, reason: "bucket-above-obs",
                        gapF: bucketGap.gapF.toFixed(2), thresholdF: BUCKET_ABOVE_OBS_GAP_MAX_F });
+        continue;
+      }
+    }
+
+    // Kelly-LCB shrink (Bayes work order #5): shared across weather + rain candidates.
+    const lcb = kellyLcbAdjust(c);
+    if (lcb) {
+      const fee = 0.07 * (1 - c.price);
+      const evLCB = (lcb.pLCB - c.price) - fee;
+      const halfKellyLCB = c.price < 1 ? Math.max(0, (lcb.pLCB - c.price) / (1 - c.price)) / 2 : 0;
+      if (evLCB < MIN_EDGE || halfKellyLCB < MIN_HALF_KELLY) {
+        skipped.push({ ...c, reason: "kelly-lcb-shrink",
+                       pHat: lcb.pHat.toFixed(3), pLCB: lcb.pLCB.toFixed(3),
+                       sigmaP: lcb.sigmaP.toFixed(3) });
         continue;
       }
     }

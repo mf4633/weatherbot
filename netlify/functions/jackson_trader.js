@@ -230,6 +230,34 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
 const SIGMA_COOLING_F = 0.7;     // residual extremum noise given running min/max
 const PI_TAIL_SKIP    = 0.10;    // skip when posterior P(win) < this
 
+// Kelly-under-uncertainty (Bayes work order #5): use lower confidence bound on
+// pWin instead of point estimate. σ_p comes from the delta method:
+//   p_YES = Φ((b+0.5−μ)/σ) − Φ((a−0.5−μ)/σ)   [B-bucket [a,b]]
+//   ∂p_YES/∂μ = (φ((a−0.5−μ)/σ) − φ((b+0.5−μ)/σ)) / σ
+//   σ_p ≈ |∂p/∂μ| × σ_μ                       [σ_μ = forecast revision noise]
+//   p_LCB = p_hat − z_α × σ_p
+// Then check the trader's MIN_EDGE/MIN_HALF_KELLY using p_LCB instead of p_hat.
+// Calibrated against backtest_gates.js Kelly-LCB A/B at z_α=0.5: +$112 net.
+const SIGMA_FORECAST_REVISION_F = 0.5;  // σ_μ — revision of model mean over short horizon
+const KELLY_LCB_Z = 0.5;                // 0.5σ lower bound (mild); 1.0/1.65 more aggressive
+function kellyLcbAdjust(b) {
+  const σ = b.modelStd, μ = b.modelMean;
+  if (!Number.isFinite(σ) || σ <= 0 || !Number.isFinite(μ)) return null;
+  const lo = b.loInt, hi = b.hiInt;
+  const zLo = (lo == null || lo === -Infinity) ? null : (lo - 0.5 - μ) / σ;
+  const zHi = (hi == null || hi === Infinity)  ? null : (hi + 0.5 - μ) / σ;
+  const phi = z => Math.exp(-z*z/2) / Math.sqrt(2*Math.PI);
+  const phiLo = zLo == null ? 0 : phi(zLo);
+  const phiHi = zHi == null ? 0 : phi(zHi);
+  const dPdMu = Math.abs(phiLo - phiHi) / σ;
+  const sigmaP = dPdMu * SIGMA_FORECAST_REVISION_F;
+  const pHat = b.pWin;
+  if (!Number.isFinite(pHat)) return null;
+  // For NO-side bets, pWin = 1 - pYes; sensitivity flips sign but |·| same.
+  const pLCB = Math.max(0, pHat - KELLY_LCB_Z * sigmaP);
+  return { pHat, pLCB, sigmaP };
+}
+
 // Tail-bucket (T-prefix) obs-vs-boundary gate. Returns YES "gapF" (residual move
 // required to enter the tail) or NO "safetyMargin" (room obs has before falling into
 // the tail), or null if not applicable / model drives. Uses loInt/hiInt from kalshi.js
@@ -780,6 +808,25 @@ export default async () => {
                          pi: PI_TAIL_SKIP, sigmaCooling: SIGMA_COOLING_F,
                          tailDebug: { ...postP, ticker: b.ticker, cityName: b.city } });
           continue;
+        }
+        // Kelly-LCB gate (Bayes work order #5): re-check EV/halfKelly using the lower
+        // confidence bound on pWin. Catches "model very confident at the strike" cases
+        // where σ is small and a tiny shift in μ flips the bet — exactly the SATX
+        // 2026-05-06 T68 NO failure pattern. Calibrated z_α=0.5 against the 49-bet
+        // sample (+$112 net in backtest_gates.js Kelly-LCB A/B).
+        const lcb = kellyLcbAdjust(b);
+        if (lcb) {
+          const fee = 0.07 * (1 - b.price);
+          const evLCB = (lcb.pLCB - b.price) - fee;
+          const halfKellyLCB = b.price < 1 ? Math.max(0, (lcb.pLCB - b.price) / (1 - b.price)) / 2 : 0;
+          if (evLCB < MIN_EDGE || halfKellyLCB < MIN_HALF_KELLY) {
+            skipped.push({ ...briefBet(b), reason: "kelly-lcb-shrink",
+                           pHat: lcb.pHat.toFixed(3), pLCB: lcb.pLCB.toFixed(3),
+                           sigmaP: lcb.sigmaP.toFixed(3),
+                           evLCB: evLCB.toFixed(3),
+                           halfKellyLCB: halfKellyLCB.toFixed(3) });
+            continue;
+          }
         }
         // B-bucket "obs past bucket" gate: catches LOW YES on B-bucket where minSoFar is
         // already above the bucket's upper edge (or HIGH YES below maxSoFar). Existing
