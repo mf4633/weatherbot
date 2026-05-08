@@ -42,27 +42,32 @@ const BUCKET_ABOVE_OBS_GAP_MAX_F = 0.4;
 
 function tailBucketObsGap(b, weatherCity) {
   const side = b.side?.toLowerCase();
-  if (side !== "yes") return null;
+  if (side !== "yes" && side !== "no") return null;
   const code = b.ticker?.split("-").pop();
   if (!code || !code.startsWith("T")) return null;
-  // For backtest, infer loInt/hiInt from market direction (we know variable + side).
   const N = parseInt(code.slice(1), 10);
   if (!Number.isFinite(N)) return null;
   if (b.variable === "low") {
     const m = weatherCity?.minSoFar;
     if (m == null) return null;
-    // Cold-tail LOW = "≤ N-1" → continuous boundary N-0.5.
     const boundary = N - 0.5;
-    const gapF = Math.max(0, m - boundary);
-    return { variable: "low", side: "yes", obs: m, boundary, gapF };
+    if (side === "yes") {
+      const gapF = Math.max(0, m - boundary);
+      return { variable: "low", side: "yes", obs: m, boundary, gapF };
+    }
+    const safetyMargin = m - boundary;
+    return { variable: "low", side: "no", obs: m, boundary, safetyMargin };
   }
   if (b.variable === "high") {
     const m = weatherCity?.maxSoFar;
     if (m == null) return null;
-    // Hot-tail HIGH = "≥ N+1" → continuous boundary N+0.5.
     const boundary = N + 0.5;
-    const gapF = Math.max(0, boundary - m);
-    return { variable: "high", side: "yes", obs: m, boundary, gapF };
+    if (side === "yes") {
+      const gapF = Math.max(0, boundary - m);
+      return { variable: "high", side: "yes", obs: m, boundary, gapF };
+    }
+    const safetyMargin = boundary - m;
+    return { variable: "high", side: "no", obs: m, boundary, safetyMargin };
   }
   return null;
 }
@@ -160,8 +165,12 @@ for (const bet of candidates) {
   const enriched = { ...bet, weatherCity: obs };
 
   const tailGap = tailBucketObsGap(bet, obs);
-  if (tailGap && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
+  if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
     results.tailHits.push({ ...enriched, gapF: tailGap.gapF, kind: "tail-obs-floor" });
+    continue;
+  }
+  if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
+    results.tailHits.push({ ...enriched, safetyMarginF: tailGap.safetyMargin, kind: "tail-obs-ceiling" });
     continue;
   }
   const bucketGap = bucketAboveObsGap(bet, obs);

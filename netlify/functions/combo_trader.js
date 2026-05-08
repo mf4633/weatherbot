@@ -236,12 +236,13 @@ function bucketBoundaryMargin(b, weatherCity) {
   return null;
 }
 
-// T-tail YES gate: drop/rise required to reach the open-ended tail boundary.
-// loInt=null + finite hiInt = cold tail (LOW YES); finite loInt + hiInt=null = hot tail
-// (HIGH YES). Tail bounds in JSON are null after JSON.stringify of ±Infinity.
+// T-tail obs-vs-boundary gate. YES → gapF (residual drop/rise needed to reach the tail).
+// NO → safetyMargin (room above/below tail before bet flips to auto-loss). Tail bounds
+// in JSON are null after JSON.stringify of ±Infinity. NO branch added 2026-05-08 after
+// PHX T69 NO at 30¢ lost on already-past minSoFar.
 function tailBucketObsGap(b, weatherCity) {
   const side = b.side?.toLowerCase();
-  if (side !== "yes") return null;
+  if (side !== "yes" && side !== "no") return null;
   const code = b.ticker;
   if (!code || !code.startsWith("T")) return null;
   const lo = b.loInt, hi = b.hiInt;
@@ -251,8 +252,12 @@ function tailBucketObsGap(b, weatherCity) {
     if (m == null) return null;
     if (lo == null && Number.isFinite(hi)) {
       const boundary = hi + 0.5;
-      const gapF = Math.max(0, m - boundary);
-      return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed" };
+      if (side === "yes") {
+        const gapF = Math.max(0, m - boundary);
+        return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed" };
+      }
+      const safetyMargin = m - boundary;
+      return { variable: "low", side: "no", obs: m, boundary, safetyMargin, kind: "no-margin-above-tail" };
     }
     return null;
   }
@@ -261,8 +266,12 @@ function tailBucketObsGap(b, weatherCity) {
     if (m == null) return null;
     if (hi == null && Number.isFinite(lo)) {
       const boundary = lo - 0.5;
-      const gapF = Math.max(0, boundary - m);
-      return { variable: "high", side: "yes", obs: m, boundary, gapF, kind: "rise-needed" };
+      if (side === "yes") {
+        const gapF = Math.max(0, boundary - m);
+        return { variable: "high", side: "yes", obs: m, boundary, gapF, kind: "rise-needed" };
+      }
+      const safetyMargin = boundary - m;
+      return { variable: "high", side: "no", obs: m, boundary, safetyMargin, kind: "no-margin-below-tail" };
     }
     return null;
   }
@@ -462,11 +471,19 @@ export default async () => {
         continue;
       }
 
-      // T-tail YES gate: drop/rise required to reach the open-ended tail.
+      // T-tail obs-floor / obs-ceiling gate. YES: skip when drop/rise required exceeds
+      // BUCKET_TAIL_OBS_GAP_MAX_F. NO: skip when safety margin from boundary is below
+      // the same threshold.
       const tailGap = tailBucketObsGap(c, cityWeather);
-      if (tailGap && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
+      if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
         skipped.push({ ...c, reason: "tail-obs-floor",
                        gapF: tailGap.gapF.toFixed(2), thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F });
+        continue;
+      }
+      if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
+        skipped.push({ ...c, reason: "tail-obs-ceiling",
+                       safetyMarginF: tailGap.safetyMargin.toFixed(2),
+                       thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F });
         continue;
       }
 

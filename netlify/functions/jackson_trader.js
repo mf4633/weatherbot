@@ -183,25 +183,31 @@ function bucketBoundaryMargin(b, weatherCity) {
   return null;
 }
 
-// Tail-bucket (T-prefix) obs-floor gap for YES bets. Returns required residual move
-// (°F) to bring the daily extremum into the tail, or null if not applicable / model
-// drives. Uses loInt/hiInt from kalshi.js bucketBounds, which already encodes Kalshi's
-// strict-inequality strikes (off-by-one fix from 2026-05-05).
+// Tail-bucket (T-prefix) obs-vs-boundary gate. Returns YES "gapF" (residual move
+// required to enter the tail) or NO "safetyMargin" (room obs has before falling into
+// the tail), or null if not applicable / model drives. Uses loInt/hiInt from kalshi.js
+// bucketBounds, which already encodes Kalshi's strict-inequality strikes (off-by-one
+// fix from 2026-05-05).
 //
-// Cold tail (loInt = -Infinity, hiInt finite):
-//   LOW YES wins if low ≤ hiInt (continuous: low < hiInt + 0.5).
-//   With minSoFar=m as upper bound on low, dropF = max(0, m - (hiInt + 0.5)).
-//   m past boundary already → gap = 0 (in tail).
-// Hot tail (loInt finite, hiInt = +Infinity):
-//   HIGH YES wins if high ≥ loInt (continuous: high > loInt - 0.5).
-//   With maxSoFar=m as lower bound on high, riseF = max(0, (loInt - 0.5) - m).
+// Cold tail (loInt = -Infinity, hiInt finite). Boundary = hiInt + 0.5.
+//   LOW YES wins if low ≤ hiInt (continuous: low < boundary).
+//     gapF = max(0, m - boundary)  — drop needed from minSoFar.
+//   LOW NO wins if low > hiInt (continuous: low ≥ boundary).
+//     safetyMargin = m - boundary  — room above tail. Negative = auto-loss
+//     (low has already rounded ≤ hi); small positive = one cool gust kills it.
+// Hot tail (loInt finite, hiInt = +Infinity). Boundary = loInt - 0.5.
+//   HIGH YES wins if high ≥ loInt → gapF = max(0, boundary - m) (rise from maxSoFar).
+//   HIGH NO  wins if high <  loInt → safetyMargin = boundary - m (room below tail).
 //
-// NO-side tails are not gated here: a NO on a cold-tail LOW market wins when low rounds
-// outside the tail, which the existing bucketBoundaryMargin would handle if it were
-// extended; for now, NO tails fall through to model-drives behavior.
+// NO-side gate added 2026-05-08 after KXLOWPHX-26MAY08-T69 NO at 30¢ lost $9 — model
+// μ_low=70.9 above strike but minSoFar had already dropped past 69.5 by 8:34 AM MST,
+// so NO was structurally auto-loss the model couldn't see. Symmetric to the YES gate
+// added the same morning; same threshold magnitude (BUCKET_TAIL_OBS_GAP_MAX_F = 1.5°F)
+// because the underlying physics is the same — once the diurnal extremum is locked,
+// the model's truncated normal still places mass past the boundary.
 function tailBucketObsGap(b, weatherCity) {
   const side = b.side?.toLowerCase();
-  if (side !== "yes") return null;
+  if (side !== "yes" && side !== "no") return null;
   const code = b.ticker;
   if (!code || !code.startsWith("T")) return null;
   // NOTE: kalshi.js bucketBounds uses ±Infinity for tail bounds, but those become `null`
@@ -213,25 +219,28 @@ function tailBucketObsGap(b, weatherCity) {
     const m = weatherCity?.minSoFar;
     if (m == null) return null;
     if (lo == null && Number.isFinite(hi)) {
-      // Cold-tail LOW YES: low ≤ hi → continuous low < hi + 0.5.
       const boundary = hi + 0.5;
-      const gapF = Math.max(0, m - boundary);
-      return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed" };
+      if (side === "yes") {
+        const gapF = Math.max(0, m - boundary);
+        return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed" };
+      }
+      const safetyMargin = m - boundary;
+      return { variable: "low", side: "no", obs: m, boundary, safetyMargin, kind: "no-margin-above-tail" };
     }
-    // Hot-tail LOW YES (low ≥ lo): minSoFar is the strict upper bound on low. If lo > minSoFar,
-    // the bet is auto-loss territory; otherwise it's "model drives" because no further drop
-    // is needed (low is already ≥ lo) and the question is whether it stays ≥ lo through the
-    // remainder of the day. Out of scope for this gate.
+    // Hot-tail LOW: out of scope (rare market; obs-vs-strike relation differs).
     return null;
   }
   if (b.variable === "high") {
     const m = weatherCity?.maxSoFar;
     if (m == null) return null;
     if (hi == null && Number.isFinite(lo)) {
-      // Hot-tail HIGH YES: high ≥ lo → continuous high > lo - 0.5.
       const boundary = lo - 0.5;
-      const gapF = Math.max(0, boundary - m);
-      return { variable: "high", side: "yes", obs: m, boundary, gapF, kind: "rise-needed" };
+      if (side === "yes") {
+        const gapF = Math.max(0, boundary - m);
+        return { variable: "high", side: "yes", obs: m, boundary, gapF, kind: "rise-needed" };
+      }
+      const safetyMargin = boundary - m;
+      return { variable: "high", side: "no", obs: m, boundary, safetyMargin, kind: "no-margin-below-tail" };
     }
     return null;
   }
@@ -714,15 +723,23 @@ export default async () => {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
         }
-        // Tail-bucket obs-floor gate: for cold-tail LOW YES or hot-tail HIGH YES, the model's
-        // pWin can sit above market price even when the day's extremum is locked well away from
-        // the tail boundary (model truncates above minSoFar / below maxSoFar but doesn't know
-        // the diurnal mode has already passed). Reject when the residual drop/rise required
-        // exceeds BUCKET_TAIL_OBS_GAP_MAX_F. Calibrated against SATX-2026-05-08 T60 YES.
+        // Tail-bucket obs-floor / obs-ceiling gate. YES side rejects when residual drop/rise
+        // required exceeds BUCKET_TAIL_OBS_GAP_MAX_F (calibrated against SATX-2026-05-08 T60
+        // YES). NO side rejects when safety margin above/below the tail boundary is below
+        // the same threshold (calibrated against PHX-2026-05-08 T69 NO: model μ=70.9 but
+        // minSoFar had already dropped past 69.5 by 8:34 AM MST, so NO was auto-loss).
         const tailGap = tailBucketObsGap(b, cityWeather);
-        if (tailGap && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
+        if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
           skipped.push({ ...briefBet(b), reason: "tail-obs-floor",
                          gapF: tailGap.gapF.toFixed(2),
+                         thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
+                         tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
+                                      kind: tailGap.kind } });
+          continue;
+        }
+        if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
+          skipped.push({ ...briefBet(b), reason: "tail-obs-ceiling",
+                         safetyMarginF: tailGap.safetyMargin.toFixed(2),
                          thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
                          tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
                                       kind: tailGap.kind } });
