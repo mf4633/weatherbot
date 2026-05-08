@@ -8,6 +8,9 @@
 [functions."jackson_trader"]
   schedule = "*/5 * * * *"
 
+[functions."jackson_react"]
+  schedule = "*/1 * * * *"
+
 [functions."jackson_rain_trader"]
   schedule = "7,37 * * * *"
 
@@ -54,6 +57,11 @@
 [[redirects]]
   from = "/api/jackson_trader"
   to = "/.netlify/functions/jackson_trader"
+  status = 200
+
+[[redirects]]
+  from = "/api/jackson_react"
+  to = "/.netlify/functions/jackson_react"
   status = 200
 
 [[redirects]]
