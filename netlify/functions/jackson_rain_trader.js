@@ -384,6 +384,18 @@ export default async () => {
         const dedupKey = botKey(fullTicker, b.side);
         if (heldKey.has(dedupKey)) { skipped.push({ ...briefBet(b), reason: "already-held" }); continue; }
         if (cooldownMap[dedupKey]) { skipped.push({ ...briefBet(b), reason: "in-cooldown" }); continue; }
+        // City+kind cooldown: blocks any further buys on the same (city, kind) pair within
+        // COOLDOWN_MIN of the last successful buy. Independent of ticker/side, so it catches
+        // model-thrash patterns that would otherwise slip past dedup (different strike, same
+        // city/kind). Mirrors jackson_trader's BUY_CITYVAR_COOLDOWN_MIN guard. Added 2026-05-08
+        // after porting the same defense to combo_trader; rain uses (city, kind) rather than
+        // (city, variable) since "kind" (daily-binary vs monthly-tier) is the analogous split.
+        const cvLockKey = `cv:${b.city}:${b.kind}`;
+        if (cooldownMap[cvLockKey]) {
+          skipped.push({ ...briefBet(b), reason: "city-kind-cooldown",
+                         lockedSince: cooldownMap[cvLockKey], lockKey: cvLockKey });
+          continue;
+        }
 
         const remaining = cashDollars - committed;
         const stake_dollars = Math.max(STAKE_FLOOR,
@@ -426,6 +438,9 @@ export default async () => {
           committed += stake_dollars;
           capDaysCommitted += candCapDays;
           heldKey.add(dedupKey);
+          // Stamp city+kind cooldown so subsequent runs (or later iterations within the
+          // budget loop) don't compound model-thrash on the same (city, kind) within 60 min.
+          if (!isDryRun) cooldownMap[`cv:${b.city}:${b.kind}`] = new Date().toISOString();
           if (isDryRun) continue;
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
           // Persist eventTicker + holdingDaysAtPlace + settlementUTC so the
