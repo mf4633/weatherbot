@@ -183,11 +183,58 @@ function bucketBoundaryMargin(b, weatherCity) {
   return null;
 }
 
+// Tail-bucket posterior P(win | obs): the Bayes-shaped form of the old gapF/safetyMargin
+// gates (work order #2). σ_cooling = residual uncertainty in the daily extremum given
+// the running min/max — calibrated 2026-05-08 against the 49-bet sample at 0.7°F. Skip
+// when P(win) < PI_TAIL_SKIP. One π replaces the °F-scale BUCKET_TAIL_OBS_GAP_MAX_F.
+//
+// Cold-tail LOW: boundary = hi + 0.5 (continuous CLI bound).
+//   YES wins iff low < boundary → P(YES) = Φ((boundary - m) / σ_cooling)
+//   NO  wins iff low ≥ boundary → P(NO)  = 1 − Φ((boundary - m) / σ_cooling)
+// Hot-tail HIGH: boundary = lo - 0.5 (continuous CLI bound).
+//   YES wins iff high ≥ lo → P(YES) = 1 − Φ((boundary - m) / σ_cooling)
+//   NO  wins iff high <  lo → P(NO)  = Φ((boundary - m) / σ_cooling)
+function normCdf01(z) {
+  // Abramowitz–Stegun 7.1.26 approximation; max error ~1.5e-7.
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const sign = z < 0 ? -1 : 1; const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * Math.exp(-x*x);
+  return 0.5 * (1 + sign * y);
+}
+function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
+  const side = b.side?.toLowerCase();
+  if (side !== "yes" && side !== "no") return null;
+  const code = b.ticker;
+  if (!code || !code.startsWith("T")) return null;
+  const lo = b.loInt, hi = b.hiInt;
+  if (b.variable === "low" && weatherCity?.minSoFar != null
+      && lo == null && Number.isFinite(hi)) {
+    const boundary = hi + 0.5;
+    const z = (boundary - weatherCity.minSoFar) / sigmaCooling;
+    const pYes = normCdf01(z);
+    return { pWin: side === "yes" ? pYes : (1 - pYes),
+             obs: weatherCity.minSoFar, boundary, kind: "cold-tail-low" };
+  }
+  if (b.variable === "high" && weatherCity?.maxSoFar != null
+      && hi == null && Number.isFinite(lo)) {
+    const boundary = lo - 0.5;
+    const z = (boundary - weatherCity.maxSoFar) / sigmaCooling;
+    const pYesLose = normCdf01(z);  // P(high < boundary) = P(YES loses)
+    const pYes = 1 - pYesLose;
+    return { pWin: side === "yes" ? pYes : (1 - pYes),
+             obs: weatherCity.maxSoFar, boundary, kind: "hot-tail-high" };
+  }
+  return null;
+}
+const SIGMA_COOLING_F = 0.7;     // residual extremum noise given running min/max
+const PI_TAIL_SKIP    = 0.10;    // skip when posterior P(win) < this
+
 // Tail-bucket (T-prefix) obs-vs-boundary gate. Returns YES "gapF" (residual move
 // required to enter the tail) or NO "safetyMargin" (room obs has before falling into
 // the tail), or null if not applicable / model drives. Uses loInt/hiInt from kalshi.js
 // bucketBounds, which already encodes Kalshi's strict-inequality strikes (off-by-one
-// fix from 2026-05-05).
+// fix from 2026-05-05). RETAINED for diagnostic logs alongside the posterior gate.
 //
 // Cold tail (loInt = -Infinity, hiInt finite). Boundary = hiInt + 0.5.
 //   LOW YES wins if low ≤ hiInt (continuous: low < boundary).
@@ -723,26 +770,15 @@ export default async () => {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
         }
-        // Tail-bucket obs-floor / obs-ceiling gate. YES side rejects when residual drop/rise
-        // required exceeds BUCKET_TAIL_OBS_GAP_MAX_F (calibrated against SATX-2026-05-08 T60
-        // YES). NO side rejects when safety margin above/below the tail boundary is below
-        // the same threshold (calibrated against PHX-2026-05-08 T69 NO: model μ=70.9 but
-        // minSoFar had already dropped past 69.5 by 8:34 AM MST, so NO was auto-loss).
-        const tailGap = tailBucketObsGap(b, cityWeather);
-        if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
-          skipped.push({ ...briefBet(b), reason: "tail-obs-floor",
-                         gapF: tailGap.gapF.toFixed(2),
-                         thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
-                         tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
-                                      kind: tailGap.kind } });
-          continue;
-        }
-        if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
-          skipped.push({ ...briefBet(b), reason: "tail-obs-ceiling",
-                         safetyMarginF: tailGap.safetyMargin.toFixed(2),
-                         thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
-                         tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
-                                      kind: tailGap.kind } });
+        // Posterior tail gate (Bayes work order #2): replaces the old tail-obs-floor +
+        // tail-obs-ceiling thresholds with a single π. Skip if P(win | obs, σ_cooling) < π.
+        // Backtest A/B at σ_cooling=0.7, π=0.10: +$31 net vs +$28 for the °F-threshold gate.
+        const postP = tailBucketPosteriorP(b, cityWeather, SIGMA_COOLING_F);
+        if (postP && postP.pWin < PI_TAIL_SKIP) {
+          skipped.push({ ...briefBet(b), reason: "tail-posterior-skip",
+                         pWinPosterior: postP.pWin.toFixed(3),
+                         pi: PI_TAIL_SKIP, sigmaCooling: SIGMA_COOLING_F,
+                         tailDebug: { ...postP, ticker: b.ticker, cityName: b.city } });
           continue;
         }
         // B-bucket "obs past bucket" gate: catches LOW YES on B-bucket where minSoFar is

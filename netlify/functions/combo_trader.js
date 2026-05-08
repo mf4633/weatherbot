@@ -236,10 +236,39 @@ function bucketBoundaryMargin(b, weatherCity) {
   return null;
 }
 
+// Posterior tail gate (Bayes work order #2): see jackson_trader.js header for full math.
+// Skip when P(win | obs, σ_cooling) < π.
+function normCdf01(z) {
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+  const sign = z < 0 ? -1 : 1; const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * Math.exp(-x*x);
+  return 0.5 * (1 + sign * y);
+}
+function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
+  const side = b.side?.toLowerCase();
+  if (side !== "yes" && side !== "no") return null;
+  if (!b.ticker?.startsWith("T")) return null;
+  const lo = b.loInt, hi = b.hiInt;
+  if (b.variable === "low" && weatherCity?.minSoFar != null && lo == null && Number.isFinite(hi)) {
+    const z = ((hi + 0.5) - weatherCity.minSoFar) / sigmaCooling;
+    const pYes = normCdf01(z);
+    return { pWin: side === "yes" ? pYes : (1 - pYes) };
+  }
+  if (b.variable === "high" && weatherCity?.maxSoFar != null && hi == null && Number.isFinite(lo)) {
+    const z = ((lo - 0.5) - weatherCity.maxSoFar) / sigmaCooling;
+    const pYes = 1 - normCdf01(z);
+    return { pWin: side === "yes" ? pYes : (1 - pYes) };
+  }
+  return null;
+}
+const SIGMA_COOLING_F = 0.7;
+const PI_TAIL_SKIP    = 0.10;
+
 // T-tail obs-vs-boundary gate. YES → gapF (residual drop/rise needed to reach the tail).
 // NO → safetyMargin (room above/below tail before bet flips to auto-loss). Tail bounds
 // in JSON are null after JSON.stringify of ±Infinity. NO branch added 2026-05-08 after
-// PHX T69 NO at 30¢ lost on already-past minSoFar.
+// PHX T69 NO at 30¢ lost on already-past minSoFar. RETAINED for diagnostic.
 function tailBucketObsGap(b, weatherCity) {
   const side = b.side?.toLowerCase();
   if (side !== "yes" && side !== "no") return null;
@@ -471,19 +500,12 @@ export default async () => {
         continue;
       }
 
-      // T-tail obs-floor / obs-ceiling gate. YES: skip when drop/rise required exceeds
-      // BUCKET_TAIL_OBS_GAP_MAX_F. NO: skip when safety margin from boundary is below
-      // the same threshold.
-      const tailGap = tailBucketObsGap(c, cityWeather);
-      if (tailGap && tailGap.side === "yes" && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
-        skipped.push({ ...c, reason: "tail-obs-floor",
-                       gapF: tailGap.gapF.toFixed(2), thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F });
-        continue;
-      }
-      if (tailGap && tailGap.side === "no" && tailGap.safetyMargin < BUCKET_TAIL_OBS_GAP_MAX_F) {
-        skipped.push({ ...c, reason: "tail-obs-ceiling",
-                       safetyMarginF: tailGap.safetyMargin.toFixed(2),
-                       thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F });
+      // Posterior tail gate (Bayes work order #2): single π replaces the °F thresholds.
+      const postP = tailBucketPosteriorP(c, cityWeather, SIGMA_COOLING_F);
+      if (postP && postP.pWin < PI_TAIL_SKIP) {
+        skipped.push({ ...c, reason: "tail-posterior-skip",
+                       pWinPosterior: postP.pWin.toFixed(3),
+                       pi: PI_TAIL_SKIP, sigmaCooling: SIGMA_COOLING_F });
         continue;
       }
 

@@ -334,6 +334,59 @@ for (const irred of IRRED_VARIANTS) {
 }
 
 // ===========================================================================
+// POSTERIOR-GATE A/B (Bayes work order #2)
+// Replace `gapF > 1.5°F` with `P(loss | obs, σ_cooling) > π`.
+// σ_cooling = "residual uncertainty in daily extremum given running min/max."
+// Cold tail LOW YES: P(win) = Φ((hi+0.5 − m) / σ_cooling)
+// Cold tail LOW NO : P(win) = 1 − Φ((hi+0.5 − m) / σ_cooling)
+// Symmetric for hot tail HIGH.
+// ===========================================================================
+function ptailPosterior(b, obs, sigmaCooling) {
+  const code = b.ticker?.split("-").pop() || "";
+  if (!code.startsWith("T")) return null;
+  const N = parseInt(code.slice(1), 10);
+  if (!Number.isFinite(N)) return null;
+  if (b.variable === "low" && obs.minSoFar != null) {
+    const m = obs.minSoFar;
+    const boundary = N - 0.5;
+    const pYesWin = normCdf((boundary - m) / sigmaCooling);
+    return (b.side?.toLowerCase() === "yes") ? pYesWin : (1 - pYesWin);
+  }
+  if (b.variable === "high" && obs.maxSoFar != null) {
+    const m = obs.maxSoFar;
+    const boundary = N + 0.5;
+    const pYesWin = 1 - normCdf((boundary - m) / sigmaCooling);
+    return (b.side?.toLowerCase() === "yes") ? pYesWin : (1 - pYesWin);
+  }
+  return null;
+}
+
+console.log(`\n=== POSTERIOR-GATE A/B (T-tail, replaces tail-obs-floor + tail-obs-ceiling) ===`);
+console.log(`σ_cooling | π_skip | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+console.log(`----------+--------+---------------+-----------+----------+----------------+--------------+------`);
+for (const sigC of [0.7, 1.0, 1.3]) {
+  for (const pi of [0.05, 0.10, 0.15, 0.20]) {
+    let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+    let i2 = 0;
+    for (const bet of candidates) {
+      i2++;
+      // Use already-reconstructed obs from upper loop where possible — fallback to recompute
+      const obs = await reconstructMinMaxSoFar(bet);
+      if (!obs) continue;
+      const pW = ptailPosterior(bet, obs, sigC);
+      if (pW == null) continue;
+      if (pW < pi) {
+        if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+        else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+      }
+    }
+    const net = lossRec - winForgone;
+    console.log(`  ${sigC.toFixed(1)}    | ${pi.toFixed(2)}  |       ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}`);
+  }
+}
+console.log(`(compare to current tail gate impact: 6 hits, +$27.63 net)`);
+
+// ===========================================================================
 // LIQUIDITY PROXY AUDIT — settled records lack at-trade volume/spread, so we
 // approximate by city (per-city volume is stable in days-scale) and by bucket
 // type (T-tail typically thinner than B-bucket near forecast mean). The aim
