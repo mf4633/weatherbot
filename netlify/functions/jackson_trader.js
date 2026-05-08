@@ -124,6 +124,15 @@ function betWinsAt(bet, x) {
 // that missed the CHI low B48.5 NO failure mode where minSoFar landed inside the bucket.
 const BUCKET_MARGIN_MIN_F = 0.6;       // NO-side threshold
 const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see header)
+// Tail-bucket (T-prefix) YES gate: for cold-tail LOW YES or hot-tail HIGH YES, the
+// daily extremum must move past the tail boundary for the bet to settle. If the
+// already-observed extremum requires a larger residual move than this, skip.
+// Calibrated 2026-05-08 after KXLOWTSATX-26MAY08-T60 YES at 7¢: model said pWin=0.614
+// (μ_low≈59 truncated above minSoFar=62.1) but the morning low had already passed
+// at 62.1°F and a further 2.6°F drop pre-midnight is uncommon. Same magnitude as
+// BUCKET_YES_MARGIN_MIN_F because the underlying physical phenomenon (post-min frontal
+// drop / post-max frontal rise) is the same.
+const BUCKET_TAIL_OBS_GAP_MAX_F = 1.5;
 function bucketBoundaryMargin(b, weatherCity) {
   const side = b.side?.toLowerCase();
   if (side !== "yes" && side !== "no") return null;
@@ -158,6 +167,61 @@ function bucketBoundaryMargin(b, weatherCity) {
     if (m <= N - 0.5) return null;                          // obs below bucket → reachable from below; model drives
     if (m > N + 1.5) return -Math.abs(m - (N + 1.5)) - 0.01; // obs above bucket → YES auto-loses
     return (N + 1.5) - m;                                    // obs in bucket → headroom before further rise
+  }
+  return null;
+}
+
+// Tail-bucket (T-prefix) obs-floor gap for YES bets. Returns required residual move
+// (°F) to bring the daily extremum into the tail, or null if not applicable / model
+// drives. Uses loInt/hiInt from kalshi.js bucketBounds, which already encodes Kalshi's
+// strict-inequality strikes (off-by-one fix from 2026-05-05).
+//
+// Cold tail (loInt = -Infinity, hiInt finite):
+//   LOW YES wins if low ≤ hiInt (continuous: low < hiInt + 0.5).
+//   With minSoFar=m as upper bound on low, dropF = max(0, m - (hiInt + 0.5)).
+//   m past boundary already → gap = 0 (in tail).
+// Hot tail (loInt finite, hiInt = +Infinity):
+//   HIGH YES wins if high ≥ loInt (continuous: high > loInt - 0.5).
+//   With maxSoFar=m as lower bound on high, riseF = max(0, (loInt - 0.5) - m).
+//
+// NO-side tails are not gated here: a NO on a cold-tail LOW market wins when low rounds
+// outside the tail, which the existing bucketBoundaryMargin would handle if it were
+// extended; for now, NO tails fall through to model-drives behavior.
+function tailBucketObsGap(b, weatherCity) {
+  const side = b.side?.toLowerCase();
+  if (side !== "yes") return null;
+  const code = b.ticker;
+  if (!code || !code.startsWith("T")) return null;
+  // NOTE: kalshi.js bucketBounds uses ±Infinity for tail bounds, but those become `null`
+  // after JSON.stringify round-trip through fetchInternal. So a tail bound is detected
+  // as `loInt == null` (cold tail) or `hiInt == null` (hot tail), not strict ±Infinity.
+  const lo = b.loInt, hi = b.hiInt;
+
+  if (b.variable === "low") {
+    const m = weatherCity?.minSoFar;
+    if (m == null) return null;
+    if (lo == null && Number.isFinite(hi)) {
+      // Cold-tail LOW YES: low ≤ hi → continuous low < hi + 0.5.
+      const boundary = hi + 0.5;
+      const gapF = Math.max(0, m - boundary);
+      return { variable: "low", side: "yes", obs: m, boundary, gapF, kind: "drop-needed" };
+    }
+    // Hot-tail LOW YES (low ≥ lo): minSoFar is the strict upper bound on low. If lo > minSoFar,
+    // the bet is auto-loss territory; otherwise it's "model drives" because no further drop
+    // is needed (low is already ≥ lo) and the question is whether it stays ≥ lo through the
+    // remainder of the day. Out of scope for this gate.
+    return null;
+  }
+  if (b.variable === "high") {
+    const m = weatherCity?.maxSoFar;
+    if (m == null) return null;
+    if (hi == null && Number.isFinite(lo)) {
+      // Hot-tail HIGH YES: high ≥ lo → continuous high > lo - 0.5.
+      const boundary = lo - 0.5;
+      const gapF = Math.max(0, boundary - m);
+      return { variable: "high", side: "yes", obs: m, boundary, gapF, kind: "rise-needed" };
+    }
+    return null;
   }
   return null;
 }
@@ -598,6 +662,20 @@ export default async () => {
         if (marginDebug) {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
+        }
+        // Tail-bucket obs-floor gate: for cold-tail LOW YES or hot-tail HIGH YES, the model's
+        // pWin can sit above market price even when the day's extremum is locked well away from
+        // the tail boundary (model truncates above minSoFar / below maxSoFar but doesn't know
+        // the diurnal mode has already passed). Reject when the residual drop/rise required
+        // exceeds BUCKET_TAIL_OBS_GAP_MAX_F. Calibrated against SATX-2026-05-08 T60 YES.
+        const tailGap = tailBucketObsGap(b, cityWeather);
+        if (tailGap && tailGap.gapF > BUCKET_TAIL_OBS_GAP_MAX_F) {
+          skipped.push({ ...briefBet(b), reason: "tail-obs-floor",
+                         gapF: tailGap.gapF.toFixed(2),
+                         thresholdF: BUCKET_TAIL_OBS_GAP_MAX_F,
+                         tailDebug: { ...tailGap, ticker: b.ticker, cityName: b.city,
+                                      kind: tailGap.kind } });
+          continue;
         }
         // Synoptic coverage gate: when the settlement station's 1-min ASOS feed is
         // degraded, our maxSoFar/minSoFar can miss between-METAR spikes that still
