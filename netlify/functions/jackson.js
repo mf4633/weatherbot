@@ -220,6 +220,35 @@ const SERIES_LOOKUP = {
   "KXRAINSFOM":   { city: "San Francisco",     variable: "rain" }
 };
 
+// Inlined Φ/φ + expectedMin/Max — duplicates weather.js (kept private there).
+// Used to compute the OBS-CONSTRAINED model mean: today's actual daily extremum
+// is min(future_trough, minSoFar) for LOW and max(future_peak, maxSoFar) for HIGH,
+// and the unconstrained μ ignores the already-observed bound. Without this
+// correction the dashboard displays an inflated edge — most visibly when
+// minSoFar (LOW) is past the diurnal trough and any further drop is improbable,
+// but the table still shows μ below minSoFar as if the obs hadn't happened.
+function _phi_je(x) { return Math.exp(-x*x/2) / Math.sqrt(2 * Math.PI); }
+function _Phi_je(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989423 * Math.exp(-x*x/2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+function expectedMaxNormal_je(mu, sigma, a) {
+  if (sigma == null || !(sigma > 0) || a == null || mu == null) return mu;
+  const z = (a - mu) / sigma;
+  if (z > 6) return a;
+  if (z < -6) return mu;
+  return mu + (a - mu) * _Phi_je(z) + sigma * _phi_je(z);
+}
+function expectedMinNormal_je(mu, sigma, b) {
+  if (sigma == null || !(sigma > 0) || b == null || mu == null) return mu;
+  const z = (b - mu) / sigma;
+  if (z < -6) return b;
+  if (z > 6) return mu;
+  return mu + (b - mu) * (1 - _Phi_je(z)) - sigma * _phi_je(z);
+}
+
 // Parse a Kalshi market ticker like "KXLOWTCHI-26MAY01-B36.5" into its parts.
 function parseKalshiTicker(ticker) {
   const parts = ticker.split("-");
@@ -297,6 +326,7 @@ function enrichPositions(positions, kalshi, rain) {
     let sellPrice = null, sellProceeds = null, unrealized = null;
     let modelMean = null, modelStd = null;
     let bucketLabel = bucketTicker;
+    let effectiveMean = null, obsBound = null;
 
     if (variable === "rain") {
       // Rain branch: bid/p come from rainbot's full-ticker lookup. modelMean/modelStd
@@ -316,7 +346,7 @@ function enrichPositions(positions, kalshi, rain) {
       }
     } else {
       // Temperature branch (HIGH/LOW): existing logic against kalshi.js bucket data.
-      const cityModel = cityName ? cityByName[cityName]?.model : null;
+      const cityModelLocal = cityName ? cityByName[cityName]?.model : null;
       const bucket = (cityName && variable && bucketTicker)
         ? bucketByCityKey[`${cityName}-${variable}-${bucketTicker}`]
         : null;
@@ -325,10 +355,24 @@ function enrichPositions(positions, kalshi, rain) {
       // the wrong key returned undefined and silently zeroed totalUnrealizedPnl.
       sellPrice = bucket ? (isYes ? bucket.yes_bid : bucket.no_bid) : null;
       bucketLabel = bucket?.bucket || bucketTicker;
-      modelMean = (variable === "high") ? cityModel?.highMean
-                : (variable === "low")  ? cityModel?.lowMean  : null;
-      modelStd  = (variable === "high") ? cityModel?.highStd
-                : (variable === "low")  ? cityModel?.lowStd   : null;
+      modelMean = (variable === "high") ? cityModelLocal?.highMean
+                : (variable === "low")  ? cityModelLocal?.lowMean  : null;
+      modelStd  = (variable === "high") ? cityModelLocal?.highStd
+                : (variable === "low")  ? cityModelLocal?.lowStd   : null;
+      // Obs-constrained mean: today's daily extremum is min(future_trough, minSoFar)
+      // for LOW and max(future_peak, maxSoFar) for HIGH. When the already-observed
+      // bound has passed through the forecast μ, the constrained mean collapses
+      // toward the bound — this is what the market prices, not the raw μ.
+      // Surfaced separately so display can show "77.7→78.1" without changing the
+      // pricing path used elsewhere. Computed inside this branch so it has access
+      // to cityModelLocal (out of scope in the rain branch above).
+      if (variable === "low" && cityModelLocal?.minSoFar != null && modelMean != null && modelStd != null) {
+        effectiveMean = expectedMinNormal_je(modelMean, modelStd, cityModelLocal.minSoFar);
+        obsBound = cityModelLocal.minSoFar;
+      } else if (variable === "high" && cityModelLocal?.maxSoFar != null && modelMean != null && modelStd != null) {
+        effectiveMean = expectedMaxNormal_je(modelMean, modelStd, cityModelLocal.maxSoFar);
+        obsBound = cityModelLocal.maxSoFar;
+      }
     }
 
     if (sellPrice != null) {
@@ -340,6 +384,8 @@ function enrichPositions(positions, kalshi, rain) {
       city: cityName, variable, bucket: bucketLabel,
       modelMean: modelMean != null ? Math.round(modelMean * 100) / 100 : null,
       modelStd:  modelStd  != null ? Math.round(modelStd  * 100) / 100 : null,
+      effectiveMean: effectiveMean != null ? Math.round(effectiveMean * 100) / 100 : null,
+      obsBound:      obsBound      != null ? Math.round(obsBound      * 100) / 100 : null,
       sellPrice,
       sellProceeds: sellProceeds != null ? Math.round(sellProceeds * 100) / 100 : null,
       unrealized_pnl: unrealized != null ? Math.round(unrealized * 100) / 100 : null

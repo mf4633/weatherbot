@@ -427,6 +427,64 @@ for (const sigC of [0.7, 1.0, 1.3]) {
 console.log(`(compare to current tail gate impact: 6 hits, +$27.63 net)`);
 
 // ===========================================================================
+// NO-NEAR-STRIKE A/B — 2026-05-11 LOW-bet loss audit
+// 8 of last 10 LOW NO bets in southern cities lost at strikes within ~1°F of μ.
+// Pattern: μ=70.9, strike at 71 (NO wins if min ≤ 70), σ=1.8 → naive p(NO)≈0.39
+// but bot saw edge from fees/Kelly. When actual came in slightly above strike,
+// NO lost. Gate: require |strike − μ| ≥ marginThr for T-tail NO bets.
+//   LOW NO :  μ ≤ boundary − marginThr   (boundary = loInt − 0.5)
+//   HIGH NO:  μ ≥ boundary + marginThr   (boundary = hiInt + 0.5)
+// Asymmetric to YES — existing tail-obs-floor + bucket-above-obs cover YES side.
+// ===========================================================================
+function noStrikeMargin(bet) {
+  const code = bet.ticker?.split("-").pop() || "";
+  if (!code.startsWith("T")) return null;
+  if ((bet.side || "").toLowerCase() !== "no") return null;
+  if (bet.modelMean == null) return null;
+  const bb = parseBucketStr(bet.bucket);
+  if (!bb) return null;
+  if (bet.variable === "low") {
+    if (bb.loInt === -Infinity || bb.loInt == null) return null;
+    const boundary = bb.loInt - 0.5;
+    return boundary - bet.modelMean;   // + = model below strike (favors NO)
+  }
+  if (bet.variable === "high") {
+    if (bb.hiInt === Infinity || bb.hiInt == null) return null;
+    const boundary = bb.hiInt + 0.5;
+    return bet.modelMean - boundary;   // + = model above strike (favors NO)
+  }
+  return null;
+}
+
+console.log(`\n=== NO-NEAR-STRIKE A/B (T-tail NO bets only) ===`);
+console.log(`marginThr | newly-skipped | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+console.log(`----------+---------------+-----------+----------+----------------+--------------+------`);
+for (const marginThr of [0.5, 1.0, 1.5, 2.0]) {
+  let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+  const hits = [];
+  for (const bet of bets) {
+    const m = noStrikeMargin(bet);
+    if (m == null) continue;
+    if (m < marginThr) {
+      hits.push({ ticker: bet.ticker, variable: bet.variable, city: bet.city,
+                  modelMean: bet.modelMean, marginF: m, outcome: bet.outcome,
+                  realized_pnl: bet.realized_pnl });
+      if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+      else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+    }
+  }
+  const net = lossRec - winForgone;
+  console.log(`  ${marginThr.toFixed(1)}°F   |       ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}`);
+  if (marginThr === 1.0) {
+    console.log(`  (marginThr=1.0 detail:)`);
+    hits.forEach(h => {
+      const out = h.outcome === "LOSS" ? "✓" : "✗";
+      console.log(`    ${out} ${h.ticker} ${h.variable} ${h.city} μ=${h.modelMean} margin=${h.marginF.toFixed(2)}°F pnl=$${h.realized_pnl}`);
+    });
+  }
+}
+
+// ===========================================================================
 // LIQUIDITY PROXY AUDIT — settled records lack at-trade volume/spread, so we
 // approximate by city (per-city volume is stable in days-scale) and by bucket
 // type (T-tail typically thinner than B-bucket near forecast mean). The aim

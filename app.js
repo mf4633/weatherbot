@@ -2,6 +2,16 @@ const grid = document.getElementById("grid");
 const statusEl = document.getElementById("status");
 
 function fmtF(v) { return v == null ? "—" : `${v.toFixed(1)}°F`; }
+// Render a UTC ISO timestamp in the city's local time as "12:30 AM" (no date).
+// Used to annotate maxSoFar / minSoFar readings — a 12:30 AM max is a midnight
+// carryover from the prior evening's warmth, not the day's eventual peak.
+function fmtLocalTime(iso, tz) {
+  if (!iso || !tz) return "";
+  try {
+    return new Date(iso).toLocaleTimeString("en-US",
+      { timeZone: tz, hour: "numeric", minute: "2-digit" });
+  } catch { return ""; }
+}
 function fmtPair(arr) { return arr ? `[${arr[0].toFixed(1)}, ${arr[1].toFixed(1)}]` : "—"; }
 function fmtSigned(v) {
   if (v == null) return "—";
@@ -57,8 +67,8 @@ function renderCard(c) {
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
     <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}</span></div>
     ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS latest <span class="muted small">(n=${c.oneMinAsos.n}, ${c.oneMinAsos.ageMin}m ago)</span></span><span>${fmtF(c.oneMinAsos.latestF)}</span></div>
-    <div class="row"><span>1-min ASOS max today</span><span>${fmtF(c.oneMinAsos.maxSoFar)}</span></div>
-    <div class="row"><span>5-min weighted max <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.max5MinSoFar)}</span></div>` : ""}
+    <div class="row"><span>1-min ASOS max today</span><span>${fmtF(c.oneMinAsos.maxSoFar)}${c.oneMinAsos.maxTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.maxTs, c.tz)}</span>` : ""}</span></div>
+    <div class="row"><span>5-min weighted max <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.max5MinSoFar)}${c.oneMinAsos.max5MinTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.max5MinTs, c.tz)}</span>` : ""}</span></div>` : ""}
     <div class="row"><span>max so far today (obs)</span><span>${fmtF(c.maxSoFar)}</span></div>
     <div class="row"><span>NWS daily high (forecast)</span><span>${c.forecastHighF == null ? "—" : c.forecastHighF + "°F"}</span></div>
     <div class="row"><span>NWS hourly peak (forecast)</span><span>${c.forecastPeakHourly == null ? "—" : c.forecastPeakHourly + "°F"}</span></div>
@@ -75,8 +85,8 @@ function renderCard(c) {
       <div class="pred-label">LOW <span class="tag">${c.lowMethod || ""}</span></div>
       <div class="big ${c.lowMean >= 50 ? '' : 'cool'}">${c.lowMean.toFixed(1)}°F</div>
       <div class="row"><span>min so far today (obs)</span><span>${fmtF(c.minSoFar)}</span></div>
-      ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS min today</span><span>${fmtF(c.oneMinAsos.minSoFar)}</span></div>
-      <div class="row"><span>5-min weighted min <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.min5MinSoFar)}</span></div>` : ""}
+      ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS min today</span><span>${fmtF(c.oneMinAsos.minSoFar)}${c.oneMinAsos.minTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.minTs, c.tz)}</span>` : ""}</span></div>
+      <div class="row"><span>5-min weighted min <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.min5MinSoFar)}${c.oneMinAsos.min5MinTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.min5MinTs, c.tz)}</span>` : ""}</span></div>` : ""}
       <div class="row"><span>NWS daily low (forecast)</span><span>${c.forecastLowF == null ? "—" : c.forecastLowF + "°F"}</span></div>
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.lowStd.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${loCeiled ? `<span class="muted small"> obs-ceiled</span>` : ""}</span><span>${fmtPair(c.lowCi68)}</span></div>
@@ -450,9 +460,23 @@ async function loadJackson() {
         const bucket = mtm.bucket || p.ticker.split("-").pop();
         const sellPx = mtm.sellPrice;
         const unr = mtm.unrealized_pnl;
-        const muSig = (mtm.modelMean != null)
-          ? `${mtm.modelMean.toFixed(mtm.variable === "rain" ? 2 : 1)}±${mtm.modelStd.toFixed(mtm.variable === "rain" ? 2 : 1)}${mtm.variable === "rain" ? '″' : '°F'}`
-          : "—";
+        // Show raw μ and (when materially different) the obs-constrained effective μ.
+        // The constrained μ = E[min(X, minSoFar)] for LOW or E[max(X, maxSoFar)] for HIGH;
+        // it collapses toward the already-observed bound once the diurnal extremum is in.
+        // Display "77.7→78.1°F" tells the operator the bet is bounded by today's obs even
+        // though the raw forecast μ would imply more edge than really exists.
+        const isTemp = mtm.variable !== "rain";
+        let muSig = "—";
+        if (mtm.modelMean != null) {
+          const u = isTemp ? '°F' : '″';
+          const d = isTemp ? 1 : 2;
+          const raw = `${mtm.modelMean.toFixed(d)}±${mtm.modelStd.toFixed(d)}`;
+          if (isTemp && mtm.effectiveMean != null && Math.abs(mtm.effectiveMean - mtm.modelMean) >= 0.1) {
+            muSig = `${raw} → <span class="${mtm.variable === "low" ? 'cool' : 'warm'}">${mtm.effectiveMean.toFixed(1)}</span>${u}`;
+          } else {
+            muSig = `${raw}${u}`;
+          }
+        }
         const purchasedRaw = firstBuyByTicker[p.ticker] || p.last_updated_ts || "";
         const purchased = purchasedRaw.slice(0, 16).replace("T", " ");
         return `<tr>

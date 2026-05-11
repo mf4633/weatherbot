@@ -104,8 +104,15 @@ export function getTodayMaxMin(byStation, station, tzName, now = new Date()) {
   const todayObs = series.filter(o => o.ts >= localMidnightUTC && o.ts <= now);
   if (!todayObs.length) return null;
 
-  const temps = todayObs.map(o => o.tempF);
   const last = todayObs[todayObs.length - 1];
+  // Track the timestamp of the 1-min max/min so the dashboard can annotate
+  // "max 64.4°F at 12:30 AM" — a midnight-carryover peak vs an afternoon peak
+  // look identical without the timestamp.
+  let maxF = -Infinity, minF = Infinity, maxTs = null, minTs = null;
+  for (const o of todayObs) {
+    if (o.tempF > maxF) { maxF = o.tempF; maxTs = o.ts; }
+    if (o.tempF < minF) { minF = o.tempF; minTs = o.ts; }
+  }
 
   // 5-min weighted bucketing: NWS CLI (which Kalshi settles on) extracts daily
   // max/min from ASOS's 5-min weighted observations, NOT raw 1-min. A 1-min
@@ -133,8 +140,10 @@ export function getTodayMaxMin(byStation, station, tzName, now = new Date()) {
     ? buckets.get(latest5MinBucket).sum / buckets.get(latest5MinBucket).n : null;
 
   return {
-    maxSoFar: Math.max(...temps),
-    minSoFar: Math.min(...temps),
+    maxSoFar: maxF,
+    minSoFar: minF,
+    maxTs,
+    minTs,
     latestF: last.tempF,
     latestTs: last.ts,
     n: todayObs.length,

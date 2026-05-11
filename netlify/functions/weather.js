@@ -39,8 +39,14 @@ const CACHE_MS = 3 * 60 * 1000;
 // because deployed model uses NWS forecasts (forecaster-corrected) not raw GFS.
 // Treat as interim until ≥30 days of NWS-vs-CLI residuals are logged via /api/logger.
 const OFFSET_SCALE = 0.5;
+// 2026-05-11: LA HIGH bumped 0.24 → 2.0 after audit showed +2.4°F warm bias
+// (n=3 bounded, std 0.4°F) during persistent marine-layer regime — model leans
+// toward stratus burn-off → 71-72°F highs, actuals stayed 68-70°F. After
+// OFFSET_SCALE=0.5 → applied +1.0°F (half-shrinkage from the bounded mean
+// because n=3 is thin). Watch logger.js dynamic regime correction; revert when
+// the dynamic blob catches up.
 const CITY_OFFSETS_RAW = {
-  "New York":             0.39, "Los Angeles":          0.24, "Chicago":              0.10,
+  "New York":             0.39, "Los Angeles":          2.0,  "Chicago":              0.10,
   "Houston":              1.20, "Phoenix":              0.15, "Philadelphia":         0.00,
   "San Antonio":          1.10, "San Diego":            0.21, "Dallas-Fort Worth":    0.39,
   "Jacksonville":         0.27, "Austin":               0.80, "Tampa":                0.64,
@@ -59,16 +65,28 @@ const CITY_OFFSETS = Object.fromEntries(
 
 // LOW-temp per-city offsets — fit on 1y backtest with hrs-to-trough σ formula.
 // Held-out TEST RMSE 0.91°F. Subtract from prediction (positive = model warm-biased on low).
+// NOTE: 2026-05-11 May regime override for PHX and DFW. Settled LOW-bet audit
+// (10 bounded bets in 4 paused cities) showed:
+//   Phoenix:           n=3 T-bucket NO LOSSes with bounded residual mean -2.92°F
+//                      (model 3°F cold; std 0.12 — exceptionally tight cluster).
+//   Dallas-Fort Worth: n=2 T-bucket bounded residual mean -1.67°F.
+// 5y prior says these should be near zero. Shrink residual half toward 0 →
+// offset_raw -3.0 (PHX) and -2.0 (DFW). After OFFSET_SCALE=0.5 the applied μ shift
+// is +1.5°F (PHX) and +1.0°F (DFW), bringing the model into the recent regime.
+// Houston and San Antonio show bidirectional residuals in the same window
+// (Gulf/coastal moisture flips sign) — kept at long-run priors; cities stay
+// paused until residuals stabilize. Revisit after ≥5 more bounded LOW bets
+// per city, or when logger.js's dynamic regime_corrections blob takes over.
 const CITY_OFFSETS_LOW_RAW = {
   "New York":             0.24,
   "Los Angeles":          0.03,
   "Chicago":              0.24,
   "Houston":              0.28,
-  "Phoenix":              0.46,
+  "Phoenix":              -3.0,   // 2026-05-11: model cold-biased by ~3°F on PHX overnight (n=3, std 0.12)
   "Philadelphia":         0.24,
   "San Antonio":          0.06,
   "San Diego":            0.46,
-  "Dallas-Fort Worth":    0.08,
+  "Dallas-Fort Worth":    -2.0,   // 2026-05-11: model cold-biased ~1.7°F on DFW overnight (n=2)
   "Jacksonville":        -0.21,
   "Austin":               0.05,
   "Tampa":               -0.06,
@@ -1042,6 +1060,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     oneMinAsos: oneMin ? {
       maxSoFar: oneMin.maxSoFar != null ? round(oneMin.maxSoFar) : null,
       minSoFar: oneMin.minSoFar != null ? round(oneMin.minSoFar) : null,
+      maxTs: oneMin.maxTs ? new Date(oneMin.maxTs).toISOString() : null,
+      minTs: oneMin.minTs ? new Date(oneMin.minTs).toISOString() : null,
       latestF: oneMin.latestF != null ? round(oneMin.latestF) : null,
       latestTs: oneMin.latestTs ? new Date(oneMin.latestTs).toISOString() : null,
       ageMin: oneMin.latestTs ? Math.round((Date.now() - new Date(oneMin.latestTs).getTime()) / 60000) : null,

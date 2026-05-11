@@ -61,6 +61,21 @@ const SELL_HYSTERESIS = 0.20;
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
 const STAKE_CEIL_FRAC = 0.10;
+// Hard-pause LOW bets in cities with a sustained warm-overnight bias the model
+// hasn't priced in. 2026-05-11 audit (114 settled): SATX/PHX/HOU/DFW LOW =
+// 17 bets, 1 win, –$131 (–67% ROI); rest of book is –$48 combined. Pattern is
+// NO-side at strikes near μ losing because actual mins come in 1–3°F warmer
+// than forecast — a per-city residual bias, not a sigma problem. Reopen after
+// per-city LOW residuals come back to mean (~10 fresh bets / +$0 cumulative).
+const LOW_PAUSED_CITIES = new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]);
+
+// Hard-pause HIGH bets in LA. 2026-05-11 audit: 0 wins / 7 bets, −$40 (−100% ROI).
+// Mode is marine-layer regime: model leans toward stratus burn-off (μ 71-72°F)
+// but actual stays 68-70°F. 3 of 4 recent failures had σ ≈ 5.5°F — wide member
+// spread that should have suppressed sizing but didn't. Last 3 bounded HIGH
+// residuals: +2.1, +2.9, +2.15°F (mean +2.4, std 0.4°F). Reopen after marine-
+// layer regime breaks AND ≥5 fresh HIGH bets come back to mean.
+const HIGH_PAUSED_CITIES = new Set(["Los Angeles"]);
 
 // Parse a B-bucket ticker code into integer outcome range. Only B-prefix is
 // safely parseable from the code alone — T-prefix is direction-ambiguous (Kalshi
@@ -229,6 +244,29 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
 }
 const SIGMA_COOLING_F = 0.7;     // residual extremum noise given running min/max
 const PI_TAIL_SKIP    = 0.10;    // skip when posterior P(win) < this
+
+// LOW-NO-near-strike gate (2026-05-11). T-tail NO bets in southern cities lost
+// 8 of last 10 at strikes within 1°F of model μ — pattern: μ=70.9 σ=1.8, strike
+// at 71, NO wins if min ≤ 70 (boundary 70.5); margin = 70.5 − 70.9 = −0.4°F.
+// The bot saw EV/Kelly edge from fees and σ but the bet was structurally
+// thin: any forecast revision of 0.5°F flips it. Backtest at thr=1.0°F over
+// 114 settled bets, LOW only: 7 hits, 6 TP/1 FP, +$36.52 net. HIGH side has
+// asymmetric loss/win mix (Houston T76 NO won big at margin −0.1) — gate
+// LOW only. boundary = ticker code N for "≥ N+1" bucket → loInt − 0.5.
+const NO_STRIKE_MARGIN_MIN_F = 1.0;
+function noStrikeMargin(b) {
+  if ((b.side || "").toLowerCase() !== "no") return null;
+  if (b.variable !== "low") return null;   // HIGH excluded — see header
+  const code = (b.ticker || "").split("-").pop();
+  if (!code || !code.startsWith("T")) return null;
+  if (b.modelMean == null) return null;
+  // For LOW T<N> (bucket "≥ N+1"): YES wins at low ≥ N+1; NO wins at low ≤ N.
+  // boundary = loInt − 0.5 where loInt is the bucket's lower integer (N+1).
+  // b.loInt is set upstream by kalshi.js (mirror of bucket parse).
+  if (b.loInt == null || b.loInt === -Infinity) return null;
+  const boundary = b.loInt - 0.5;
+  return boundary - b.modelMean;   // + = model below strike (favors NO)
+}
 
 // Kelly-under-uncertainty (Bayes work order #5): use lower confidence bound on
 // pWin instead of point estimate. σ_p comes from the delta method:
@@ -749,6 +787,14 @@ export default async () => {
       for (const b of qualifying) {
         if (placed >= spareCapacity) { skipped.push({ ...briefBet(b), reason: "no-spare-capacity" }); continue; }
         if (cashDollars - committed < STAKE_FLOOR) { skipped.push({ ...briefBet(b), reason: "out-of-cash" }); continue; }
+        if (b.variable === "low" && LOW_PAUSED_CITIES.has(b.city)) {
+          skipped.push({ ...briefBet(b), reason: "low-city-paused" });
+          continue;
+        }
+        if (b.variable === "high" && HIGH_PAUSED_CITIES.has(b.city)) {
+          skipped.push({ ...briefBet(b), reason: "high-city-paused" });
+          continue;
+        }
         const ageMin = cityForecastAge[b.city];
         if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) { skipped.push({ ...briefBet(b), reason: "forecast-stale", ageMin: Math.round(ageMin) }); continue; }
         // Resolve event ticker → full market ticker like KXHIGHNY-26MAY02-B65.5.
@@ -827,6 +873,19 @@ export default async () => {
                            halfKellyLCB: halfKellyLCB.toFixed(3) });
             continue;
           }
+        }
+        // LOW NO-near-strike gate (2026-05-11): for T-tail LOW NO bets, require model μ
+        // safely below the boundary. Catches the "μ within 1°F of strike, σ wide, NO loses
+        // when actual comes in slightly above strike" pattern that ran 8/10 losses across
+        // PHX/SATX/HOU/DFW. Backtest A/B at thr=1.0°F: 6 TP / 1 FP, +$36.52 net.
+        const noMargin = noStrikeMargin(b);
+        if (noMargin != null && noMargin < NO_STRIKE_MARGIN_MIN_F) {
+          skipped.push({ ...briefBet(b), reason: "no-strike-margin-thin",
+                         marginF: noMargin.toFixed(2),
+                         thresholdF: NO_STRIKE_MARGIN_MIN_F,
+                         strikeDebug: { ticker: b.ticker, cityName: b.city,
+                                        modelMean: b.modelMean, loInt: b.loInt } });
+          continue;
         }
         // B-bucket "obs past bucket" gate: catches LOW YES on B-bucket where minSoFar is
         // already above the bucket's upper edge (or HIGH YES below maxSoFar). Existing
