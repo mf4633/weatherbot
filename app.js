@@ -5,6 +5,40 @@ function slugify(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 function cardIdFor(name) { return `card-${slugify(name)}`; }
+function cityLink(name) {
+  if (!name || name === "—") return name || "—";
+  return `<a class="city-link" href="#${cardIdFor(name)}">${name}</a>`;
+}
+
+// Cities the model runs on but Kalshi does not list (kept in sync with kalshi.js CITY_TO_KALSHI).
+const NO_KALSHI_MARKET = new Set([
+  "Asheville", "San Diego", "Jacksonville", "Tampa",
+  "San Jose", "Columbus", "Charlotte", "Indianapolis"
+]);
+const CALIBRATING_CITIES = new Set(["Asheville"]);
+
+let jacksonPositionsByCity = {};
+let initialHashHandled = false;
+
+function updateJacksonBadges() {
+  document.querySelectorAll(".jackson-badge").forEach(el => el.remove());
+  for (const [city, info] of Object.entries(jacksonPositionsByCity)) {
+    const cardEl = document.getElementById(cardIdFor(city));
+    if (!cardEl) continue;
+    const sign = info.unrealized >= 0 ? "+" : "−";
+    const abs = Math.abs(info.unrealized).toFixed(2);
+    const badge = document.createElement("div");
+    badge.className = "jackson-badge";
+    badge.innerHTML = `🟢 Jackson holds ${info.n} position${info.n === 1 ? "" : "s"} <span class="muted">· $${info.exposure.toFixed(2)} at risk · ${sign}$${abs} unrealized</span>`;
+    cardEl.appendChild(badge);
+  }
+}
+
+function handleHashOnLoad() {
+  if (initialHashHandled) return;
+  if (!location.hash || location.hash.length < 2) { initialHashHandled = true; return; }
+  if (pulseCard(location.hash.slice(1))) initialHashHandled = true;
+}
 
 
 function fmtF(v) { return v == null ? "—" : `${v.toFixed(1)}°F`; }
@@ -69,8 +103,13 @@ function renderCard(c) {
     ? `<div class="row"><span>obs vs forecast bias</span><span class="${c.biasF >= 0 ? 'warm' : 'cool'}">${fmtSigned(c.biasF)}</span></div>`
     : "";
   const methodTag = `<span class="tag">${c.method}</span>`;
+  const noMarketTag = NO_KALSHI_MARKET.has(c.name)
+    ? `<span class="tag no-market-tag">no Kalshi mkt</span>` : "";
+  const calibratingNote = CALIBRATING_CITIES.has(c.name)
+    ? `<div class="calibrating-note">calibrating — n=0 logged residuals; prediction is raw NWS + national-shrink prior</div>` : "";
   return `<div class="card" id="${cardId}">
-    <h2>${c.name} ${methodTag}</h2>
+    <h2>${c.name} ${methodTag}${noMarketTag}</h2>
+    ${calibratingNote}
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
     <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}</span></div>
     ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS latest <span class="muted small">(n=${c.oneMinAsos.n}, ${c.oneMinAsos.ageMin}m ago)</span></span><span>${fmtF(c.oneMinAsos.latestF)}</span></div>
@@ -108,6 +147,8 @@ async function load() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     grid.innerHTML = j.cities.map(renderCard).join("");
+    updateJacksonBadges();
+    handleHashOnLoad();
     const t = new Date(j.ts || Date.now()).toLocaleTimeString();
     const cacheNote = j.cached ? ` (server cache, ${Math.round(j.ageMs / 1000)}s old)` : "";
     statusEl.textContent = `Updated ${t}${cacheNote} • next client refresh in 60s`;
@@ -327,7 +368,7 @@ async function loadPaper() {
           const contracts = b.price > 0 ? Math.round(b.stake_dollars / b.price * 10) / 10 : "—";
           const placed = (b.placedAtUTC || "").slice(0, 16).replace("T", " ");
           return `<tr>
-            <td>${b.city}</td>
+            <td>${cityLink(b.city)}</td>
             <td class="muted small">${b.variable || "high"}</td>
             <td>${b.bucket || b.ticker}</td>
             <td class="${b.side === 'YES' ? 'warm' : 'cool'}">${b.side}</td>
@@ -353,7 +394,7 @@ async function loadPaper() {
           <th>Date</th><th>City</th><th>Bucket</th><th>Side</th><th>Entry</th><th>Outcome</th><th>Actual</th><th>P&L</th>
         </tr></thead><tbody>${settled.map(s => `<tr>
           <td class="muted small">${s.targetLocalDate || ""}</td>
-          <td>${s.city}</td>
+          <td>${cityLink(s.city)}</td>
           <td>${s.bucket || s.ticker}</td>
           <td class="${s.side === 'YES' ? 'warm' : 'cool'}">${s.side}</td>
           <td>Đ${s.price.toFixed(2)}</td>
@@ -373,7 +414,7 @@ async function loadPaper() {
         citiesEl.innerHTML = `<table class="paper-table"><thead><tr>
           <th>City</th><th>Bets</th><th>Wins</th><th>Sold</th><th>Win%</th><th>Staked</th><th>P&L</th><th>ROI</th>
         </tr></thead><tbody>${cities.map(c => `<tr>
-          <td>${c.city || c.cli}</td>
+          <td>${cityLink(c.city || c.cli)}</td>
           <td>${c.n}</td><td>${c.wins}</td><td>${c.sold || 0}</td>
           <td>${c.win_rate_pct.toFixed(1)}%</td>
           <td>Đ${c.staked.toFixed(2)}</td>
@@ -427,6 +468,19 @@ async function loadJackson() {
     const totalExposure = heldPositions.reduce((a, p) => a + p._exposure, 0);
     const mtmByTicker = j.markToMarket || {};
     const totalUnrealized = j.totalUnrealizedPnl ?? 0;
+    // Roll up open positions by city for the card badges.
+    const posByCity = {};
+    for (const p of heldPositions) {
+      const m = mtmByTicker[p.ticker] || {};
+      const city = m.city;
+      if (!city || city === "—") continue;
+      if (!posByCity[city]) posByCity[city] = { n: 0, unrealized: 0, exposure: 0 };
+      posByCity[city].n++;
+      posByCity[city].unrealized += (m.unrealized_pnl || 0);
+      posByCity[city].exposure += p._exposure;
+    }
+    jacksonPositionsByCity = posByCity;
+    updateJacksonBadges();
     const totalRealized = j.totalRealizedPnl ?? 0;
     const totalFees = j.totalFeesPaid ?? 0;
     const totalPnl = j.totalPnl ?? (totalRealized + totalUnrealized);
