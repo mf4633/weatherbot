@@ -195,6 +195,15 @@ const BUCKET_TAIL_OBS_GAP_MAX_F = 1.5; // T-tail YES drop/rise-needed threshold
 const BUCKET_ABOVE_OBS_GAP_MAX_F = 0.4; // B-YES above-obs drop-needed threshold
 const BUY_CITYVAR_COOLDOWN_MIN = 60;   // city+variable lockout after a buy
 
+// Mirror of jackson_trader.js city pauses (real-money side). 2026-05-11 audits
+// identified per-city forecast bias and structural overconfidence in these
+// cities. Keep paper and real-money trading on the same allowlist so paper
+// remains a valid mirror of what the live bot does; otherwise paper P&L
+// drifts from real and stops being a useful comparator. Rain candidates are
+// not affected — pauses are about per-city HIGH/LOW model bias only.
+const LOW_PAUSED_CITIES_COMBO  = new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]);
+const HIGH_PAUSED_CITIES_COMBO = new Set(["Los Angeles"]);
+
 const cityVarKey = (city, variable) => `cv:${city}:${variable}`;
 
 // B-bucket margin: catches bets where the already-observed extremum sits in a
@@ -507,6 +516,16 @@ export default async () => {
     // Weather-source protective gates. Skip these for rain candidates (rain has different
     // resolution mechanics — daily binary or monthly accumulation, no diurnal min/max).
     if (c.source === "weather") {
+      // City pause — mirror of jackson_trader.js. See LOW_PAUSED_CITIES_COMBO header.
+      if (c.variable === "low" && LOW_PAUSED_CITIES_COMBO.has(c.city)) {
+        skipped.push({ ...c, reason: "low-city-paused" });
+        continue;
+      }
+      if (c.variable === "high" && HIGH_PAUSED_CITIES_COMBO.has(c.city)) {
+        skipped.push({ ...c, reason: "high-city-paused" });
+        continue;
+      }
+
       const cityWeather = (weatherData?.cities || []).find(x => x.name === c.city);
 
       // B-bucket margin: NO 0.6°F threshold, YES 1.5°F.
