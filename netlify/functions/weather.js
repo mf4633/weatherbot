@@ -7,6 +7,7 @@ import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 
 const CITIES = [
+  { name: "Asheville",      cli: "AVL", station: "KAVL", lat: 35.4362, lon: -82.5414, tz: "America/New_York" },
   { name: "New York",       cli: "NYC", station: "KNYC", lat: 40.7789, lon: -73.9692, tz: "America/New_York" },
   { name: "Los Angeles",    cli: "LAX", station: "KLAX", lat: 33.9425, lon: -118.4081, tz: "America/Los_Angeles" },
   { name: "Chicago",        cli: "MDW", station: "KMDW", lat: 41.7860, lon: -87.7524, tz: "America/Chicago" },

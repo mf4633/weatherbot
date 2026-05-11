@@ -6,73 +6,6 @@ function slugify(s) {
 }
 function cardIdFor(name) { return `card-${slugify(name)}`; }
 
-let ashevilleData = null;
-let ashevilleForecastURL = null;
-
-function renderAshevilleCard(d) {
-  d = d || {};
-  const id = cardIdFor("Asheville, NC");
-  const currF = d.currentF != null ? `${d.currentF.toFixed(1)}°F` : (d.error ? "—" : "loading…");
-  const highF = d.dayHigh != null ? `${d.dayHigh}°F` : "—";
-  const lowF  = d.nightLow != null ? `${d.nightLow}°F` : "—";
-  const dayLbl = (d.dayLabel || "today").toLowerCase();
-  const nightLbl = (d.nightLabel || "tonight").toLowerCase();
-  const obsTime = d.updatedAt
-    ? new Date(d.updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
-    : "";
-  const shortFc = d.shortForecast || "";
-  return `<div class="card pinned" id="${id}">
-    <h2>Asheville, NC <span class="tag">pinned · NWS</span></h2>
-    <div class="cli">KAVL • CLIAVL • home base${obsTime ? " • obs " + obsTime : ""}</div>
-    <div class="row"><span>current</span><span>${currF}</span></div>
-    <div class="row"><span>NWS ${dayLbl} high (forecast)</span><span class="warm">${highF}</span></div>
-    <div class="row"><span>NWS ${nightLbl} low (forecast)</span><span class="cool">${lowF}</span></div>
-    ${shortFc ? `<div class="row"><span>conditions</span><span class="muted">${shortFc}</span></div>` : ""}
-    <div class="pred">
-      <div class="pred-label">DISPLAY ONLY · NO KALSHI MARKET</div>
-      <div class="muted" style="font-size:12px; line-height:1.5; margin-top:4px">
-        Outside the top-20 universe — no model fit or settlement market. Forecast pulled live from api.weather.gov.
-        ${d.error ? `<br><span class="warm">NWS error: ${d.error}</span>` : ""}
-      </div>
-    </div>
-  </div>`;
-}
-
-async function loadAsheville() {
-  try {
-    if (!ashevilleForecastURL) {
-      const pr = await fetch("https://api.weather.gov/points/35.4362,-82.5414");
-      if (!pr.ok) throw new Error(`points ${pr.status}`);
-      ashevilleForecastURL = (await pr.json()).properties?.forecast;
-      if (!ashevilleForecastURL) throw new Error("no forecast url");
-    }
-    const [fcRes, obsRes] = await Promise.all([
-      fetch(ashevilleForecastURL),
-      fetch("https://api.weather.gov/stations/KAVL/observations/latest").catch(() => null)
-    ]);
-    if (!fcRes.ok) throw new Error(`forecast ${fcRes.status}`);
-    const fc = await fcRes.json();
-    const obs = obsRes && obsRes.ok ? await obsRes.json() : null;
-    const periods = fc.properties?.periods || [];
-    const dayPeriod = periods.find(p => p.isDaytime);
-    const nightPeriod = periods.find(p => !p.isDaytime);
-    const tempC = obs?.properties?.temperature?.value;
-    const currentF = tempC != null ? tempC * 9 / 5 + 32 : null;
-    ashevilleData = {
-      currentF,
-      dayHigh: dayPeriod?.temperature,
-      dayLabel: dayPeriod?.name,
-      nightLow: nightPeriod?.temperature,
-      nightLabel: nightPeriod?.name,
-      shortForecast: dayPeriod?.shortForecast,
-      updatedAt: obs?.properties?.timestamp
-    };
-  } catch (e) {
-    if (!ashevilleData) ashevilleData = { error: e.message };
-  }
-  const el = document.getElementById(cardIdFor("Asheville, NC"));
-  if (el) el.outerHTML = renderAshevilleCard(ashevilleData);
-}
 
 function fmtF(v) { return v == null ? "—" : `${v.toFixed(1)}°F`; }
 // Render a UTC ISO timestamp in the city's local time as "12:30 AM" (no date).
@@ -174,7 +107,7 @@ async function load() {
     const r = await fetch("/api/weather", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    grid.innerHTML = renderAshevilleCard(ashevilleData) + j.cities.map(renderCard).join("");
+    grid.innerHTML = j.cities.map(renderCard).join("");
     const t = new Date(j.ts || Date.now()).toLocaleTimeString();
     const cacheNote = j.cached ? ` (server cache, ${Math.round(j.ageMs / 1000)}s old)` : "";
     statusEl.textContent = `Updated ${t}${cacheNote} • next client refresh in 60s`;
@@ -813,10 +746,8 @@ loadKalshi();
 loadPaper();
 loadCombo();
 loadJackson();
-loadAsheville();
 setInterval(load, 60_000);
 setInterval(loadKalshi, 120_000);
 setInterval(loadPaper, 60_000);
 setInterval(loadCombo, 60_000);
 setInterval(loadJackson, 60_000);
-setInterval(loadAsheville, 5 * 60_000);
