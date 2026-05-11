@@ -1,6 +1,25 @@
 const grid = document.getElementById("grid");
 const statusEl = document.getElementById("status");
 
+function slugify(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+function cardIdFor(name) { return `card-${slugify(name)}`; }
+
+function renderAshevilleCard() {
+  return `<div class="card pinned" id="${cardIdFor("Asheville, NC")}">
+    <h2>Asheville, NC <span class="tag">pinned</span></h2>
+    <div class="cli">home base • no Kalshi market</div>
+    <div class="pred">
+      <div class="pred-label">DISPLAY ONLY</div>
+      <div class="muted" style="font-size:12px; line-height:1.5; margin-top:4px">
+        Outside the top-20 city universe, so no live forecast pipeline or settlement market.
+        Pinned here as weatherbot's home station.
+      </div>
+    </div>
+  </div>`;
+}
+
 function fmtF(v) { return v == null ? "—" : `${v.toFixed(1)}°F`; }
 // Render a UTC ISO timestamp in the city's local time as "12:30 AM" (no date).
 // Used to annotate maxSoFar / minSoFar readings — a 12:30 AM max is a midnight
@@ -20,8 +39,9 @@ function fmtSigned(v) {
 }
 
 function renderCard(c) {
+  const cardId = cardIdFor(c.name);
   if (c.error) {
-    return `<div class="card error">
+    return `<div class="card error" id="${cardId}">
       <h2>${c.name}</h2>
       <div class="cli">CLI${c.cli} • ${c.station}</div>
       <div class="big">no data</div>
@@ -62,7 +82,7 @@ function renderCard(c) {
     ? `<div class="row"><span>obs vs forecast bias</span><span class="${c.biasF >= 0 ? 'warm' : 'cool'}">${fmtSigned(c.biasF)}</span></div>`
     : "";
   const methodTag = `<span class="tag">${c.method}</span>`;
-  return `<div class="card">
+  return `<div class="card" id="${cardId}">
     <h2>${c.name} ${methodTag}</h2>
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
     <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}</span></div>
@@ -100,7 +120,7 @@ async function load() {
     const r = await fetch("/api/weather", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    grid.innerHTML = j.cities.map(renderCard).join("");
+    grid.innerHTML = renderAshevilleCard() + j.cities.map(renderCard).join("");
     const t = new Date(j.ts || Date.now()).toLocaleTimeString();
     const cacheNote = j.cached ? ` (server cache, ${Math.round(j.ageMs / 1000)}s old)` : "";
     statusEl.textContent = `Updated ${t}${cacheNote} • next client refresh in 60s`;
@@ -521,7 +541,7 @@ async function loadJackson() {
         citiesEl.innerHTML = `<table class="paper-table"><thead><tr>
           <th>City</th><th>Settled</th><th>W</th><th>L</th><th>Sold</th><th>Win%</th><th>Open</th><th>Staked</th><th>Realized</th><th>Unreal</th><th>Total P&L</th><th>ROI</th>
         </tr></thead><tbody>${cities.map(c => `<tr>
-          <td>${c.city}</td>
+          <td><a class="city-link" href="#${cardIdFor(c.city)}">${c.city}</a></td>
           <td>${c.n_settled}</td>
           <td>${c.wins}</td>
           <td>${c.losses}</td>
@@ -710,6 +730,26 @@ async function loadCombo() {
     statusEl.className = "sub";
   }
 }
+
+function pulseCard(id) {
+  const el = document.getElementById(id);
+  if (!el) return false;
+  el.classList.remove("pulse");
+  void el.offsetWidth;
+  el.classList.add("pulse");
+  el.addEventListener("animationend", () => el.classList.remove("pulse"), { once: true });
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a.city-link");
+  if (!a) return;
+  const href = a.getAttribute("href") || "";
+  if (!href.startsWith("#")) return;
+  e.preventDefault();
+  const id = href.slice(1);
+  if (pulseCard(id)) history.replaceState(null, "", "#" + id);
+});
 
 load();
 loadKalshi();
