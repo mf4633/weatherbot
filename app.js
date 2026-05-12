@@ -111,7 +111,7 @@ function renderCard(c) {
     <h2>${c.name} ${methodTag}${noMarketTag}</h2>
     ${calibratingNote}
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
-    <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}</span></div>
+    <div class="row"><span>current</span><span>${fmtF(c.currentTemp)}${c.lastMetarTime ? ` <span class="muted small">at ${fmtLocalTime(c.lastMetarTime, c.tz)}${c.lastMetarAgeMin != null ? `, ${c.lastMetarAgeMin}m ago` : ""}</span>` : ""}</span></div>
     ${c.oneMinAsos ? `<div class="row"><span>1-min ASOS latest <span class="muted small">(n=${c.oneMinAsos.n}, ${c.oneMinAsos.ageMin}m ago)</span></span><span>${fmtF(c.oneMinAsos.latestF)}</span></div>
     <div class="row"><span>1-min ASOS max today</span><span>${fmtF(c.oneMinAsos.maxSoFar)}${c.oneMinAsos.maxTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.maxTs, c.tz)}</span>` : ""}</span></div>
     <div class="row"><span>5-min weighted max <span class="muted small">(CLI settle basis)</span></span><span>${fmtF(c.oneMinAsos.max5MinSoFar)}${c.oneMinAsos.max5MinTs ? ` <span class="muted small">at ${fmtLocalTime(c.oneMinAsos.max5MinTs, c.tz)}</span>` : ""}</span></div>` : ""}
