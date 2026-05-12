@@ -5,6 +5,7 @@ import { getStore } from "@netlify/blobs";
 import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
+import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS } from "./lib/regime.js";
 
 const CITIES = [
   { name: "Asheville",      cli: "AVL", station: "KAVL", lat: 35.4362, lon: -82.5414, tz: "America/New_York" },
@@ -821,12 +822,32 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
-    // Regime correction: damped 7-day forecast bias on top of the long-run offset.
-    const regimeResidual = resolveRegimeResidual(city, regimeBlob);
-    if (regimeResidual != null && Math.abs(regimeResidual) > REGIME_FLOOR_F) {
-      const damping = resolveRegimeDamping(city, regimeBlob, regimeResidual);
-      priorMean -= damping * regimeResidual;
+    // Regime correction: Kalman filter (primary) with heuristic 7d fallback. The
+    // Kalman path (lib/regime.js) replaces the prior 7d-rolling × damping heuristic
+    // for the 20 cities with fitted params. State-space model has σ_walk/σ_obs fit
+    // offline from 5y per-city history; logger.js updates μ_t daily; this function
+    // reads μ_t|t-1 and P_t|t-1 advanced one day. Backtest A/B (n=15894): overall
+    // ΔRMSE −0.024°F, regime-day ΔRMSE −0.20°F, sustained-regime ΔRMSE −0.60°F vs
+    // heuristic. Kalman applies 2.2× the heuristic's correction on regime days.
+    // Quiet-day gate (|μ|<0.5°F) skips small corrections that would otherwise
+    // regress quiet-day RMSE by +0.39°F. Heuristic path retained for AVL (no fit
+    // yet) and as a backstop if KALMAN_PARAMS lookup ever fails.
+    let kalmanBiasSigma2 = 0;  // P + σ_walk² contribution to priorStd²
+    const kalman = kalmanCorrection(city.cli, regimeBlob);
+    if (kalman && Math.abs(kalman.mu) >= KALMAN_FLOOR_F) {
+      priorMean -= kalman.mu;
+      kalmanBiasSigma2 = kalman.P;
+    } else if (!kalman) {
+      // Fallback: cities without Kalman params (e.g., Asheville) use the legacy
+      // heuristic. Same logic as before the Kalman wiring landed.
+      const regimeResidual = resolveRegimeResidual(city, regimeBlob);
+      if (regimeResidual != null && Math.abs(regimeResidual) > REGIME_FLOOR_F) {
+        const damping = resolveRegimeDamping(city, regimeBlob, regimeResidual);
+        priorMean -= damping * regimeResidual;
+      }
     }
+    // (If kalman is non-null but |μ|<floor, we skip the correction entirely —
+    // matches the heuristic REGIME_FLOOR_F=0.5°F gate.)
     // Warming-rate observation term (V3): project current obs trajectory forward and
     // blend with forecast-prior, ONLY in the afternoon window (hrsToPeak ≤ 3). 5y backtest
     // (n_test=14400): all-hours linear extrapolation degrades RMSE 9.3% (early-morning
@@ -877,11 +898,19 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const sigmaEnsembleEffective = sigmaEnsemblePeak ?? 0.8;
     // σ_frontal applied below as fallback after late-warming check, not here —
     // avoids double-inflating when the warm-front branch already widens σ to 1.5°F.
+    // Kalman bias uncertainty propagates into σ in quadrature. P_t|t-1 from the
+    // forward-filter predict step is the posterior variance of the bias estimate
+    // ADVANCED ONE DAY (state walks by σ_walk² overnight). On settled regimes P
+    // is small (~0.2-0.7°F², σ contribution 0.4-0.8°F); during regime changes P
+    // expands. This replaces the Change #1 heuristic σ floor at |biasF| for the
+    // cross-day component while keeping that floor for the intraday signal.
     let priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
-                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F);
+                              + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F
+                              + kalmanBiasSigma2);
     if (obsDisagreementFired) {
       // σ floor: |biasF| as the magnitude of forecast error already realized.
       // Capped at 3°F to avoid pathologically wide CIs when bias is extreme.
+      // This is the INTRADAY signal — orthogonal to Kalman's cross-day state.
       priorStd = Math.max(priorStd, Math.min(3.0, Math.abs(biasF)));
     }
     // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =

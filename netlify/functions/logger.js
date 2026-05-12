@@ -21,6 +21,7 @@
 //       REGIME_RESIDUAL_SEED whenever it's defined.
 
 import { getStore } from "@netlify/blobs";
+import { kalmanInit, kalmanStep } from "./lib/regime.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const UA = "weatherbot-logger";
@@ -131,6 +132,11 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
   const dyn  = regimeBlob.per_city_residual_mean_7d || {};
   const dyn3 = regimeBlob.per_city_residual_mean_3d || {};
   const hist = regimeBlob.per_city_history || {};
+  // Kalman state per city: { mu, P, last_update }. weather.js reads this and
+  // applies μ as priorMean shift, (P + σ_walk²) as additional priorStd² in
+  // quadrature. Replaces the 7d/3d rolling-mean heuristic where Kalman params
+  // exist for the city (all 20 currently in lib/regime.js KALMAN_PARAMS).
+  const kalmanState = regimeBlob.per_city_kalman_state || {};
   const settledNow = [];
   let dirty = false;
 
@@ -158,10 +164,25 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     // dyn (7d), weather.js raises REGIME_DAMPING to override the prior faster. Without
     // this, a 3-4 day systematic bias (e.g., PHX 2026-05-07→05-10) barely moves the
     // 7d mean because 4 new entries are diluted by 3 older entries with opposite sign.
+    // Retained alongside Kalman for cities without fitted Kalman params (and as a
+    // backstop if the Kalman state ever drifts pathologically).
     const last3 = cityHist.slice(-SHORT_WINDOW);
     dyn3[c.name] = last3.length >= SHORT_WINDOW
       ? last3.reduce((a, e) => a + e.residual, 0) / last3.length
       : null;
+    // Kalman regime update: one forward-filter step using fitted per-city params.
+    // Indexed by city.cli code (matches data_models.json keys; lib/regime.js
+    // KALMAN_PARAMS). Initializes from seed if no blob entry exists yet.
+    const cliCode = c.cli;
+    if (cliCode) {
+      const prior = kalmanState[cliCode] && Number.isFinite(kalmanState[cliCode].mu)
+        ? kalmanState[cliCode]
+        : kalmanInit(cliCode);
+      if (prior) {
+        const posterior = kalmanStep(prior, residual, cliCode);
+        if (posterior) kalmanState[cliCode] = posterior;
+      }
+    }
 
     pred.settled = true;
     pred.actualHigh = cliData.maxF;
@@ -171,7 +192,8 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     settledNow.push({
       city: c.name, date: yesterday,
       predicted: pred.predHigh, actual: cliData.maxF,
-      residual, rolling7: dyn[c.name], rolling3: dyn3[c.name]
+      residual, rolling7: dyn[c.name], rolling3: dyn3[c.name],
+      kalman: c.cli ? kalmanState[c.cli] : null
     });
     dirty = true;
   }
@@ -179,6 +201,7 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
   if (dirty) {
     regimeBlob.per_city_residual_mean_7d = dyn;
     regimeBlob.per_city_residual_mean_3d = dyn3;
+    regimeBlob.per_city_kalman_state = kalmanState;
     regimeBlob.per_city_history = hist;
     regimeBlob.updated_at = new Date(now).toISOString();
     await regimeStore.setJSON("global", regimeBlob);

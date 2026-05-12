@@ -2,7 +2,8 @@
   "NYC": {
     "sigma_walk": 0.4971,
     "sigma_obs": 1.5197,
-    "mu_init": -10.8117,
+    "mu_seed": -0.1902,
+    "p_seed": 0.6362,
     "n_days": 825,
     "em_iters": 30,
     "date_range": "2022-01-15..2026-05-03",
@@ -11,7 +12,8 @@
   "LAX": {
     "sigma_walk": 0.2797,
     "sigma_obs": 1.4592,
-    "mu_init": 0.3857,
+    "mu_seed": 0.2066,
+    "p_seed": 0.3714,
     "n_days": 820,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-02",
@@ -20,7 +22,8 @@
   "MDW": {
     "sigma_walk": 0.4554,
     "sigma_obs": 1.4984,
-    "mu_init": -14.6333,
+    "mu_seed": -0.3465,
+    "p_seed": 0.5842,
     "n_days": 845,
     "em_iters": 30,
     "date_range": "2021-12-07..2026-05-03",
@@ -29,7 +32,8 @@
   "HOU": {
     "sigma_walk": 0.2994,
     "sigma_obs": 1.4723,
-    "mu_init": -0.7287,
+    "mu_seed": 1.1729,
+    "p_seed": 0.3983,
     "n_days": 822,
     "em_iters": 5,
     "date_range": "2024-02-02..2026-05-03",
@@ -38,7 +42,8 @@
   "PHX": {
     "sigma_walk": 0.2354,
     "sigma_obs": 0.9252,
-    "mu_init": 0.3085,
+    "mu_seed": 0.0879,
+    "p_seed": 0.1925,
     "n_days": 821,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-02",
@@ -47,7 +52,8 @@
   "PHL": {
     "sigma_walk": 0.2829,
     "sigma_obs": 1.4341,
-    "mu_init": -2.2821,
+    "mu_seed": -1.0024,
+    "p_seed": 0.3681,
     "n_days": 823,
     "em_iters": 30,
     "date_range": "2022-12-24..2026-05-03",
@@ -56,7 +62,8 @@
   "SAT": {
     "sigma_walk": 0.2695,
     "sigma_obs": 1.6556,
-    "mu_init": -0.8771,
+    "mu_seed": 1.0919,
+    "p_seed": 0.4124,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -65,7 +72,8 @@
   "SAN": {
     "sigma_walk": 0.3011,
     "sigma_obs": 1.0635,
-    "mu_init": 0.5141,
+    "mu_seed": 0.2875,
+    "p_seed": 0.2779,
     "n_days": 810,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-02",
@@ -74,7 +82,8 @@
   "DFW": {
     "sigma_walk": 0.3209,
     "sigma_obs": 1.5414,
-    "mu_init": -0.8928,
+    "mu_seed": 0.5407,
+    "p_seed": 0.4453,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -83,7 +92,8 @@
   "JAX": {
     "sigma_walk": 0.3173,
     "sigma_obs": 1.2862,
-    "mu_init": -0.15,
+    "mu_seed": -1.4675,
+    "p_seed": 0.3604,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -92,7 +102,8 @@
   "AUS": {
     "sigma_walk": 0.3045,
     "sigma_obs": 1.6361,
-    "mu_init": -0.7783,
+    "mu_seed": 0.6888,
+    "p_seed": 0.4539,
     "n_days": 822,
     "em_iters": 24,
     "date_range": "2024-02-02..2026-05-03",
@@ -101,7 +112,8 @@
   "TPA": {
     "sigma_walk": 0.3756,
     "sigma_obs": 1.1771,
-    "mu_init": -0.1879,
+    "mu_seed": -0.3671,
+    "p_seed": 0.3756,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -110,7 +122,8 @@
   "SJC": {
     "sigma_walk": 0.3961,
     "sigma_obs": 1.7677,
-    "mu_init": -0.6173,
+    "mu_seed": -0.4753,
+    "p_seed": 0.623,
     "n_days": 821,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-02",
@@ -119,7 +132,8 @@
   "CMH": {
     "sigma_walk": 0.5517,
     "sigma_obs": 1.3974,
-    "mu_init": -14.7514,
+    "mu_seed": -0.0565,
+    "p_seed": 0.6303,
     "n_days": 831,
     "em_iters": 30,
     "date_range": "2022-01-07..2026-05-03",
@@ -128,7 +142,8 @@
   "CLT": {
     "sigma_walk": 0.2366,
     "sigma_obs": 1.6038,
-    "mu_init": 0.7403,
+    "mu_seed": -0.3193,
+    "p_seed": 0.3546,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -137,7 +152,8 @@
   "IND": {
     "sigma_walk": 0.5623,
     "sigma_obs": 1.3956,
-    "mu_init": -15.7991,
+    "mu_seed": 0.3588,
+    "p_seed": 0.6398,
     "n_days": 835,
     "em_iters": 30,
     "date_range": "2022-01-06..2026-05-03",
@@ -146,7 +162,8 @@
   "SEA": {
     "sigma_walk": 0.297,
     "sigma_obs": 1.5814,
-    "mu_init": -3.6843,
+    "mu_seed": 0.6279,
+    "p_seed": 0.4277,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2021-12-27..2026-05-02",
@@ -155,7 +172,8 @@
   "DEN": {
     "sigma_walk": 0.4598,
     "sigma_obs": 1.8667,
-    "mu_init": -11.279,
+    "mu_seed": -1.1502,
+    "p_seed": 0.7544,
     "n_days": 837,
     "em_iters": 30,
     "date_range": "2022-01-01..2026-05-03",
@@ -164,7 +182,8 @@
   "DCA": {
     "sigma_walk": 0.3579,
     "sigma_obs": 1.4986,
-    "mu_init": -0.3119,
+    "mu_seed": 0.0971,
+    "p_seed": 0.4746,
     "n_days": 822,
     "em_iters": 30,
     "date_range": "2024-02-02..2026-05-03",
@@ -173,7 +192,8 @@
   "BOS": {
     "sigma_walk": 0.4306,
     "sigma_obs": 1.5743,
-    "mu_init": -10.8487,
+    "mu_seed": -1.0909,
+    "p_seed": 0.5877,
     "n_days": 828,
     "em_iters": 30,
     "date_range": "2022-01-11..2026-05-03",

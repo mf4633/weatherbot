@@ -97,10 +97,11 @@ function smoother(filt, sigmaWalk) {
 function emFit(y, mu0Init) {
   let sigmaWalk = SIGMA_WALK_INIT;
   let sigmaObs = SIGMA_OBS_INIT;
-  let muInit = mu0Init;
+  let muInitSmoother = mu0Init;
   let iterUsed = MAX_EM_ITER;
+  let finalFilt = null;
   for (let it = 0; it < MAX_EM_ITER; it++) {
-    const filt = forwardFilter(y, muInit, P0, sigmaWalk, sigmaObs);
+    const filt = forwardFilter(y, muInitSmoother, P0, sigmaWalk, sigmaObs);
     const sm = smoother(filt, sigmaWalk);
     let sumObs = 0;
     for (let t = 0; t < y.length; t++) sumObs += (y[t] - sm.muSm[t]) ** 2 + sm.Psm[t];
@@ -114,11 +115,23 @@ function emFit(y, mu0Init) {
     const newWalk = Math.sqrt(sumWalk / Math.max(1, y.length - 1));
     const ds = Math.abs(newObs - sigmaObs) + Math.abs(newWalk - sigmaWalk);
     sigmaObs = newObs; sigmaWalk = newWalk;
-    // Optional: refit μ_init via smoother's first state estimate.
-    muInit = sm.muSm[0];
+    muInitSmoother = sm.muSm[0];
+    finalFilt = filt;
     if (ds < EM_TOL) { iterUsed = it + 1; break; }
   }
-  return { sigmaWalk, sigmaObs, muInit, iterUsed };
+  // Production seed: the filter's state at end of training data — best current
+  // estimate of the regime bias. NOT the smoother's μ_0 (which is the inferred
+  // state 5y ago and is contaminated by early-history unit-mismatch artifacts;
+  // NYC fit to −10.81°F using the smoother estimate, vs ~0 for the current filter
+  // state). When weather.js / logger.js boots with no blob state, this is the
+  // initial (μ, P) the Kalman filter starts from.
+  const T = y.length;
+  return {
+    sigmaWalk, sigmaObs,
+    muSeed: finalFilt.muFilt[T-1],
+    pSeed:  finalFilt.Pfilt[T-1],
+    iterUsed,
+  };
 }
 
 const out = {};
@@ -135,14 +148,15 @@ for (const [name, c] of Object.entries(data.cities)) {
   out[name] = {
     sigma_walk: Number(fit.sigmaWalk.toFixed(4)),
     sigma_obs:  Number(fit.sigmaObs.toFixed(4)),
-    mu_init:    Number(fit.muInit.toFixed(4)),
+    mu_seed:    Number(fit.muSeed.toFixed(4)),
+    p_seed:     Number(fit.pSeed.toFixed(4)),
     n_days:     days.length,
     em_iters:   fit.iterUsed,
     date_range: `${days[0].date}..${days[days.length-1].date}`,
     fitted_at:  new Date().toISOString().slice(0, 10),
   };
   summary.push({ name, ...out[name], y_mean: Number(yMean.toFixed(3)) });
-  console.log(`  ${name.padEnd(5)}  n=${String(days.length).padStart(4)}  σ_walk=${fit.sigmaWalk.toFixed(3)}  σ_obs=${fit.sigmaObs.toFixed(3)}  μ_init=${fit.muInit.toFixed(2)}  EM_it=${fit.iterUsed}`);
+  console.log(`  ${name.padEnd(5)}  n=${String(days.length).padStart(4)}  σ_walk=${fit.sigmaWalk.toFixed(3)}  σ_obs=${fit.sigmaObs.toFixed(3)}  μ_seed=${fit.muSeed.toFixed(2)}  P_seed=${fit.pSeed.toFixed(3)}  EM_it=${fit.iterUsed}`);
 }
 
 writeFileSync("per_city_kalman_params.json", JSON.stringify(out, null, 2));
