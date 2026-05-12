@@ -160,6 +160,22 @@ const BUCKET_TAIL_OBS_GAP_MAX_F = 1.5;
 // common "barely past upper edge" case) is gated; gaps below 0.4°F (i.e., <half a
 // rounding tick past the bucket) still defer to the model.
 const BUCKET_ABOVE_OBS_GAP_MAX_F = 0.4;
+
+// CLI-grade observed extremes for tail / bucket gates. Kalshi settles on CLI,
+// which is generated from 5-min weighted ASOS (DI-1 internal). Raw maxSoFar /
+// minSoFar may include 1-min spikes CLI never sees — using them in tail-gates
+// can auto-reject bets that CLI would actually settle in the bot's favor (same
+// failure mode shipped in 96e5a62 for CI floors). Keep the precise float (not
+// the floored Cli variant) so the posterior z-score doesn't shift by up to 1°F.
+function cliMaxObs(c) {
+  const cand = [c?.oneMinAsos?.max5MinSoFar, c?.dsmDailyMaxF].filter(v => v != null);
+  return cand.length ? Math.max(...cand) : (c?.maxSoFar ?? null);
+}
+function cliMinObs(c) {
+  const cand = [c?.oneMinAsos?.min5MinSoFar, c?.dsmDailyMinF].filter(v => v != null);
+  return cand.length ? Math.min(...cand) : (c?.minSoFar ?? null);
+}
+
 function bucketBoundaryMargin(b, weatherCity) {
   const side = b.side?.toLowerCase();
   if (side !== "yes" && side !== "no") return null;
@@ -170,7 +186,7 @@ function bucketBoundaryMargin(b, weatherCity) {
   const N = Math.floor(v);  // continuous bucket = [N - 0.5, N + 1.5) after rounding
 
   if (b.variable === "low") {
-    const m = weatherCity?.minSoFar;
+    const m = cliMinObs(weatherCity);
     if (m == null) return null;
     if (side === "no") {
       if (m >= N + 1.5) return null;
@@ -183,7 +199,7 @@ function bucketBoundaryMargin(b, weatherCity) {
     return m - (N - 0.5);                                    // obs in bucket → headroom before further drop
   }
   if (b.variable === "high" || !b.variable) {
-    const m = weatherCity?.maxSoFar;
+    const m = cliMaxObs(weatherCity);
     if (m == null) return null;
     if (side === "no") {
       if (m <= N - 0.5) return null;
@@ -223,22 +239,24 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
   const code = b.ticker;
   if (!code || !code.startsWith("T")) return null;
   const lo = b.loInt, hi = b.hiInt;
-  if (b.variable === "low" && weatherCity?.minSoFar != null
+  const minObs = cliMinObs(weatherCity);
+  const maxObs = cliMaxObs(weatherCity);
+  if (b.variable === "low" && minObs != null
       && lo == null && Number.isFinite(hi)) {
     const boundary = hi + 0.5;
-    const z = (boundary - weatherCity.minSoFar) / sigmaCooling;
+    const z = (boundary - minObs) / sigmaCooling;
     const pYes = normCdf01(z);
     return { pWin: side === "yes" ? pYes : (1 - pYes),
-             obs: weatherCity.minSoFar, boundary, kind: "cold-tail-low" };
+             obs: minObs, boundary, kind: "cold-tail-low" };
   }
-  if (b.variable === "high" && weatherCity?.maxSoFar != null
+  if (b.variable === "high" && maxObs != null
       && hi == null && Number.isFinite(lo)) {
     const boundary = lo - 0.5;
-    const z = (boundary - weatherCity.maxSoFar) / sigmaCooling;
+    const z = (boundary - maxObs) / sigmaCooling;
     const pYesLose = normCdf01(z);  // P(high < boundary) = P(YES loses)
     const pYes = 1 - pYesLose;
     return { pWin: side === "yes" ? pYes : (1 - pYes),
-             obs: weatherCity.maxSoFar, boundary, kind: "hot-tail-high" };
+             obs: maxObs, boundary, kind: "hot-tail-high" };
   }
   return null;
 }
@@ -329,7 +347,7 @@ function tailBucketObsGap(b, weatherCity) {
   const lo = b.loInt, hi = b.hiInt;
 
   if (b.variable === "low") {
-    const m = weatherCity?.minSoFar;
+    const m = cliMinObs(weatherCity);
     if (m == null) return null;
     if (lo == null && Number.isFinite(hi)) {
       const boundary = hi + 0.5;
@@ -344,7 +362,7 @@ function tailBucketObsGap(b, weatherCity) {
     return null;
   }
   if (b.variable === "high") {
-    const m = weatherCity?.maxSoFar;
+    const m = cliMaxObs(weatherCity);
     if (m == null) return null;
     if (hi == null && Number.isFinite(lo)) {
       const boundary = lo - 0.5;
@@ -391,7 +409,7 @@ function bucketAboveObsGap(b, weatherCity) {
   if (!Number.isFinite(v)) return null;
   const N = Math.floor(v);
 
-  const m = weatherCity?.minSoFar;
+  const m = cliMinObs(weatherCity);
   if (m == null) return null;
   if (m < N + 1.5) return null;  // obs in or below bucket → bucketBoundaryMargin handles
   const boundary = N + 1.5;

@@ -69,11 +69,14 @@ function renderCard(c) {
     </div>`;
   }
   const tempColor = c.mean >= 70 ? "" : "cool";
-  // CI bounds are obs-floored when maxSoFar/minSoFar is in play. The displayed σ is
-  // still the unclamped prior std (computed pre-truncation), so flag the floor on the
-  // CI label rather than recompute a post-truncation σ.
-  const hiFloored = c.maxSoFar != null && c.ci95 && c.ci95[0] <= c.maxSoFar + 0.05;
-  const loCeiled = c.minSoFar != null && c.lowCi95 && c.lowCi95[1] >= c.minSoFar - 0.05;
+  // CI bounds are obs-floored at maxSoFarCli / minSoFarCli (Math.floor / Math.ceil of
+  // the CLI-grade obs — 5-min weighted + DSM — per weather.js 96e5a62). Compare against
+  // those integer bounds, not raw maxSoFar/minSoFar which can sit above the floor by up
+  // to a full degree on 1-min ASOS spikes.
+  const hiFloorRef = c.maxSoFarCli ?? c.maxSoFar;
+  const loCeilRef  = c.minSoFarCli ?? c.minSoFar;
+  const hiFloored = hiFloorRef != null && c.ci95 && c.ci95[0] <= hiFloorRef + 0.05;
+  const loCeiled  = loCeilRef  != null && c.lowCi95 && c.lowCi95[1] >= loCeilRef - 0.05;
   // Two CLI rows: today-partial (NWS-observed so far today) vs yesterday-final.
   // If lastCLI is today's partial, show as "NWS today so far"; if yesterday's final,
   // show as "last CLI" (the existing copy).

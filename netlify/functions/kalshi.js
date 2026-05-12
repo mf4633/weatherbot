@@ -285,7 +285,20 @@ export default async () => {
     const cityRecord = { name: city.name, station: city.station,
                          model: { highMean: city.mean, highStd: city.std, maxSoFar: city.maxSoFar,
                                   lowMean: city.lowMean, lowStd: city.lowStd, minSoFar: city.minSoFar,
-                                  currentTemp: city.currentTemp } };
+                                  currentTemp: city.currentTemp },
+                         // Per-source input ages — passthrough from weather.js for downstream
+                         // traders (combo_trader) that consume /api/kalshi rather than /api/weather
+                         // directly. Bayesian work-order #6b dataset feed; same fields as
+                         // jackson_trader's cityInputAges block.
+                         inputAges: {
+                           nwsGridAgeMin: city.forecastUpdateTime
+                             ? Math.round((Date.now() - new Date(city.forecastUpdateTime).getTime()) / 60000) : null,
+                           metarAgeMin: city.lastMetarAgeMin ?? null,
+                           dataAgeMin: city.dataAgeMin ?? null,
+                           ensembleSourceCount: Array.isArray(city.ensembleSources) ? city.ensembleSources.length : null,
+                           oneMinAsosAgeMin: city.oneMinAsos?.ageMin ?? null,
+                           iemAgeMin: city.iemAgeMin ?? null,
+                         } };
 
     // HIGH event. lowerFloor uses maxSoFarCli (integer °F) not raw maxSoFar — Kalshi
     // settles on NWS CLI which rounds to integer °F via a °C-internal path, so a raw

@@ -577,6 +577,14 @@ export default async () => {
     if (stake < STAKE_FLOOR) continue;
     const contracts = c.price > 0 ? stake / c.price : 0;
     const betId = `${c.fullTicker}-${c.side}-${Date.now()}`;
+    // Pull per-source input ages from the kalshi.js cityRecord that fed this candidate
+    // (only meaningful for weather candidates; rain candidates skip — different inputs).
+    // Bayesian #6b dataset; safe-no-op when inputAges missing.
+    const cityWeatherRec = c.source === "weatherbot"
+      ? (weatherData?.cities || []).find(x => x.name === c.city)
+      : null;
+    const inputAgesAtBet = cityWeatherRec?.inputAges || null;
+
     const record = {
       betId,
       source: c.source,
@@ -594,7 +602,8 @@ export default async () => {
       contracts: Math.round(contracts * 100) / 100,
       placedAtUTC: new Date().toISOString(),
       modelMean: c.modelMean ?? null, modelStd: c.modelStd ?? null,
-      threshold: c.threshold ?? null, kind: c.kind ?? null
+      threshold: c.threshold ?? null, kind: c.kind ?? null,
+      inputAgesAtBet,
     };
     await openStore.setJSON(`${betId}.json`, record)
       .catch(err => errors.push({ where: "open-write", betId, err: String(err) }));
