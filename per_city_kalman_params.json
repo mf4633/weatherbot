@@ -1,0 +1,182 @@
+{
+  "NYC": {
+    "sigma_walk": 0.4971,
+    "sigma_obs": 1.5197,
+    "mu_init": -10.8117,
+    "n_days": 825,
+    "em_iters": 30,
+    "date_range": "2022-01-15..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "LAX": {
+    "sigma_walk": 0.2797,
+    "sigma_obs": 1.4592,
+    "mu_init": 0.3857,
+    "n_days": 820,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-02",
+    "fitted_at": "2026-05-12"
+  },
+  "MDW": {
+    "sigma_walk": 0.4554,
+    "sigma_obs": 1.4984,
+    "mu_init": -14.6333,
+    "n_days": 845,
+    "em_iters": 30,
+    "date_range": "2021-12-07..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "HOU": {
+    "sigma_walk": 0.2994,
+    "sigma_obs": 1.4723,
+    "mu_init": -0.7287,
+    "n_days": 822,
+    "em_iters": 5,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "PHX": {
+    "sigma_walk": 0.2354,
+    "sigma_obs": 0.9252,
+    "mu_init": 0.3085,
+    "n_days": 821,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-02",
+    "fitted_at": "2026-05-12"
+  },
+  "PHL": {
+    "sigma_walk": 0.2829,
+    "sigma_obs": 1.4341,
+    "mu_init": -2.2821,
+    "n_days": 823,
+    "em_iters": 30,
+    "date_range": "2022-12-24..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "SAT": {
+    "sigma_walk": 0.2695,
+    "sigma_obs": 1.6556,
+    "mu_init": -0.8771,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "SAN": {
+    "sigma_walk": 0.3011,
+    "sigma_obs": 1.0635,
+    "mu_init": 0.5141,
+    "n_days": 810,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-02",
+    "fitted_at": "2026-05-12"
+  },
+  "DFW": {
+    "sigma_walk": 0.3209,
+    "sigma_obs": 1.5414,
+    "mu_init": -0.8928,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "JAX": {
+    "sigma_walk": 0.3173,
+    "sigma_obs": 1.2862,
+    "mu_init": -0.15,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "AUS": {
+    "sigma_walk": 0.3045,
+    "sigma_obs": 1.6361,
+    "mu_init": -0.7783,
+    "n_days": 822,
+    "em_iters": 24,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "TPA": {
+    "sigma_walk": 0.3756,
+    "sigma_obs": 1.1771,
+    "mu_init": -0.1879,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "SJC": {
+    "sigma_walk": 0.3961,
+    "sigma_obs": 1.7677,
+    "mu_init": -0.6173,
+    "n_days": 821,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-02",
+    "fitted_at": "2026-05-12"
+  },
+  "CMH": {
+    "sigma_walk": 0.5517,
+    "sigma_obs": 1.3974,
+    "mu_init": -14.7514,
+    "n_days": 831,
+    "em_iters": 30,
+    "date_range": "2022-01-07..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "CLT": {
+    "sigma_walk": 0.2366,
+    "sigma_obs": 1.6038,
+    "mu_init": 0.7403,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "IND": {
+    "sigma_walk": 0.5623,
+    "sigma_obs": 1.3956,
+    "mu_init": -15.7991,
+    "n_days": 835,
+    "em_iters": 30,
+    "date_range": "2022-01-06..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "SEA": {
+    "sigma_walk": 0.297,
+    "sigma_obs": 1.5814,
+    "mu_init": -3.6843,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2021-12-27..2026-05-02",
+    "fitted_at": "2026-05-12"
+  },
+  "DEN": {
+    "sigma_walk": 0.4598,
+    "sigma_obs": 1.8667,
+    "mu_init": -11.279,
+    "n_days": 837,
+    "em_iters": 30,
+    "date_range": "2022-01-01..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "DCA": {
+    "sigma_walk": 0.3579,
+    "sigma_obs": 1.4986,
+    "mu_init": -0.3119,
+    "n_days": 822,
+    "em_iters": 30,
+    "date_range": "2024-02-02..2026-05-03",
+    "fitted_at": "2026-05-12"
+  },
+  "BOS": {
+    "sigma_walk": 0.4306,
+    "sigma_obs": 1.5743,
+    "mu_init": -10.8487,
+    "n_days": 828,
+    "em_iters": 30,
+    "date_range": "2022-01-11..2026-05-03",
+    "fitted_at": "2026-05-12"
+  }
+}
