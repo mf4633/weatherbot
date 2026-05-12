@@ -738,6 +738,11 @@ export default async () => {
     if (kalshiData?.topBets && spareCapacity > 0) {
       const fr = kalshiData.freshness || {};
       const cityForecastAge = {};
+      // cityInputAges feeds Bayesian work-order #6b: settled bets carry input ages
+      // at bet time, so σ_age_i(age_i) per-source curves are fittable from the
+      // existing settled-bet stream once ~80-150 bets accumulate. See
+      // project_weatherbot_bayesian_workorder.md for the resume sequence.
+      const cityInputAges = {};
       for (const c of (weatherData.cities || [])) {
         // Prefer server-computed dataAgeMin (weather.js): reflects the freshest of
         // ensemble + METAR + NWS grid, not just NWS's grid issue time. NWS grid often
@@ -745,6 +750,15 @@ export default async () => {
         // are minutes old; gating on raw forecastUpdateTime over-skipped those.
         if (c.dataAgeMin != null) cityForecastAge[c.name] = c.dataAgeMin;
         else if (c.forecastUpdateTime) cityForecastAge[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
+        cityInputAges[c.name] = {
+          nwsGridAgeMin: c.forecastUpdateTime
+            ? Math.round((Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000) : null,
+          metarAgeMin: c.lastMetarAgeMin ?? null,
+          dataAgeMin: c.dataAgeMin ?? null,
+          ensembleSourceCount: Array.isArray(c.ensembleSources) ? c.ensembleSources.length : null,
+          oneMinAsosAgeMin: c.oneMinAsos?.ageMin ?? null,
+          iemAgeMin: c.iemAgeMin ?? null,
+        };
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
@@ -1004,7 +1018,9 @@ export default async () => {
             bucket: b.bucket, ev: b.ev, halfKelly: b.halfKelly,
             modelMean: b.modelMean, modelStd: b.modelStd,
             placedAtUTC: new Date().toISOString(),
-            kalshiOrderId: res.body?.order?.order_id || null
+            kalshiOrderId: res.body?.order?.order_id || null,
+            // Bayesian #6b instrumentation — see cityInputAges block above.
+            inputAgesAtBet: cityInputAges[b.city] || null,
           }).catch(err => errors.push({ where: "ledger-write", err: String(err) }));
         }
       }
