@@ -739,7 +739,12 @@ export default async () => {
       const fr = kalshiData.freshness || {};
       const cityForecastAge = {};
       for (const c of (weatherData.cities || [])) {
-        if (c.forecastUpdateTime) cityForecastAge[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
+        // Prefer server-computed dataAgeMin (weather.js): reflects the freshest of
+        // ensemble + METAR + NWS grid, not just NWS's grid issue time. NWS grid often
+        // sits 4-6h old for west-coast/quiet-regime cities while our ensemble + obs
+        // are minutes old; gating on raw forecastUpdateTime over-skipped those.
+        if (c.dataAgeMin != null) cityForecastAge[c.name] = c.dataAgeMin;
+        else if (c.forecastUpdateTime) cityForecastAge[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.

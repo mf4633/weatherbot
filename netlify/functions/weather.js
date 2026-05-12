@@ -1115,6 +1115,32 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   const lastMetarTime = todayObs.length ? todayObs[todayObs.length - 1].ts.toISOString() : null;
   const lastMetarAgeMin = lastMetarTime ? Math.round((Date.now() - new Date(lastMetarTime).getTime()) / 60000) : null;
 
+  // dataAgeMin: freshness of the model's binding inputs, not just the NWS grid
+  // forecast issue time. Ensemble (Open-Meteo) is fetched live each /api/weather
+  // call, so when it has ≥3 source models and a recent METAR is also in hand,
+  // the prediction is current even if NWS hasn't reissued the grid forecast
+  // (Seattle/Denver/LA grid often goes 4-6h between issuances).
+  // Trader (jackson_trader.js:43 PER_CITY_FRESHNESS_MAX_MIN) gates on this.
+  const forecastAgeMin = forecast?.updateTime
+    ? Math.round((Date.now() - new Date(forecast.updateTime).getTime()) / 60000)
+    : null;
+  const ensembleHealthy = sources.length >= 3;
+  const metarFreshEnough = lastMetarAgeMin != null && lastMetarAgeMin < 90;
+  let dataAgeMin;
+  if (ensembleHealthy && metarFreshEnough) {
+    // Ensemble just fetched (age ≈ 0) + recent obs → METAR age is the binding constraint.
+    dataAgeMin = lastMetarAgeMin;
+  } else if (ensembleHealthy) {
+    // Ensemble fresh but METAR stalled — fall back to whichever of NWS grid or METAR
+    // we actually have, taking the younger.
+    dataAgeMin = [forecastAgeMin, lastMetarAgeMin].filter(v => v != null).reduce((a, b) => Math.min(a, b), Infinity);
+    if (!Number.isFinite(dataAgeMin)) dataAgeMin = null;
+  } else {
+    // Degraded path (ensemble fetch failed) — must lean on NWS grid age, which is
+    // the most-pessimistic indicator. Trader will skip if this exceeds the gate.
+    dataAgeMin = forecastAgeMin;
+  }
+
   return {
     name: city.name,
     cli: city.cli,
@@ -1196,6 +1222,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowCi68: lowCi68 ? [round(lowCi68[0]), round(lowCi68[1])] : null,
     lowCi95: lowCi95 ? [round(lowCi95[0]), round(lowCi95[1])] : null,
     forecastUpdateTime: forecast?.updateTime || null,
+    dataAgeMin,
     ensembleSources: sources.map(s => ({
       model: s.model, peak: Math.round(s.peak * 10) / 10,
       trough: s.trough != null ? Math.round(s.trough * 10) / 10 : null
