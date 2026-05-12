@@ -971,14 +971,22 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     mean = maxSoFar;
   }
 
-  // CLI-relevant floor: Kalshi settles on NWS Daily Climate Report (CLI), which quantizes
-  // to integer °F via a °C-internal path. ASOS 1-min raw (Synoptic) reports tenths of °C,
-  // and conversions like 31.0°C → 87.8°F are exact-boundary artifacts whose CLI rounding
-  // can land one integer below the displayed °F. Verified 2026-05-06 KSAT: raw 87.8°F →
-  // CLI settled 87°F → 86-87 bucket resolved YES at 99% while bot floored at 87.8°F and
-  // assigned P(86-87)=0. Soften the floor to floor(°F) so settlement-bound logic admits
-  // the integer below the raw reading. Symmetric for LOW (ceil minSoFar).
-  const maxSoFarCli = maxSoFar != null ? Math.floor(maxSoFar) : null;
+  // CLI-relevant floor: Kalshi settles on NWS Daily Climate Report (CLI), which is
+  // generated from the 5-min weighted ASOS readings (DI-1 internal continuous data).
+  // The raw 1-min spike that drives maxSoFar can be a sub-minute artifact CLI never
+  // sees. Float the floor on max(5-min weighted, DSM) when either exists — both are
+  // CLI-settlement-grade. Fall back to maxSoFar (METAR + 1-min + DSM merged) only
+  // when neither is available. Then Math.floor handles the °C-boundary case: KSAT
+  // 2026-05-06 raw 87.8°F → CLI 87°F → floor(87.8)=87 lets the 86-87 bucket keep
+  // probability mass instead of being zeroed out. The bigger win is the 1-min-spike
+  // case: raw 88.2°F + 5-min weighted 87.4°F → old floor 88, new floor 87, matches
+  // CLI's actual settlement basis.
+  const cliMaxCandidates = [
+    oneMin?.max5MinSoFar,
+    dsm?.dailyMaxF
+  ].filter(v => v != null);
+  const cliMaxObs = cliMaxCandidates.length ? Math.max(...cliMaxCandidates) : maxSoFar;
+  const maxSoFarCli = cliMaxObs != null ? Math.floor(cliMaxObs) : null;
   const lowerFloor = maxSoFarCli != null ? maxSoFarCli : -Infinity;
   const ci68 = [Math.max(lowerFloor, mean - std), mean + std];
   const ci95 = [Math.max(lowerFloor, mean - 1.96 * std), mean + 1.96 * std];
@@ -1104,7 +1112,14 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   }
 
   // CLI-relevant ceiling for LOW (symmetric to HIGH lowerFloor — see comment above).
-  const minSoFarCli = minSoFar != null ? Math.ceil(minSoFar) : null;
+  // Prefer min(5-min weighted, DSM) — both CLI-settlement-grade — over minSoFar
+  // (which can dip below CLI's actual min on a sub-minute 1-min ASOS undershoot).
+  const cliMinCandidates = [
+    oneMin?.min5MinSoFar,
+    dsm?.dailyMinF
+  ].filter(v => v != null);
+  const cliMinObs = cliMinCandidates.length ? Math.min(...cliMinCandidates) : minSoFar;
+  const minSoFarCli = cliMinObs != null ? Math.ceil(cliMinObs) : null;
   const upperFloor = minSoFarCli != null ? minSoFarCli : Infinity;
   const lowCi68 = lowMean != null
     ? [lowMean - lowStd, Math.min(upperFloor, lowMean + lowStd)] : null;
