@@ -119,6 +119,14 @@ const CITY_OFFSETS_LOW = Object.fromEntries(
 // after each daily CLI capture, replaced by 7-day rolling mean once data accumulates.
 const REGIME_DAMPING = 0.3;
 const REGIME_FLOOR_F = 0.5;
+// Adaptive damping (added 2026-05-11 after PHX 5/7–5/10 series): when the 3-day
+// residual mean exceeds REGIME_CHANGE_THRESHOLD_F AND has the same sign as the
+// 7-day mean, the city is in a sustained regime shift, not noise. Double the
+// damping to override the prior faster. PHX 2026-05-08→05-10 series had
+// resid_7d ≈ -1.2°F (model 1.2°F too cold) but resid_3d was -2.4°F because the
+// shift only began on 5/7; the 7d window was diluted by 4 prior calm days.
+const REGIME_DAMPING_ADAPTIVE = 0.6;
+const REGIME_CHANGE_THRESHOLD_F = 1.5;
 const REGIME_RESIDUAL_SEED = {
   "New York":            -1.5, "Los Angeles":         -1.6, "Chicago":             -2.0,
   "Houston":             -1.7, "Phoenix":             -1.0, "Philadelphia":        -2.0,
@@ -580,6 +588,23 @@ function resolveRegimeResidual(city, regimeBlob) {
   return REGIME_RESIDUAL_SEED[city.name] ?? 0;
 }
 
+// Adaptive damping: returns REGIME_DAMPING_ADAPTIVE when the 3d residual mean
+// indicates a sustained regime shift in the same direction as the 7d mean,
+// REGIME_DAMPING otherwise. Both 7d and 3d come from logger.js per_city_residual_*.
+function resolveRegimeDamping(city, regimeBlob, residual7d) {
+  const dyn3 = regimeBlob?.per_city_residual_mean_3d;
+  if (!dyn3 || typeof dyn3 !== "object") return REGIME_DAMPING;
+  const r3 = dyn3[city.name];
+  if (r3 == null) return REGIME_DAMPING;
+  // Same sign as 7d (both negative = sustained cold model, both positive = sustained warm)
+  // AND |3d| materially larger than the change threshold.
+  if (residual7d != null && Math.sign(r3) === Math.sign(residual7d)
+      && Math.abs(r3) > REGIME_CHANGE_THRESHOLD_F) {
+    return REGIME_DAMPING_ADAPTIVE;
+  }
+  return REGIME_DAMPING;
+}
+
 function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
@@ -799,7 +824,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // Regime correction: damped 7-day forecast bias on top of the long-run offset.
     const regimeResidual = resolveRegimeResidual(city, regimeBlob);
     if (regimeResidual != null && Math.abs(regimeResidual) > REGIME_FLOOR_F) {
-      priorMean -= REGIME_DAMPING * regimeResidual;
+      const damping = resolveRegimeDamping(city, regimeBlob, regimeResidual);
+      priorMean -= damping * regimeResidual;
     }
     // Warming-rate observation term (V3): project current obs trajectory forward and
     // blend with forecast-prior, ONLY in the afternoon window (hrsToPeak ≤ 3). 5y backtest
@@ -814,6 +840,25 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       const w_obs = Math.max(0.1, Math.min(0.4, 0.5 - 0.1 * hrsToPeak));
       priorMean = (1 - w_obs) * priorMean + w_obs * projectedMax;
     }
+    // Obs-disagreement σ-widening (added 2026-05-11 after PHX 5/5–5/10 series: 1W
+    // 10L −$66 net on HIGH bets where model under-predicted by 2–4°F). Failure mode:
+    // bias-corrected branch decays biasWeight toward zero near peak via BIAS_TAU_HR=5,
+    // on the assumption morning bias burns off. For *regime* bias (not noise), that
+    // decay points confidence at a falsified prior. PHX 2026-05-05 12:54 PM AZ exemplar:
+    // model μ=76, currentTemp ≈ 78+, σ collapsed to 0.96 by hrsToPeak≈3, bot saw
+    // apparent edge on NO B80.5, paid for it. When obs has materially exceeded the
+    // current forecast (biasF > 2°F) and we still have hours to peak, floor priorStd
+    // at |biasF| (capped 3°F). σ-only intervention: backtest (n=65976, 5y×20 cities)
+    // showed priorMean shifts (persistent-bias, obs-projection) both overshoot on
+    // false-alarms (~27% of fires); σ widening alone is RMSE-neutral overall (−0.005°F),
+    // RMSE-improving on the fix target (−0.08°F), and lifts PHX-like cov95 94.5→99.2%.
+    // Trader benefit: wider σ → bucket probs spread → less edge vs market → smaller
+    // stake (half-Kelly shrinks) or skip (fails 10¢/5% gate). σ widening is applied
+    // below after priorStd is computed. Symmetric cold-side regime is handled by the
+    // existing cold-front branch (line ~990).
+    const obsDisagreementFired = biasF != null && biasF > 2.0
+        && hrsToPeak > 0 && hrsToPeak < 6
+        && currentTemp != null && maxSoFar != null;
     // Bayesian posterior σ: σ_post² = σ_ensemble² + σ_resolution².
     //   σ_ensemble = std across the 5 forecast models — captures forecast disagreement
     //                day-by-day (data-driven, varies as models agree or diverge).
@@ -832,8 +877,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const sigmaEnsembleEffective = sigmaEnsemblePeak ?? 0.8;
     // σ_frontal applied below as fallback after late-warming check, not here —
     // avoids double-inflating when the warm-front branch already widens σ to 1.5°F.
-    const priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
+    let priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
                               + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F);
+    if (obsDisagreementFired) {
+      // σ floor: |biasF| as the magnitude of forecast error already realized.
+      // Capped at 3°F to avoid pathologically wide CIs when bias is extreme.
+      priorStd = Math.max(priorStd, Math.min(3.0, Math.abs(biasF)));
+    }
     // Predict the daily MAX (not the afternoon-peak conditional mean). Daily max =
     // max(future_peak, maxSoFar), so the right object is E[max(X, maxSoFar)] —
     // a mixture with mass below maxSoFar collapsed to maxSoFar. Previously used
@@ -845,7 +895,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // is uniformly less aggressive than the old, so existing σ stays valid.
     mean = expectedMaxNormal(priorMean, priorStd, maxSoFar);
     std = priorStd;
-    method = "bias-corrected";
+    method = obsDisagreementFired ? "bias-corrected+obs-disagreement" : "bias-corrected";
   }
 
   // Late-warming check (added 2026-05-07 follow-up): mirror of the LOW cold-front

@@ -30,6 +30,7 @@ const CAPTURE_HOURS = new Set([14, 15]);
 const SETTLE_HOURS  = new Set([6, 7, 8, 9, 10, 11, 12]);
 const HISTORY_TRIM   = 30;   // entries kept per city
 const ROLLING_WINDOW = 7;    // size of the rolling mean weather.js consumes
+const SHORT_WINDOW   = 3;    // size of the regime-change window (adaptive damping)
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
@@ -128,6 +129,7 @@ async function runCapture(predictionsStore, predData, now) {
 async function runSettle(predictionsStore, regimeStore, predData, now) {
   const regimeBlob = (await regimeStore.get("global", { type: "json" })) || {};
   const dyn  = regimeBlob.per_city_residual_mean_7d || {};
+  const dyn3 = regimeBlob.per_city_residual_mean_3d || {};
   const hist = regimeBlob.per_city_history || {};
   const settledNow = [];
   let dirty = false;
@@ -152,6 +154,14 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     hist[c.name] = cityHist;
     const last7 = cityHist.slice(-ROLLING_WINDOW);
     dyn[c.name] = last7.reduce((a, e) => a + e.residual, 0) / last7.length;
+    // 3-day window for regime-change detection. When |dyn3| > 1.5°F AND sign matches
+    // dyn (7d), weather.js raises REGIME_DAMPING to override the prior faster. Without
+    // this, a 3-4 day systematic bias (e.g., PHX 2026-05-07→05-10) barely moves the
+    // 7d mean because 4 new entries are diluted by 3 older entries with opposite sign.
+    const last3 = cityHist.slice(-SHORT_WINDOW);
+    dyn3[c.name] = last3.length >= SHORT_WINDOW
+      ? last3.reduce((a, e) => a + e.residual, 0) / last3.length
+      : null;
 
     pred.settled = true;
     pred.actualHigh = cliData.maxF;
@@ -161,13 +171,14 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     settledNow.push({
       city: c.name, date: yesterday,
       predicted: pred.predHigh, actual: cliData.maxF,
-      residual, rolling7: dyn[c.name]
+      residual, rolling7: dyn[c.name], rolling3: dyn3[c.name]
     });
     dirty = true;
   }
 
   if (dirty) {
     regimeBlob.per_city_residual_mean_7d = dyn;
+    regimeBlob.per_city_residual_mean_3d = dyn3;
     regimeBlob.per_city_history = hist;
     regimeBlob.updated_at = new Date(now).toISOString();
     await regimeStore.setJSON("global", regimeBlob);

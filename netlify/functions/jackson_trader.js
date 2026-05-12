@@ -657,6 +657,23 @@ export default async () => {
       if (p.qty > 0) heldKey.add(botKey(p.ticker, "YES"));
       if (p.qty < 0) heldKey.add(botKey(p.ticker, "NO"));
     }
+    // Same-event-same-side stack cap (added 2026-05-11 after PHX 5/5 series: dawn
+    // NO B78.5 placed 05:08 AZ → won; noon NO B80.5 placed 12:54 AZ → lost). The
+    // 60-min cv-cooldown had long expired by noon; tile-conflict allowed different
+    // buckets; the noon σ had collapsed from morning's 1.53 to 0.96 on the same
+    // (already-falsified) prior. Block adding a same-side bet on the same event
+    // once we already hold a position — different buckets allowed only on the
+    // opposite side (legitimate barbell), same side blocked (regime stacking).
+    const heldEventSide = new Set();  // e.g. "KXHIGHTPHX-26MAY05:no"
+    for (const k of heldKey) {
+      const m = k.match(/^(.+)-(YES|NO)$/);
+      if (!m) continue;
+      const fullTicker = m[1];
+      const lastDash = fullTicker.lastIndexOf("-");
+      if (lastDash < 0) continue;
+      const eventTicker = fullTicker.slice(0, lastDash);
+      heldEventSide.add(`${eventTicker}:${m[2].toLowerCase()}`);
+    }
 
     // 2. Sell positions where forward EV diverges from the current market bid by
     // more than SELL_HYSTERESIS (in either direction — losers AND overshooting
@@ -806,6 +823,12 @@ export default async () => {
         const dedupKey = botKey(fullTicker, b.side);
         if (heldKey.has(dedupKey)) { skipped.push({ ...briefBet(b), reason: "already-held" }); continue; }
         if (cooldownMap[dedupKey]) { skipped.push({ ...briefBet(b), reason: "in-cooldown" }); continue; }
+        // Same-event-same-side stack cap: see heldEventSide construction above.
+        const eventSideKey = `${eventTicker}:${b.side?.toLowerCase()}`;
+        if (heldEventSide.has(eventSideKey)) {
+          skipped.push({ ...briefBet(b), reason: "event-side-stack-cap", eventTicker, side: b.side });
+          continue;
+        }
         // City+variable buy-cooldown: blocks any further buys on the same (city, variable)
         // pair within BUY_CITYVAR_COOLDOWN_MIN of the last successful buy. Independent of
         // ticker/side, so it catches model-thrash patterns that would otherwise slip past
@@ -962,6 +985,10 @@ export default async () => {
           // (e.g., NO on both B45 and B85 tails). The cv lock is a CROSS-RUN backstop;
           // sells set it immediately because a sell-driven flip is the dangerous case.
           if (!isDryRun) boughtCityVarKeys.add(cvLockKey);
+          // Track this placement in the intra-run heldEventSide set so a later
+          // candidate in the same run with the same (event, side) gets the stack-cap
+          // skip. The cross-run heldKey set already covers prior-run positions.
+          heldEventSide.add(eventSideKey);
           // Save to bot ledger so future runs know we own this position. Skip in dry-run.
           if (isDryRun) continue;
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
