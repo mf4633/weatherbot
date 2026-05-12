@@ -697,7 +697,24 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       minSoFar = dsm.dailyMinF;
     }
   }
-  const currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
+  // currentTemp: prefer 1-min ASOS latest when its timestamp is newer than the latest
+  // METAR. METAR is 5 mins to hourly with integer-°C quantization; 1-min ASOS lands
+  // every ~1 min in tenths of °F. When both are healthy, the 1-min reading is fresher
+  // and higher-precision. lastMetarTime / lastMetarAgeMin still anchor on METAR for
+  // the staleness diagnostics — they describe the obs *source*, not the displayed
+  // current value.
+  let currentTemp = todayObs.length ? cToF(todayObs[todayObs.length - 1].tempC) : null;
+  let currentTempSource = currentTemp != null ? "metar" : null;
+  let currentTempTime = todayObs.length ? todayObs[todayObs.length - 1].ts.toISOString() : null;
+  if (oneMin?.latestF != null && oneMin?.latestTs) {
+    const metarMs = todayObs.length ? todayObs[todayObs.length - 1].ts.getTime() : 0;
+    const oneMinMs = new Date(oneMin.latestTs).getTime();
+    if (oneMinMs > metarMs) {
+      currentTemp = oneMin.latestF;
+      currentTempSource = "asos1min";
+      currentTempTime = new Date(oneMin.latestTs).toISOString();
+    }
+  }
   const hrsToPeak = hoursToPeak(city.tz, now);
 
   // === Multi-model ensemble forecast ===
@@ -1162,6 +1179,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     station: city.station,
     tz: city.tz,
     currentTemp: currentTemp != null ? round(currentTemp) : null,
+    currentTempSource,
+    currentTempTime,
+    currentTempAgeMin: currentTempTime
+      ? Math.round((Date.now() - new Date(currentTempTime).getTime()) / 60000) : null,
     lastMetarTime,
     lastMetarAgeMin,
     // Synoptic ASOS coverage classifier — drives trader sizing de-rate. See
