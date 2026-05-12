@@ -29,6 +29,15 @@ function intlFmt(tz) {
 }
 const localDateStr = (iso, tz) => intlFmt(tz).date.format(new Date(iso));
 
+// Season classification by month. Cold: Oct-Mar (months 10,11,12,1,2,3). Warm: Apr-Sep.
+// Captures the dominant seasonal mode for continental climates where σ_walk differs
+// materially between dormant winter/summer (settled patterns) and active shoulder
+// (frequent regime shifts at frontal passages).
+function seasonOf(date) {
+  const month = parseInt(date.slice(5, 7), 10);
+  return (month >= 4 && month <= 9) ? "warm" : "cold";
+}
+
 function buildDailyResiduals(c) {
   const tz = c.meta.tz;
   const obsByDay = {};
@@ -60,7 +69,11 @@ function buildDailyResiduals(c) {
     let v = 0; for (const h of modelHighs) v += (h - forecastHighF) ** 2;
     const sd = Math.sqrt(v / Math.max(1, modelHighs.length - 1));
     if (sd > 10) continue;  // unit-mismatch artifact
-    days.push({ date, actualMax, forecastHighF, residual: forecastHighF - actualMax });
+    days.push({
+      date, actualMax, forecastHighF,
+      residual: forecastHighF - actualMax,
+      season: seasonOf(date),
+    });
   }
   return days;
 }
@@ -134,6 +147,17 @@ function emFit(y, mu0Init) {
   };
 }
 
+// Fit per-season σ_walk / σ_obs. Each season gets its own EM run on the subset
+// of days falling in that season. Production seed (μ_seed, P_seed) comes from the
+// FULL series final filter state (using whatever seasonal params apply per day) —
+// captures "current bias estimate as of end of data" regardless of season.
+function emFitPerSeason(daysSubset, mu0) {
+  if (daysSubset.length < 30) return null;  // too few for stable fit
+  const y = daysSubset.map(d => d.residual);
+  const fit = emFit(y, mu0);
+  return { sigmaWalk: fit.sigmaWalk, sigmaObs: fit.sigmaObs, n: daysSubset.length, iters: fit.iterUsed };
+}
+
 const out = {};
 const summary = [];
 for (const [name, c] of Object.entries(data.cities)) {
@@ -144,38 +168,49 @@ for (const [name, c] of Object.entries(data.cities)) {
   }
   const y = days.map(d => d.residual);
   const yMean = y.reduce((a,b)=>a+b,0) / y.length;
-  const fit = emFit(y, yMean);
+  // Per-season fits.
+  const cold = emFitPerSeason(days.filter(d => d.season === "cold"), yMean);
+  const warm = emFitPerSeason(days.filter(d => d.season === "warm"), yMean);
+  // Full-series fit for production seed (μ_seed, P_seed). Uses unified σ for
+  // seeding; live use applies per-season values via lib/regime.js lookup.
+  const fullFit = emFit(y, yMean);
   out[name] = {
-    sigma_walk: Number(fit.sigmaWalk.toFixed(4)),
-    sigma_obs:  Number(fit.sigmaObs.toFixed(4)),
-    mu_seed:    Number(fit.muSeed.toFixed(4)),
-    p_seed:     Number(fit.pSeed.toFixed(4)),
-    n_days:     days.length,
-    em_iters:   fit.iterUsed,
+    sigma_walk_cold: cold ? Number(cold.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
+    sigma_obs_cold:  cold ? Number(cold.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
+    sigma_walk_warm: warm ? Number(warm.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
+    sigma_obs_warm:  warm ? Number(warm.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
+    mu_seed:    Number(fullFit.muSeed.toFixed(4)),
+    p_seed:     Number(fullFit.pSeed.toFixed(4)),
+    n_cold:     cold ? cold.n : 0,
+    n_warm:     warm ? warm.n : 0,
+    n_total:    days.length,
+    em_iters:   fullFit.iterUsed,
     date_range: `${days[0].date}..${days[days.length-1].date}`,
     fitted_at:  new Date().toISOString().slice(0, 10),
   };
   summary.push({ name, ...out[name], y_mean: Number(yMean.toFixed(3)) });
-  console.log(`  ${name.padEnd(5)}  n=${String(days.length).padStart(4)}  σ_walk=${fit.sigmaWalk.toFixed(3)}  σ_obs=${fit.sigmaObs.toFixed(3)}  μ_seed=${fit.muSeed.toFixed(2)}  P_seed=${fit.pSeed.toFixed(3)}  EM_it=${fit.iterUsed}`);
+  console.log(`  ${name.padEnd(5)}  cold[n=${String(out[name].n_cold).padStart(3)} σw=${out[name].sigma_walk_cold.toFixed(3)} σo=${out[name].sigma_obs_cold.toFixed(3)}]  warm[n=${String(out[name].n_warm).padStart(3)} σw=${out[name].sigma_walk_warm.toFixed(3)} σo=${out[name].sigma_obs_warm.toFixed(3)}]  μ=${out[name].mu_seed.toFixed(2)}`);
 }
 
 writeFileSync("per_city_kalman_params.json", JSON.stringify(out, null, 2));
 console.log(`\nWrote per_city_kalman_params.json with ${Object.keys(out).length} cities`);
 
-// Print params table grouped by climate region for sanity check
-console.log("\nFitted params by city (sorted by σ_walk):");
-summary.sort((a, b) => b.sigma_walk - a.sigma_walk);
-console.log("  city    σ_walk   σ_obs   K_ss    n     ȳ");
-for (const s of summary) {
-  // Steady-state Kalman gain: K_ss solves K = (P+σw²)/(P+σw²+σo²) with P = (1-K)(P+σw²)
-  // → P_ss² = σw²·σo² / (σw² + σo²·... simplified: K_ss = (σw² + √(σw⁴ + 4σw²σo²)) / (2σo² + σw² + √(σw⁴ + 4σw²σo²))
-  // Simpler: just simulate to steady state.
+// Print seasonal-fit summary. Steady-state Kalman gain per season via iteration.
+function kssFor(sw, so) {
   let P = P0;
   for (let i = 0; i < 200; i++) {
-    const Pp = P + s.sigma_walk * s.sigma_walk;
-    const K = Pp / (Pp + s.sigma_obs * s.sigma_obs);
+    const Pp = P + sw * sw;
+    const K = Pp / (Pp + so * so);
     P = (1 - K) * Pp;
   }
-  const Kss = (P + s.sigma_walk * s.sigma_walk) / (P + s.sigma_walk * s.sigma_walk + s.sigma_obs * s.sigma_obs);
-  console.log(`  ${s.name.padEnd(5)}  ${s.sigma_walk.toFixed(3)}   ${s.sigma_obs.toFixed(3)}   ${Kss.toFixed(3)}   ${String(s.n_days).padStart(4)}  ${s.y_mean.toFixed(2)}`);
+  return (P + sw * sw) / (P + sw * sw + so * so);
+}
+console.log("\nFitted seasonal params (sorted by warm-season σ_walk):");
+summary.sort((a, b) => b.sigma_walk_warm - a.sigma_walk_warm);
+console.log("  city    cold(σw σo K_ss)        warm(σw σo K_ss)         |Δσw|");
+for (const s of summary) {
+  const KssCold = kssFor(s.sigma_walk_cold, s.sigma_obs_cold);
+  const KssWarm = kssFor(s.sigma_walk_warm, s.sigma_obs_warm);
+  const dw = Math.abs(s.sigma_walk_cold - s.sigma_walk_warm);
+  console.log(`  ${s.name.padEnd(5)}  ${s.sigma_walk_cold.toFixed(3)} ${s.sigma_obs_cold.toFixed(3)} ${KssCold.toFixed(3)}    ${s.sigma_walk_warm.toFixed(3)} ${s.sigma_obs_warm.toFixed(3)} ${KssWarm.toFixed(3)}     ${dw.toFixed(3)}`);
 }

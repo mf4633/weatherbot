@@ -14,28 +14,45 @@
 //   weather.js reads state via kalmanCorrection(), applies μ as priorMean shift
 //              and (P + σ_walk²) as additional priorStd² contribution
 
+// Per-city Kalman params fit per season (cold=Oct-Mar, warm=Apr-Sep). The seasonal
+// split matters most for continental-climate cities (BOS, CMH, NYC, IND, MDW, DEN)
+// where winter frontal passages produce σ_walk 2.5-3.5× the calmer summer value.
+// Single-σ_walk fit averaged these and was too low for winter / too high for summer,
+// causing the 5/20 inland regression in the original A/B. See kalman_fit_all_cities.js.
 export const KALMAN_PARAMS = {
-  "NYC": { sigma_walk: 0.4971, sigma_obs: 1.5197, mu_seed: -0.1902, p_seed: 0.6362 },
-  "LAX": { sigma_walk: 0.2797, sigma_obs: 1.4592, mu_seed:  0.2066, p_seed: 0.3714 },
-  "MDW": { sigma_walk: 0.4554, sigma_obs: 1.4984, mu_seed: -0.3465, p_seed: 0.5842 },
-  "HOU": { sigma_walk: 0.2994, sigma_obs: 1.4723, mu_seed:  1.1729, p_seed: 0.3983 },
-  "PHX": { sigma_walk: 0.2354, sigma_obs: 0.9252, mu_seed:  0.0879, p_seed: 0.1925 },
-  "PHL": { sigma_walk: 0.2829, sigma_obs: 1.4341, mu_seed: -1.0024, p_seed: 0.3681 },
-  "SAT": { sigma_walk: 0.2695, sigma_obs: 1.6556, mu_seed:  1.0919, p_seed: 0.4124 },
-  "SAN": { sigma_walk: 0.3011, sigma_obs: 1.0635, mu_seed:  0.2875, p_seed: 0.2779 },
-  "DFW": { sigma_walk: 0.3209, sigma_obs: 1.5414, mu_seed:  0.5407, p_seed: 0.4453 },
-  "JAX": { sigma_walk: 0.3173, sigma_obs: 1.2862, mu_seed: -1.4675, p_seed: 0.3604 },
-  "AUS": { sigma_walk: 0.3045, sigma_obs: 1.6361, mu_seed:  0.6888, p_seed: 0.4539 },
-  "TPA": { sigma_walk: 0.3756, sigma_obs: 1.1771, mu_seed: -0.3671, p_seed: 0.3756 },
-  "SJC": { sigma_walk: 0.3961, sigma_obs: 1.7677, mu_seed: -0.4753, p_seed: 0.623  },
-  "CMH": { sigma_walk: 0.5517, sigma_obs: 1.3974, mu_seed: -0.0565, p_seed: 0.6303 },
-  "CLT": { sigma_walk: 0.2366, sigma_obs: 1.6038, mu_seed: -0.3193, p_seed: 0.3546 },
-  "IND": { sigma_walk: 0.5623, sigma_obs: 1.3956, mu_seed:  0.3588, p_seed: 0.6398 },
-  "SEA": { sigma_walk: 0.297,  sigma_obs: 1.5814, mu_seed:  0.6279, p_seed: 0.4277 },
-  "DEN": { sigma_walk: 0.4598, sigma_obs: 1.8667, mu_seed: -1.1502, p_seed: 0.7544 },
-  "DCA": { sigma_walk: 0.3579, sigma_obs: 1.4986, mu_seed:  0.0971, p_seed: 0.4746 },
-  "BOS": { sigma_walk: 0.4306, sigma_obs: 1.5743, mu_seed: -1.0909, p_seed: 0.5877 },
+  "NYC": { sigma_walk_cold: 0.7444, sigma_obs_cold: 1.2986, sigma_walk_warm: 0.3081, sigma_obs_warm: 1.6764, mu_seed: -0.1902, p_seed: 0.6362 },
+  "LAX": { sigma_walk_cold: 0.3135, sigma_obs_cold: 1.4501, sigma_walk_warm: 0.2693, sigma_obs_warm: 1.4353, mu_seed:  0.2066, p_seed: 0.3714 },
+  "MDW": { sigma_walk_cold: 0.5552, sigma_obs_cold: 1.4818, sigma_walk_warm: 0.2702, sigma_obs_warm: 1.5439, mu_seed: -0.3465, p_seed: 0.5842 },
+  "HOU": { sigma_walk_cold: 0.3041, sigma_obs_cold: 1.3722, sigma_walk_warm: 0.3122, sigma_obs_warm: 1.5759, mu_seed:  1.1729, p_seed: 0.3983 },
+  "PHX": { sigma_walk_cold: 0.2872, sigma_obs_cold: 0.8932, sigma_walk_warm: 0.1865, sigma_obs_warm: 0.9425, mu_seed:  0.0879, p_seed: 0.1925 },
+  "PHL": { sigma_walk_cold: 0.2776, sigma_obs_cold: 1.2978, sigma_walk_warm: 0.2786, sigma_obs_warm: 1.5783, mu_seed: -1.0024, p_seed: 0.3681 },
+  "SAT": { sigma_walk_cold: 0.2741, sigma_obs_cold: 1.6207, sigma_walk_warm: 0.2627, sigma_obs_warm: 1.6962, mu_seed:  1.0919, p_seed: 0.4124 },
+  "SAN": { sigma_walk_cold: 0.3289, sigma_obs_cold: 1.0913, sigma_walk_warm: 0.3028, sigma_obs_warm: 0.9970, mu_seed:  0.2875, p_seed: 0.2779 },
+  "DFW": { sigma_walk_cold: 0.3280, sigma_obs_cold: 1.4561, sigma_walk_warm: 0.2903, sigma_obs_warm: 1.6478, mu_seed:  0.5407, p_seed: 0.4453 },
+  "JAX": { sigma_walk_cold: 0.3469, sigma_obs_cold: 1.1717, sigma_walk_warm: 0.3194, sigma_obs_warm: 1.3814, mu_seed: -1.4675, p_seed: 0.3604 },
+  "AUS": { sigma_walk_cold: 0.3175, sigma_obs_cold: 1.5772, sigma_walk_warm: 0.2987, sigma_obs_warm: 1.6963, mu_seed:  0.6888, p_seed: 0.4539 },
+  "TPA": { sigma_walk_cold: 0.2761, sigma_obs_cold: 1.1352, sigma_walk_warm: 0.4924, sigma_obs_warm: 1.2083, mu_seed: -0.3671, p_seed: 0.3756 },
+  "SJC": { sigma_walk_cold: 0.4458, sigma_obs_cold: 1.5736, sigma_walk_warm: 0.3760, sigma_obs_warm: 1.9355, mu_seed: -0.4753, p_seed: 0.623  },
+  "CMH": { sigma_walk_cold: 0.7807, sigma_obs_cold: 1.2069, sigma_walk_warm: 0.2742, sigma_obs_warm: 1.5634, mu_seed: -0.0565, p_seed: 0.6303 },
+  "CLT": { sigma_walk_cold: 0.2071, sigma_obs_cold: 1.7311, sigma_walk_warm: 0.2901, sigma_obs_warm: 1.4374, mu_seed: -0.3193, p_seed: 0.3546 },
+  "IND": { sigma_walk_cold: 0.6929, sigma_obs_cold: 1.3601, sigma_walk_warm: 0.2749, sigma_obs_warm: 1.4830, mu_seed:  0.3588, p_seed: 0.6398 },
+  "SEA": { sigma_walk_cold: 0.2858, sigma_obs_cold: 1.4790, sigma_walk_warm: 0.3122, sigma_obs_warm: 1.6797, mu_seed:  0.6279, p_seed: 0.4277 },
+  "DEN": { sigma_walk_cold: 0.5926, sigma_obs_cold: 2.1183, sigma_walk_warm: 0.2557, sigma_obs_warm: 1.5564, mu_seed: -1.1502, p_seed: 0.7544 },
+  "DCA": { sigma_walk_cold: 0.3380, sigma_obs_cold: 1.4711, sigma_walk_warm: 0.3675, sigma_obs_warm: 1.5462, mu_seed:  0.0971, p_seed: 0.4746 },
+  "BOS": { sigma_walk_cold: 0.7234, sigma_obs_cold: 1.2898, sigma_walk_warm: 0.2027, sigma_obs_warm: 1.7553, mu_seed: -1.0909, p_seed: 0.5877 },
 };
+
+// Season selector by month (1-12). Cold = Oct-Mar, warm = Apr-Sep. Returns the
+// pair of (σ_walk, σ_obs) appropriate for the current date. Step transition at
+// month boundary is acceptable: the Kalman state P briefly inflates/deflates but
+// converges within ~3-5 days via the gain mechanism. Smoothing across seasons
+// (e.g., cosine taper on day-of-year) is a Phase 5 nice-to-have.
+function seasonalParams(p, month) {
+  const isCold = (month >= 10 || month <= 3);
+  return isCold
+    ? { sigma_walk: p.sigma_walk_cold, sigma_obs: p.sigma_obs_cold }
+    : { sigma_walk: p.sigma_walk_warm, sigma_obs: p.sigma_obs_warm };
+}
 
 // Quiet-day gate: when |μ_t| is below this floor, don't apply a correction. Matches
 // the existing heuristic REGIME_FLOOR_F=0.5°F. Without the gate, Kalman's natural
@@ -63,18 +80,19 @@ const OBSERVATION_MAX_ABS_F = 20;
 
 // One forward-filter step. Given prior state and an observation, return the
 // posterior state. Sign convention: observation y = predicted − actual (positive
-// = over-prediction).
-export function kalmanStep(state, observation, cliCode) {
+// = over-prediction). Picks σ_walk and σ_obs by current season (cold/warm).
+export function kalmanStep(state, observation, cliCode, now = new Date()) {
   const p = KALMAN_PARAMS[cliCode];
   if (!p || !state || !Number.isFinite(observation)) return state;
   if (Math.abs(observation) > OBSERVATION_MAX_ABS_F) return state;  // bad-data guard
+  const sp = seasonalParams(p, now.getUTCMonth() + 1);
   const muPred = state.mu;
-  const Ppred  = state.P + p.sigma_walk * p.sigma_walk;
-  const K      = Ppred / (Ppred + p.sigma_obs * p.sigma_obs);
+  const Ppred  = state.P + sp.sigma_walk * sp.sigma_walk;
+  const K      = Ppred / (Ppred + sp.sigma_obs * sp.sigma_obs);
   return {
     mu: muPred + K * (observation - muPred),
     P:  (1 - K) * Ppred,
-    last_update: new Date().toISOString(),
+    last_update: now.toISOString(),
   };
 }
 
@@ -100,6 +118,7 @@ export function kalmanCorrection(cliCode, regimeBlob, now = Date.now()) {
   if (state.last_update) {
     daysStale = Math.max(0, (now - new Date(state.last_update).getTime()) / 86400000);
   }
-  const Padvanced = state.P + p.sigma_walk * p.sigma_walk * Math.max(1, daysStale);
+  const sp = seasonalParams(p, new Date(now).getUTCMonth() + 1);
+  const Padvanced = state.P + sp.sigma_walk * sp.sigma_walk * Math.max(1, daysStale);
   return { mu: state.mu, P: Padvanced, daysStale, source };
 }

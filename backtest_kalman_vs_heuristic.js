@@ -94,13 +94,22 @@ for (const [name, c] of Object.entries(data.cities)) {
   if (days.length < BURN_IN + 30) continue;
   const y = days.map(d => d.residual);
 
-  // Run Kalman forward filter using fitted params (causal: use μ_pred for correction).
-  let mu = p.mu_init, P = P0;
+  // Run Kalman forward filter using SEASONAL fitted params (cold = Oct-Mar, warm
+  // = Apr-Sep). Picks (σ_walk, σ_obs) per day by month of `days[t].date`.
+  function seasonalSig(date) {
+    const m = parseInt(date.slice(5, 7), 10);
+    const cold = (m >= 10 || m <= 3);
+    return cold
+      ? { sw: p.sigma_walk_cold, so: p.sigma_obs_cold }
+      : { sw: p.sigma_walk_warm, so: p.sigma_obs_warm };
+  }
+  let mu = p.mu_seed, P = P0;
   const muPred = new Array(y.length), Ppred = new Array(y.length);
   for (let t = 0; t < y.length; t++) {
+    const ss = seasonalSig(days[t].date);
     muPred[t] = mu;
-    Ppred[t]  = P + p.sigma_walk * p.sigma_walk;
-    const K   = Ppred[t] / (Ppred[t] + p.sigma_obs * p.sigma_obs);
+    Ppred[t]  = P + ss.sw * ss.sw;
+    const K   = Ppred[t] / (Ppred[t] + ss.so * ss.so);
     mu = muPred[t] + K * (y[t] - muPred[t]);
     P  = (1 - K) * Ppred[t];
   }
