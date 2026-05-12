@@ -59,19 +59,25 @@ function buildDailyResiduals(c) {
   for (const date of Object.keys(obsByDay).sort()) {
     const obs = obsByDay[date]; if (obs.length < 18) continue;
     const actualMax = Math.max(...obs);
-    const modelHighs = [];
+    const actualMin = Math.min(...obs);
+    const modelHighs = [], modelLows = [];
     for (const m of MODELS) {
       const dayFc = fcByModel[m]?.[date]; if (!dayFc?.length) continue;
       modelHighs.push(Math.max(...dayFc));
+      modelLows.push(Math.min(...dayFc));
     }
     if (modelHighs.length < 3) continue;
     const forecastHighF = modelHighs.reduce((a,b)=>a+b,0)/modelHighs.length;
+    const forecastLowF = modelLows.reduce((a,b)=>a+b,0)/modelLows.length;
+    // Unit-mismatch guard — same threshold on HIGH ensemble (catches early-history
+    // data quality artifacts; affects both HIGH and LOW the same way).
     let v = 0; for (const h of modelHighs) v += (h - forecastHighF) ** 2;
     const sd = Math.sqrt(v / Math.max(1, modelHighs.length - 1));
-    if (sd > 10) continue;  // unit-mismatch artifact
+    if (sd > 10) continue;
     days.push({
-      date, actualMax, forecastHighF,
-      residual: forecastHighF - actualMax,
+      date, actualMax, actualMin, forecastHighF, forecastLowF,
+      high_residual: forecastHighF - actualMax,
+      low_residual:  forecastLowF  - actualMin,
       season: seasonOf(date),
     });
   }
@@ -147,15 +153,33 @@ function emFit(y, mu0Init) {
   };
 }
 
-// Fit per-season σ_walk / σ_obs. Each season gets its own EM run on the subset
-// of days falling in that season. Production seed (μ_seed, P_seed) comes from the
-// FULL series final filter state (using whatever seasonal params apply per day) —
-// captures "current bias estimate as of end of data" regardless of season.
-function emFitPerSeason(daysSubset, mu0) {
-  if (daysSubset.length < 30) return null;  // too few for stable fit
-  const y = daysSubset.map(d => d.residual);
+// Fit per-season σ_walk / σ_obs on a residual series (either HIGH or LOW).
+function emFitPerSeason(daysSubset, residualKey, mu0) {
+  if (daysSubset.length < 30) return null;
+  const y = daysSubset.map(d => d[residualKey]);
   const fit = emFit(y, mu0);
   return { sigmaWalk: fit.sigmaWalk, sigmaObs: fit.sigmaObs, n: daysSubset.length, iters: fit.iterUsed };
+}
+
+// Fit a complete per-variable params block: {sigma_walk_cold, sigma_obs_cold,
+// sigma_walk_warm, sigma_obs_warm, mu_seed, p_seed}. Used for both HIGH and LOW.
+function fitVariable(days, residualKey) {
+  const y = days.map(d => d[residualKey]);
+  const yMean = y.reduce((a,b)=>a+b,0) / y.length;
+  const cold = emFitPerSeason(days.filter(d => d.season === "cold"), residualKey, yMean);
+  const warm = emFitPerSeason(days.filter(d => d.season === "warm"), residualKey, yMean);
+  const fullFit = emFit(y, yMean);
+  return {
+    sigma_walk_cold: cold ? Number(cold.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
+    sigma_obs_cold:  cold ? Number(cold.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
+    sigma_walk_warm: warm ? Number(warm.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
+    sigma_obs_warm:  warm ? Number(warm.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
+    mu_seed:    Number(fullFit.muSeed.toFixed(4)),
+    p_seed:     Number(fullFit.pSeed.toFixed(4)),
+    n_cold:     cold ? cold.n : 0,
+    n_warm:     warm ? warm.n : 0,
+    y_mean:     Number(yMean.toFixed(3)),
+  };
 }
 
 const out = {};
@@ -166,36 +190,22 @@ for (const [name, c] of Object.entries(data.cities)) {
     console.log(`  ${name}: SKIP (${days.length} days < ${MIN_DAYS_TO_FIT})`);
     continue;
   }
-  const y = days.map(d => d.residual);
-  const yMean = y.reduce((a,b)=>a+b,0) / y.length;
-  // Per-season fits.
-  const cold = emFitPerSeason(days.filter(d => d.season === "cold"), yMean);
-  const warm = emFitPerSeason(days.filter(d => d.season === "warm"), yMean);
-  // Full-series fit for production seed (μ_seed, P_seed). Uses unified σ for
-  // seeding; live use applies per-season values via lib/regime.js lookup.
-  const fullFit = emFit(y, yMean);
+  const high = fitVariable(days, "high_residual");
+  const low  = fitVariable(days, "low_residual");
   out[name] = {
-    sigma_walk_cold: cold ? Number(cold.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
-    sigma_obs_cold:  cold ? Number(cold.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
-    sigma_walk_warm: warm ? Number(warm.sigmaWalk.toFixed(4)) : Number(fullFit.sigmaWalk.toFixed(4)),
-    sigma_obs_warm:  warm ? Number(warm.sigmaObs.toFixed(4))  : Number(fullFit.sigmaObs.toFixed(4)),
-    mu_seed:    Number(fullFit.muSeed.toFixed(4)),
-    p_seed:     Number(fullFit.pSeed.toFixed(4)),
-    n_cold:     cold ? cold.n : 0,
-    n_warm:     warm ? warm.n : 0,
+    high, low,
     n_total:    days.length,
-    em_iters:   fullFit.iterUsed,
     date_range: `${days[0].date}..${days[days.length-1].date}`,
     fitted_at:  new Date().toISOString().slice(0, 10),
   };
-  summary.push({ name, ...out[name], y_mean: Number(yMean.toFixed(3)) });
-  console.log(`  ${name.padEnd(5)}  cold[n=${String(out[name].n_cold).padStart(3)} σw=${out[name].sigma_walk_cold.toFixed(3)} σo=${out[name].sigma_obs_cold.toFixed(3)}]  warm[n=${String(out[name].n_warm).padStart(3)} σw=${out[name].sigma_walk_warm.toFixed(3)} σo=${out[name].sigma_obs_warm.toFixed(3)}]  μ=${out[name].mu_seed.toFixed(2)}`);
+  summary.push({ name, high, low });
+  console.log(`  ${name.padEnd(5)}  HIGH[cold σw=${high.sigma_walk_cold.toFixed(3)} σo=${high.sigma_obs_cold.toFixed(3)} | warm σw=${high.sigma_walk_warm.toFixed(3)} σo=${high.sigma_obs_warm.toFixed(3)} | μ=${high.mu_seed.toFixed(2)}]  LOW[cold σw=${low.sigma_walk_cold.toFixed(3)} σo=${low.sigma_obs_cold.toFixed(3)} | warm σw=${low.sigma_walk_warm.toFixed(3)} σo=${low.sigma_obs_warm.toFixed(3)} | μ=${low.mu_seed.toFixed(2)}]`);
 }
 
 writeFileSync("per_city_kalman_params.json", JSON.stringify(out, null, 2));
 console.log(`\nWrote per_city_kalman_params.json with ${Object.keys(out).length} cities`);
 
-// Print seasonal-fit summary. Steady-state Kalman gain per season via iteration.
+// Print summary tables for both variables.
 function kssFor(sw, so) {
   let P = P0;
   for (let i = 0; i < 200; i++) {
@@ -205,12 +215,17 @@ function kssFor(sw, so) {
   }
   return (P + sw * sw) / (P + sw * sw + so * so);
 }
-console.log("\nFitted seasonal params (sorted by warm-season σ_walk):");
-summary.sort((a, b) => b.sigma_walk_warm - a.sigma_walk_warm);
-console.log("  city    cold(σw σo K_ss)        warm(σw σo K_ss)         |Δσw|");
-for (const s of summary) {
-  const KssCold = kssFor(s.sigma_walk_cold, s.sigma_obs_cold);
-  const KssWarm = kssFor(s.sigma_walk_warm, s.sigma_obs_warm);
-  const dw = Math.abs(s.sigma_walk_cold - s.sigma_walk_warm);
-  console.log(`  ${s.name.padEnd(5)}  ${s.sigma_walk_cold.toFixed(3)} ${s.sigma_obs_cold.toFixed(3)} ${KssCold.toFixed(3)}    ${s.sigma_walk_warm.toFixed(3)} ${s.sigma_obs_warm.toFixed(3)} ${KssWarm.toFixed(3)}     ${dw.toFixed(3)}`);
+function printTable(label, accessor, sortKey) {
+  console.log(`\n${label} (sorted by ${sortKey}):`);
+  console.log("  city    cold(σw σo K_ss)        warm(σw σo K_ss)         |Δσw|");
+  const rows = summary.slice().sort((a, b) => accessor(b)[sortKey] - accessor(a)[sortKey]);
+  for (const s of rows) {
+    const p = accessor(s);
+    const KssCold = kssFor(p.sigma_walk_cold, p.sigma_obs_cold);
+    const KssWarm = kssFor(p.sigma_walk_warm, p.sigma_obs_warm);
+    const dw = Math.abs(p.sigma_walk_cold - p.sigma_walk_warm);
+    console.log(`  ${s.name.padEnd(5)}  ${p.sigma_walk_cold.toFixed(3)} ${p.sigma_obs_cold.toFixed(3)} ${KssCold.toFixed(3)}    ${p.sigma_walk_warm.toFixed(3)} ${p.sigma_obs_warm.toFixed(3)} ${KssWarm.toFixed(3)}     ${dw.toFixed(3)}`);
+  }
 }
+printTable("HIGH-side fitted params", s => s.high, "sigma_walk_warm");
+printTable("LOW-side fitted params", s => s.low, "sigma_walk_warm");

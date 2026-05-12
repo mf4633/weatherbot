@@ -50,7 +50,9 @@ function previousLocalDate(dateStr) {
   return d.toISOString().slice(0, 10);
 }
 
-// Same CLI fetcher/parser as weather.js fetchLatestCLI, slimmed to high-only.
+// Same CLI fetcher/parser as weather.js fetchLatestCLI. Returns both maxF and
+// minF (HIGH and LOW); either can be null independently when the report lists
+// the value as 'M' or '---'.
 async function fetchLatestCLI(cli) {
   try {
     const url = `https://forecast.weather.gov/product.php?site=NWS&product=CLI&issuedby=${cli}&format=txt&version=1&glossary=0`;
@@ -72,22 +74,37 @@ async function fetchLatestCLI(cli) {
     }
     const isPartial = /VALID\s+(AS\s+OF|TODAY|THROUGH)/i.test(text);
 
-    const observedMissing = /^\s*MAXIMUM\s+(?:M+|-+)(?:\s|$)/im.test(text);
+    const maxObservedMissing = /^\s*MAXIMUM\s+(?:M+|-+)(?:\s|$)/im.test(text);
     let maxF = null;
     let m = text.match(/^\s*MAXIMUM\s+(-?\d+)/im);
     if (m) maxF = parseInt(m[1], 10);
-    if (maxF == null && !observedMissing) {
+    if (maxF == null && !maxObservedMissing) {
       m = text.match(/HIGH(?:EST)?\s+TEMP[A-Z\s\(\)]*\s+(-?\d+)/i);
       if (m) maxF = parseInt(m[1], 10);
     }
-    if (maxF == null && !observedMissing) {
+    if (maxF == null && !maxObservedMissing) {
       const tempBlock = text.split(/PRECIPITATION|SNOW|WIND|SKY/)[0] || text;
       m = tempBlock.match(/MAXIMUM[^\n]*?(-?\d{2,3})/i);
       if (m) maxF = parseInt(m[1], 10);
     }
 
+    // Same parsing pattern for MINIMUM (the second extreme in CLI's TEMPERATURE block).
+    const minObservedMissing = /^\s*MINIMUM\s+(?:M+|-+)(?:\s|$)/im.test(text);
+    let minF = null;
+    m = text.match(/^\s*MINIMUM\s+(-?\d+)/im);
+    if (m) minF = parseInt(m[1], 10);
+    if (minF == null && !minObservedMissing) {
+      m = text.match(/LOW(?:EST)?\s+TEMP[A-Z\s\(\)]*\s+(-?\d+)/i);
+      if (m) minF = parseInt(m[1], 10);
+    }
+    if (minF == null && !minObservedMissing) {
+      const tempBlock = text.split(/PRECIPITATION|SNOW|WIND|SKY/)[0] || text;
+      m = tempBlock.match(/MINIMUM[^\n]*?(-?\d{2,3})/i);
+      if (m) minF = parseInt(m[1], 10);
+    }
+
     return {
-      maxF,
+      maxF, minF,
       coversDate: coversDate ? coversDate.toISOString().slice(0, 10) : null,
       isPartial
     };
@@ -137,6 +154,7 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
   // quadrature. Replaces the 7d/3d rolling-mean heuristic where Kalman params
   // exist for the city (all 20 currently in lib/regime.js KALMAN_PARAMS).
   const kalmanState = regimeBlob.per_city_kalman_state || {};
+  const kalmanStateLow = regimeBlob.per_city_kalman_state_low || {};
   const settledNow = [];
   let dirty = false;
 
@@ -170,17 +188,30 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     dyn3[c.name] = last3.length >= SHORT_WINDOW
       ? last3.reduce((a, e) => a + e.residual, 0) / last3.length
       : null;
-    // Kalman regime update: one forward-filter step using fitted per-city params.
-    // Indexed by city.cli code (matches data_models.json keys; lib/regime.js
-    // KALMAN_PARAMS). Initializes from seed if no blob entry exists yet.
+    // Kalman regime update (HIGH): one forward-filter step using fitted per-city
+    // params. Indexed by city.cli code. Initializes from seed if no blob entry
+    // exists yet.
     const cliCode = c.cli;
     if (cliCode) {
       const prior = kalmanState[cliCode] && Number.isFinite(kalmanState[cliCode].mu)
         ? kalmanState[cliCode]
-        : kalmanInit(cliCode);
+        : kalmanInit(cliCode, "high");
       if (prior) {
-        const posterior = kalmanStep(prior, residual, cliCode);
+        const posterior = kalmanStep(prior, residual, cliCode, "high");
         if (posterior) kalmanState[cliCode] = posterior;
+      }
+    }
+    // Kalman regime update (LOW): only fires when CLI report includes minF.
+    // Symmetric to HIGH; separate blob key per_city_kalman_state_low to keep
+    // schema migrations local. lowResidual = pred.predLow − cliData.minF.
+    if (cliCode && cliData.minF != null && pred.predLow != null) {
+      const lowResidual = pred.predLow - cliData.minF;
+      const priorLow = kalmanStateLow[cliCode] && Number.isFinite(kalmanStateLow[cliCode].mu)
+        ? kalmanStateLow[cliCode]
+        : kalmanInit(cliCode, "low");
+      if (priorLow) {
+        const posteriorLow = kalmanStep(priorLow, lowResidual, cliCode, "low");
+        if (posteriorLow) kalmanStateLow[cliCode] = posteriorLow;
       }
     }
 
@@ -193,7 +224,9 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
       city: c.name, date: yesterday,
       predicted: pred.predHigh, actual: cliData.maxF,
       residual, rolling7: dyn[c.name], rolling3: dyn3[c.name],
-      kalman: c.cli ? kalmanState[c.cli] : null
+      kalman: c.cli ? kalmanState[c.cli] : null,
+      kalman_low: c.cli ? kalmanStateLow[c.cli] : null,
+      low_actual: cliData.minF, low_predicted: pred.predLow
     });
     dirty = true;
   }
@@ -202,6 +235,7 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     regimeBlob.per_city_residual_mean_7d = dyn;
     regimeBlob.per_city_residual_mean_3d = dyn3;
     regimeBlob.per_city_kalman_state = kalmanState;
+    regimeBlob.per_city_kalman_state_low = kalmanStateLow;
     regimeBlob.per_city_history = hist;
     regimeBlob.updated_at = new Date(now).toISOString();
     await regimeStore.setJSON("global", regimeBlob);

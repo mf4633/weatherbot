@@ -833,7 +833,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // regress quiet-day RMSE by +0.39°F. Heuristic path retained for AVL (no fit
     // yet) and as a backstop if KALMAN_PARAMS lookup ever fails.
     let kalmanBiasSigma2 = 0;  // P + σ_walk² contribution to priorStd²
-    const kalman = kalmanCorrection(city.cli, regimeBlob);
+    const kalman = kalmanCorrection(city.cli, "high", regimeBlob);
     if (kalman && Math.abs(kalman.mu) >= KALMAN_FLOOR_F) {
       priorMean -= kalman.mu;
       kalmanBiasSigma2 = kalman.P;
@@ -1018,6 +1018,18 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
+    // LOW Kalman regime correction (added 2026-05-12, mirror of HIGH wiring).
+    // Replaces no-correction previously — the LOW branch had only bias-correction
+    // and CITY_OFFSETS_LOW. With Kalman, applies cross-day bias state μ_low and
+    // propagates P_low + σ_walk² into priorLowStd² via quadrature. Quiet-day gate
+    // (|μ|<KALMAN_FLOOR_F) preserved. Same fallback path for cities without LOW
+    // params (currently none — all 20 fit cities have HIGH and LOW).
+    let kalmanLowBiasSigma2 = 0;
+    const kalmanLow = kalmanCorrection(city.cli, "low", regimeBlob);
+    if (kalmanLow && Math.abs(kalmanLow.mu) >= KALMAN_FLOOR_F) {
+      priorLowMean -= kalmanLow.mu;
+      kalmanLowBiasSigma2 = kalmanLow.P;
+    }
     // Bayesian σ for LOW: σ_post² = σ_ensemble_trough² + σ_resolution_low².
     // 5y backtest TEST RMSE 0.91°F = √(σ_ens_avg² + σ_res²) with σ_ens_avg ≈ 0.5°F →
     // σ_res ≈ 0.76°F. Use 0.7°F as σ_resolution. Lower than HIGH because nighttime
@@ -1026,8 +1038,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     const sigmaEnsembleLowEffective = sigmaEnsembleTrough ?? 0.5;
     // σ_frontal applied below as fallback after cold-front check, not here — avoids
     // double-inflating when cold-front branch already widens σ to 1.5°F floor.
+    // Kalman P_low + σ_walk² added in quadrature (cross-day bias uncertainty).
     const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
-                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F);
+                                 + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F
+                                 + kalmanLowBiasSigma2);
     // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
     // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
     // when priorLowMean is above minSoFar. The trough-realized branch above

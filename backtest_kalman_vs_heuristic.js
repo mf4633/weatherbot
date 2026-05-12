@@ -96,14 +96,17 @@ for (const [name, c] of Object.entries(data.cities)) {
 
   // Run Kalman forward filter using SEASONAL fitted params (cold = Oct-Mar, warm
   // = Apr-Sep). Picks (σ_walk, σ_obs) per day by month of `days[t].date`.
+  // New schema: params.high.{sigma_walk_cold, ...}. This backtest evaluates the
+  // HIGH branch (LOW backtest is a separate harness).
+  const ph = p.high;
   function seasonalSig(date) {
     const m = parseInt(date.slice(5, 7), 10);
     const cold = (m >= 10 || m <= 3);
     return cold
-      ? { sw: p.sigma_walk_cold, so: p.sigma_obs_cold }
-      : { sw: p.sigma_walk_warm, so: p.sigma_obs_warm };
+      ? { sw: ph.sigma_walk_cold, so: ph.sigma_obs_cold }
+      : { sw: ph.sigma_walk_warm, so: ph.sigma_obs_warm };
   }
-  let mu = p.mu_seed, P = P0;
+  let mu = ph.mu_seed, P = P0;
   const muPred = new Array(y.length), Ppred = new Array(y.length);
   for (let t = 0; t < y.length; t++) {
     const ss = seasonalSig(days[t].date);
