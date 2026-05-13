@@ -57,6 +57,13 @@ const BUY_CITYVAR_COOLDOWN_MIN = 60;
 // not surrender winners cheaply; clears round-trip fees comfortably and ignores
 // typical per-cycle model wiggle.
 const SELL_HYSTERESIS = 0.20;
+// Auto-close threshold: if the bid on our side reaches this, sell to free capital
+// for new bets rather than wait for settlement. At 99¢ vs $1.00 settlement we give
+// up ~1.07¢/contract (cents + 7%×1¢ sell fee), in exchange for the staked capital
+// being free to fund the next EV+ candidate. Bypasses the SELL_HYSTERESIS / EV
+// comparison entirely — this is a velocity-of-money optimization, not a sell-loser
+// signal. 2026-05-13.
+const AUTO_CLOSE_AT_PRICE = 0.99;
 // Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
@@ -725,17 +732,23 @@ export default async () => {
         if (avgEntry <= 0) continue;
         const sellProceeds = contracts * sellPrice;     // dollars (1 contract = $1 max payout)
         const holdEV = contracts * pNow;
-        // Forward-looking sell criterion only. The original entry price is sunk cost
+        // Auto-close path: position is at AUTO_CLOSE_AT_PRICE or above → close it
+        // to recycle capital. Skip the hysteresis/EV gate; if we can lock in 99¢
+        // now we'd rather have the cash than wait hours for $1.00.
+        const autoClose = sellPrice >= AUTO_CLOSE_AT_PRICE;
+        // Forward-looking sell criterion. The original entry price is sunk cost
         // and must NOT enter this decision — anchoring on it caused the bot to keep
         // YES positions even after the model flipped to favor NO on the same market
         // (2026-05-05 user report). Sell when current market bid exceeds the model's
         // expected payout by enough to cover round-trip fees (10% hysteresis).
-        if (holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
+        if (!autoClose && holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
         // SELL. In dry-run, fake the order response.
         const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
         const res = isDryRun ? { ok: true, body: { dryRun: true } }
                              : await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
-        sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents, dryRun: isDryRun, ok: res.ok });
+        sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
+                     reason: autoClose ? "auto-close" : "ev-flip",
+                     dryRun: isDryRun, ok: res.ok });
         if (!res.ok) errors.push({ where: "sell", ticker, response: res.body });
         else if (!isDryRun) {
           cooldownMap[botKey(ticker, isYes ? "YES" : "NO")] = new Date().toISOString();

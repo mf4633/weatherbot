@@ -26,6 +26,9 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // Mirror jackson_trader's hysteresis exactly. Fast cycle, same threshold — we want to
 // fire on the same kind of EV-divergence signal, just sooner.
 const SELL_HYSTERESIS = 0.20;
+// Mirrored from jackson_trader: auto-close at 99¢ to recycle capital instead of
+// waiting for settlement. See jackson_trader.js comment for the rationale.
+const AUTO_CLOSE_AT_PRICE = 0.99;
 // Per-ticker cooldown after a sell, mirrored from jackson_trader. Prevents both this
 // fast loop and the 5-min trader from re-entering on the same tick.
 const COOLDOWN_MIN = 60;
@@ -137,7 +140,9 @@ export default async () => {
         if (contracts <= 0) continue;
         const sellProceeds = contracts * sellPrice;
         const holdEV = contracts * pNow;
-        if (holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
+        // Auto-close path (velocity of money) — bypasses the hysteresis/EV gate.
+        const autoClose = sellPrice >= AUTO_CLOSE_AT_PRICE;
+        if (!autoClose && holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
 
         // SELL.
         const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
@@ -147,6 +152,7 @@ export default async () => {
           ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
           holdEV: Math.round(holdEV * 100) / 100,
           sellProceeds: Math.round(sellProceeds * 100) / 100,
+          reason: autoClose ? "auto-close" : "ev-flip",
           dryRun: isDryRun, ok: res.ok
         });
         if (!res.ok) {
