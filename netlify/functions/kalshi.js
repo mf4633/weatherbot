@@ -342,7 +342,10 @@ export default async () => {
     ts: now.toISOString(),
     freshness,
     disclaimer: "Educational only. EV is per $1 staked. Our model RMSE is ~1.7°F; individual bet edges can be noise. Volume = lifetime contract count. Edges from stale forecast data are FALSE — check freshness.",
-    topBets: allBets.slice(0, 30),
+    // Expanded from 30 → 200 to support the no-cap jackson_trader (2026-05-13).
+    // Trader still threshold-gates on EV / halfKelly / Kelly-LCB so the long tail
+    // gets filtered; this just stops cutting candidates the trader might want.
+    topBets: allBets.slice(0, 200),
     cities
   }, null, 2), {
     // Short cache (30s): trader cron fires every ~5 min, so a 30s edge cache means each cycle

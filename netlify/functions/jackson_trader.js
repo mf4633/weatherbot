@@ -14,9 +14,13 @@ import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketR
 import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
-// Up to 20 concurrent positions, each on a DIFFERENT market. Threshold-gated so
-// the bot fires fewer if signals don't qualify — never 20 at once unless all great.
-const MAX_CONCURRENT = 20;
+// No concurrent-position cap. Threshold gates (EV / halfKelly / Kelly-LCB), tile
+// conflicts, event-side stack caps, and the cash budget (cashDollars - committed
+// ≥ STAKE_FLOOR) bound how many bets a cycle can place. Removed the 20-bet cap
+// 2026-05-13 — was a soft safety bound from early development; per-bet stake
+// remains 1-10% of bankroll, so 100 small bets is no riskier than 20 bigger ones.
+// 2026-05-13: also enables higher-frequency capital recycling via the 99¢ auto-
+// close (e874773) — keeping the cap would have throttled that velocity benefit.
 // High-conviction floor: net-of-fee edge ≥ 10¢ AND halfKelly ≥ 5%. Model RMSE is
 // ~1.7°F so anything below this is likely noise.
 // Audit on 2026-05-04 of bot's first 28 settled positions: 3 wins (10.7%), all on
@@ -666,8 +670,13 @@ export default async () => {
     }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
     const botOpenCount = liveLedger.length;
+    // Replaces the old "MAX_CONCURRENT - botOpenCount" definition. Reports how many
+    // additional bets fit at STAKE_FLOOR with remaining cash — the real binding
+    // constraint now that the 20-bet cap is gone.
 
-    const spareCapacity = Math.max(0, MAX_CONCURRENT - botOpenCount);
+    // cashDollars hasn't been adjusted by committed yet at this point; the real
+    // running constraint is the (cashDollars - committed) check inside the buy loop.
+    const spareCapacity = Math.max(0, Math.floor(cashDollars / STAKE_FLOOR));
 
     // Buy dedup: union of bot's blob ledger AND Kalshi's authoritative position list.
     // Kalshi positions are eventually-consistent within seconds; the blob ledger lags by
@@ -857,7 +866,7 @@ export default async () => {
         });
       }
       for (const b of qualifying) {
-        if (placed >= spareCapacity) { skipped.push({ ...briefBet(b), reason: "no-spare-capacity" }); continue; }
+        // 20-bet cap removed 2026-05-13 — cash budget is the real constraint.
         if (cashDollars - committed < STAKE_FLOOR) { skipped.push({ ...briefBet(b), reason: "out-of-cash" }); continue; }
         if (b.variable === "low" && LOW_PAUSED_CITIES.has(b.city)) {
           skipped.push({ ...briefBet(b), reason: "low-city-paused" });
