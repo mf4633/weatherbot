@@ -141,8 +141,13 @@ export default async () => {
         if (contracts <= 0) continue;
         const sellProceeds = contracts * sellPrice;
         const holdEV = contracts * pNow;
-        // Auto-close path (velocity of money) — bypasses the hysteresis/EV gate.
-        const autoClose = sellPrice >= AUTO_CLOSE_AT_PRICE;
+        // Auto-close on market-implied probability (1 − opposing-side ask),
+        // not on our own bid — see jackson_trader.js for full rationale.
+        const opposingAsk = isYes ? bucket.no_ask : bucket.yes_ask;
+        const marketImpliedOurSide = (opposingAsk != null) ? (1 - opposingAsk) : null;
+        const autoClose = marketImpliedOurSide != null
+                       && marketImpliedOurSide >= AUTO_CLOSE_AT_PRICE
+                       && sellPrice > 0;
         if (!autoClose && holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
 
         // SELL.
@@ -154,6 +159,7 @@ export default async () => {
           holdEV: Math.round(holdEV * 100) / 100,
           sellProceeds: Math.round(sellProceeds * 100) / 100,
           reason: autoClose ? "auto-close" : "ev-flip",
+          marketImplied: marketImpliedOurSide != null ? Math.round(marketImpliedOurSide * 100) / 100 : null,
           dryRun: isDryRun, ok: res.ok
         });
         if (!res.ok) {

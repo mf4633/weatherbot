@@ -756,10 +756,19 @@ export default async () => {
         if (avgEntry <= 0) continue;
         const sellProceeds = contracts * sellPrice;     // dollars (1 contract = $1 max payout)
         const holdEV = contracts * pNow;
-        // Auto-close path: position is at AUTO_CLOSE_AT_PRICE or above → close it
-        // to recycle capital. Skip the hysteresis/EV gate; if we can lock in 99¢
-        // now we'd rather have the cash than wait hours for $1.00.
-        const autoClose = sellPrice >= AUTO_CLOSE_AT_PRICE;
+        // Auto-close: trigger off the MARKET'S implied probability our side wins,
+        // not our own bid. Market-maker spread + Kalshi fee structure means a
+        // genuinely near-certain market can sit with our bid at 96-97¢ while the
+        // opposing side's ASK sits at 1-3¢. Reading "market thinks we win" from
+        // (1 - opposing_ask) catches the auto-close trigger that "our bid ≥ 0.99"
+        // missed. Execute at whatever bid is currently offered — small spread
+        // give-up is worth the capital recycling. Sanity: only fire if our bid
+        // is non-zero (we need SOMETHING to fill against).
+        const opposingAsk = isYes ? bucket.no_ask : bucket.yes_ask;
+        const marketImpliedOurSide = (opposingAsk != null) ? (1 - opposingAsk) : null;
+        const autoClose = marketImpliedOurSide != null
+                       && marketImpliedOurSide >= AUTO_CLOSE_AT_PRICE
+                       && sellPrice > 0;
         // Forward-looking sell criterion. The original entry price is sunk cost
         // and must NOT enter this decision — anchoring on it caused the bot to keep
         // YES positions even after the model flipped to favor NO on the same market
@@ -772,6 +781,7 @@ export default async () => {
                              : await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
                      reason: autoClose ? "auto-close" : "ev-flip",
+                     marketImplied: marketImpliedOurSide != null ? Math.round(marketImpliedOurSide * 100) / 100 : null,
                      dryRun: isDryRun, ok: res.ok });
         if (!res.ok) errors.push({ where: "sell", ticker, response: res.body });
         else if (!isDryRun) {
