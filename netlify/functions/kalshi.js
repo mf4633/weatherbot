@@ -171,6 +171,35 @@ function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = nul
   return Math.max(0, pHi - pLo);
 }
 
+// Lazy-import @netlify/blobs at handler time so local-only callers (tests, CLI
+// invocations) still work without the runtime. Cached across calls.
+let _blobGetStore = null;
+async function getBlobStore(name) {
+  if (!_blobGetStore) {
+    try { _blobGetStore = (await import("@netlify/blobs")).getStore; }
+    catch (e) { return null; }
+  }
+  return _blobGetStore(name);
+}
+
+// Read the live calibration state. Continuously updated by calibration_update.js.
+// Returns inflation factors for HIGH and LOW; default 1.0 (no calibration) when
+// the blob is missing or undeflfined for a side. See calibration_update.js for
+// the residual-z-stdev computation.
+async function readCalibration() {
+  try {
+    const store = await getBlobStore("calibration_state");
+    if (!store) return { high: 1.0, low: 1.0 };
+    const blob = await store.get("current.json", { type: "json" });
+    return {
+      high: blob?.high?.inflation_factor ?? 1.0,
+      low:  blob?.low?.inflation_factor  ?? 1.0,
+    };
+  } catch (e) {
+    return { high: 1.0, low: 1.0 };
+  }
+}
+
 export default async () => {
   let predData;
   try {
@@ -180,6 +209,11 @@ export default async () => {
       status: 502, headers: { "content-type": "application/json" }
     });
   }
+
+  // Calibration factors widen σ_eff on each side based on empirical residual
+  // stdev. Applied as a multiplicative scaler AFTER the hierarchical-prior
+  // quadrature, so the irreducible floor is still respected as a lower bound.
+  const calibration = await readCalibration();
 
   const now = new Date();
   const cities = [];
@@ -308,7 +342,8 @@ export default async () => {
     // σ_eff = √(σ_ensemble² + σ_irreducible²): hierarchical-prior formulation that
     // never collapses below the prior. See SIGMA_IRREDUCIBLE_F header.
     if (tickers.high) {
-      const sigmaEff = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
+      const sigmaEff = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
+                       * calibration.high;
       const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
                                     city.maxSoFarCli ?? city.maxSoFar, null);
       if (r) {
@@ -321,7 +356,8 @@ export default async () => {
     }
     // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
-      const sigmaEff = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
+      const sigmaEff = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
+                       * calibration.low;
       const r = await processEvent(city, tickers.low, "low", city.lowMean, sigmaEff,
                                     null, city.minSoFarCli ?? city.minSoFar);
       if (r) {
@@ -341,6 +377,7 @@ export default async () => {
   return new Response(JSON.stringify({
     ts: now.toISOString(),
     freshness,
+    calibration,  // live σ-inflation factors applied this call
     disclaimer: "Educational only. EV is per $1 staked. Our model RMSE is ~1.7°F; individual bet edges can be noise. Volume = lifetime contract count. Edges from stale forecast data are FALSE — check freshness.",
     // Expanded from 30 → 200 to support the no-cap jackson_trader (2026-05-13).
     // Trader still threshold-gates on EV / halfKelly / Kelly-LCB so the long tail
