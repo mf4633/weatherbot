@@ -125,7 +125,8 @@ export default async () => {
         for (const c of kalshiData.cities) {
           for (const [varName, variant] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
             if (!variant) continue;
-            const found = variant.find(b => ticker.endsWith("-" + b.ticker));
+            // Mirror jackson_trader.js fix: b.ticker is the FULL ticker.
+            const found = variant.find(b => b.ticker === ticker);
             if (found) { bucket = found; citySide = c; soldVariable = varName; break; }
           }
           if (bucket) break;

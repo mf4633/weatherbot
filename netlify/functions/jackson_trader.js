@@ -734,7 +734,12 @@ export default async () => {
         for (const c of kalshiData.cities) {
           for (const [varName, variant] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
             if (!variant) continue;
-            const found = variant.find(b => ticker.endsWith("-" + b.ticker));
+            // kalshi.js emits b.ticker as the FULL Kalshi market ticker (e.g.,
+            // "KXHIGHTDC-26MAY13-B75.5"), not the short bucket code. The old
+            // endsWith("-" + b.ticker) check assumed the short form and so
+            // never matched — bucket was always null, sell loop silently
+            // skipped every position. Fixed 2026-05-13.
+            const found = variant.find(b => b.ticker === ticker);
             if (found) { bucket = found; citySide = c; soldVariable = varName; break; }
           }
           if (bucket) break;
