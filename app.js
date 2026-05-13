@@ -568,13 +568,27 @@ async function loadJackson() {
         <th>Ticker</th><th>Action</th><th>Side</th><th>Count</th><th>Price</th><th>When (UTC)</th>
       </tr></thead><tbody>${fills.slice(0, 20).map(f => {
         const count = parseFloat(f.count_fp || "0");
-        const price = parseFloat((f.side === "yes" ? f.yes_price_dollars : f.no_price_dollars) || "0");
+        const yp = parseFloat(f.yes_price_dollars || "0");
+        const np = parseFloat(f.no_price_dollars  || "0");
+        // Kalshi reports sells in YES-coordinates regardless of which side you
+        // actually held (a NO position closed at no_bid=0.99 comes back as
+        // side=yes, yes_price=0.01, no_price=0.99). For sells, display whichever
+        // side has the higher price — that's the position you actually closed
+        // and the price you actually received. Buys are unambiguous.
+        let displaySide, displayPrice;
+        if (f.action === "sell" && yp > 0 && np > 0) {
+          if (np > yp) { displaySide = "NO";  displayPrice = np; }
+          else         { displaySide = "YES"; displayPrice = yp; }
+        } else {
+          displaySide  = (f.side || "").toUpperCase();
+          displayPrice = f.side === "yes" ? yp : np;
+        }
         return `<tr>
           <td class="muted small">${f.ticker}</td>
           <td>${f.action}</td>
-          <td class="${f.side === 'yes' ? 'warm' : 'cool'}">${(f.side || "").toUpperCase()}</td>
+          <td class="${displaySide === 'YES' ? 'warm' : 'cool'}">${displaySide}</td>
           <td>${count}</td>
-          <td>$${price.toFixed(2)}</td>
+          <td>$${displayPrice.toFixed(2)}</td>
           <td class="muted small">${(f.created_time || "").slice(0, 16)}</td>
         </tr>`;
       }).join("")}</tbody></table>`;
