@@ -159,6 +159,16 @@ function betWinsAt(bet, x) {
 // 2026-05-04: previous NO version bailed out when observation was inside/above the bucket;
 // that missed the CHI low B48.5 NO failure mode where minSoFar landed inside the bucket.
 const BUCKET_MARGIN_MIN_F = 0.6;       // NO-side threshold
+// Sigma-aware bucket-margin (2026-05-13): require model μ ≥ z·σ_eff from the
+// nearest decisive B-bucket boundary. Replaces the implicit "all bets equally
+// margin-sensitive" assumption — a 0.6°F absolute margin is loose when σ=2°F
+// and tight when σ=0.5°F. Posterior-σ-units is the principled framing.
+// Backtest on n=138 (analyze_fix_proposals.js, strategy G): cuts 60 of 101
+// staged-heuristic bets, median P&L improvement +$99 (95% CI [-$25, +$222]).
+// CI doesn't exclude 0 but the lower bound is small and the conceptual
+// argument is independent of the data. Mirrors kalshi.js's SIGMA_IRREDUCIBLE_F.
+const SIGMA_IRREDUCIBLE_F      = 1.0;
+const SIGMA_BUCKET_MARGIN_Z    = 0.5;
 const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see header)
 // Tail-bucket (T-prefix) YES gate: for cold-tail LOW YES or hot-tail HIGH YES, the
 // daily extremum must move past the tail boundary for the bet to settle. If the
@@ -960,6 +970,30 @@ export default async () => {
         if (marginDebug) {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
+        }
+        // Sigma-aware bucket-margin gate. Independent of obs (the absolute-°F
+        // gate above is obs-based: maxSoFar/minSoFar vs bucket edge). This gate
+        // is model-based: how many σ_eff away is the model μ from the bucket
+        // boundaries? Skips B-bucket bets where the model's prediction sits
+        // closer than 0.5σ_eff to either edge — those are coin-flips in posterior
+        // terms regardless of how confident the EV calc looks. T-tail bets bypass
+        // (boundary semantics differ; tail-posterior gate already handles them).
+        if (b.ticker?.startsWith("B") && Number.isFinite(b.loInt) && Number.isFinite(b.hiInt)
+            && b.modelMean != null && b.modelStd != null) {
+          const sigmaEff = Math.sqrt(b.modelStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
+          const contLo = b.loInt - 0.5;
+          const contHi = b.hiInt + 0.5;
+          const sigmaMargin = Math.min(
+            Math.abs(b.modelMean - contLo) / sigmaEff,
+            Math.abs(b.modelMean - contHi) / sigmaEff
+          );
+          if (sigmaMargin < SIGMA_BUCKET_MARGIN_Z) {
+            skipped.push({ ...briefBet(b), reason: "sigma-margin-thin",
+                           sigmaMargin: Math.round(sigmaMargin * 1000) / 1000,
+                           thresholdZ: SIGMA_BUCKET_MARGIN_Z,
+                           sigmaEff: Math.round(sigmaEff * 100) / 100 });
+            continue;
+          }
         }
         // Posterior tail gate (Bayes work order #2): replaces the old tail-obs-floor +
         // tail-obs-ceiling thresholds with a single π. Skip if P(win | obs, σ_cooling) < π.
