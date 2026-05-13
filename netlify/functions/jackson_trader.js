@@ -731,7 +731,12 @@ export default async () => {
         }
         if (!bucket) continue;
         const isYes = p.qty > 0;
-        const sellPrice = isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+        // kalshi.js writes the field as yes_bid/no_bid; the old kalshi_ prefix never
+        // existed in the snapshot, so this resolved to undefined and the sell loop
+        // skipped every position (silently no-op since the trader's birth). Fixed
+        // 2026-05-13 — the 99¢ auto-close commit (e874773) surfaced the bug because
+        // a DC NO position sitting at no_bid=0.99 should have closed and didn't.
+        const sellPrice = isYes ? bucket.yes_bid : bucket.no_bid;
         if (sellPrice == null || sellPrice <= 0) continue;
         const pNow = isYes ? bucket.p_model : (1 - bucket.p_model);
         const contracts = Math.abs(p.qty);

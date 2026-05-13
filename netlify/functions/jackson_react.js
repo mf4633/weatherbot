@@ -133,7 +133,8 @@ export default async () => {
         if (!bucket) continue;
 
         const isYes = p.qty > 0;
-        const sellPrice = isYes ? bucket.kalshi_yes_bid : bucket.kalshi_no_bid;
+        // Same fix as jackson_trader.js: field is yes_bid/no_bid, not kalshi_*_bid.
+        const sellPrice = isYes ? bucket.yes_bid : bucket.no_bid;
         if (sellPrice == null || sellPrice <= 0) continue;
         const pNow = isYes ? bucket.p_model : (1 - bucket.p_model);
         const contracts = Math.abs(p.qty);
