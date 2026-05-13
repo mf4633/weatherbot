@@ -2,7 +2,12 @@
 // `balance_history` blob each tick with cash, portfolio value, total equity, and
 // derived stats (hit-rate, ROI, realized P&L, fees) computed from settled bets.
 // Idempotent within a UTC day — if already snapshotted today, overwrites that
-// day's row rather than appending. Manually invokable via HTTP for first-run seed.
+// day's row rather than appending.
+//
+// NOTE: Netlify scheduled functions cannot also have a custom HTTP path
+// (https://ntl.fyi/custom-path-scheduled-functions), so the core logic is
+// exported as takeBalanceSnapshot() and re-used by balance_history.js when
+// invoked with `?seed=1` for manual first-run seeding.
 
 import { getStore } from "@netlify/blobs";
 import { getBalance } from "./jackson.js";
@@ -42,46 +47,50 @@ async function loadSettledStats() {
   };
 }
 
-export default async () => {
+export async function takeBalanceSnapshot() {
   const now = new Date();
   const dateKey = todayUtcKey(now);
+  const bal = await getBalance();
+  // balance API returns { balance: <cents> } per Kalshi docs; portfolio_value
+  // shows mark-to-market open positions value.
+  const cashCents = bal.balance ?? 0;
+  const portfolioValueCents = bal.portfolio_value ?? 0;
+  const totalEquityCents = cashCents + portfolioValueCents;
+
+  const settledStats = await loadSettledStats();
+
+  const store = getStore("balance_history");
+  const existing = (await store.get(HISTORY_KEY, { type: "json" })) || { entries: [] };
+  // Idempotent within a UTC day: replace today's entry if it exists.
+  const filtered = (existing.entries || []).filter(e => e.dateUtc !== dateKey);
+  filtered.push({
+    dateUtc: dateKey,
+    tsUTC: now.toISOString(),
+    cashCents,
+    portfolioValueCents,
+    totalEquityCents,
+    cashDollars:           Math.round(cashCents) / 100,
+    portfolioValueDollars: Math.round(portfolioValueCents) / 100,
+    totalEquityDollars:    Math.round(totalEquityCents) / 100,
+    settledStats,
+  });
+  filtered.sort((a, b) => a.dateUtc.localeCompare(b.dateUtc));
+  const trimmed = filtered.slice(-TRIM_DAYS);
+  await store.setJSON(HISTORY_KEY, { entries: trimmed, updatedAt: now.toISOString() });
+
+  return { dateUtc: dateKey, totalEquityDollars: totalEquityCents / 100,
+           settledStats, entries: trimmed.length };
+}
+
+export default async () => {
   try {
-    const bal = await getBalance();
-    // balance API returns { balance: <cents> } per Kalshi docs; portfolio_value
-    // shows mark-to-market open positions value.
-    const cashCents = bal.balance ?? 0;
-    const portfolioValueCents = bal.portfolio_value ?? 0;
-    const totalEquityCents = cashCents + portfolioValueCents;
-
-    const settledStats = await loadSettledStats();
-
-    const store = getStore("balance_history");
-    const existing = (await store.get(HISTORY_KEY, { type: "json" })) || { entries: [] };
-    // Idempotent within a UTC day: replace today's entry if it exists.
-    const filtered = (existing.entries || []).filter(e => e.dateUtc !== dateKey);
-    filtered.push({
-      dateUtc: dateKey,
-      tsUTC: now.toISOString(),
-      cashCents,
-      portfolioValueCents,
-      totalEquityCents,
-      cashDollars:           Math.round(cashCents) / 100,
-      portfolioValueDollars: Math.round(portfolioValueCents) / 100,
-      totalEquityDollars:    Math.round(totalEquityCents) / 100,
-      settledStats,
-    });
-    filtered.sort((a, b) => a.dateUtc.localeCompare(b.dateUtc));
-    const trimmed = filtered.slice(-TRIM_DAYS);
-    await store.setJSON(HISTORY_KEY, { entries: trimmed, updatedAt: now.toISOString() });
-
-    return new Response(JSON.stringify({
-      ok: true, dateUtc: dateKey, totalEquityDollars: totalEquityCents / 100,
-      settledStats, entries: trimmed.length
-    }, null, 2), { status: 200, headers: { "content-type": "application/json" } });
+    const result = await takeBalanceSnapshot();
+    return new Response(JSON.stringify({ ok: true, ...result }, null, 2),
+      { status: 200, headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, error: String(e?.message || e) }),
       { status: 500, headers: { "content-type": "application/json" } });
   }
 };
 
-export const config = { schedule: "0 0 * * *", path: "/api/balance_snapshot" };
+export const config = { schedule: "0 0 * * *" };

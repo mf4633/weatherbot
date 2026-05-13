@@ -2,8 +2,24 @@
 // rollups (peak equity, current drawdown, daily Δ, days running).
 
 import { getStore } from "@netlify/blobs";
+import { takeBalanceSnapshot } from "./balance_snapshot.js";
 
-export default async () => {
+export default async (req) => {
+  // Manual seed entry point — Netlify scheduled functions can't have a custom
+  // HTTP path, so seeding before the first 00:00 UTC tick goes through here.
+  if (req?.url) {
+    try {
+      const u = new URL(req.url);
+      if (u.searchParams.get("seed") === "1") {
+        const result = await takeBalanceSnapshot();
+        return new Response(JSON.stringify({ ok: true, seeded: true, ...result }, null, 2),
+          { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+      }
+    } catch (e) {
+      return new Response(JSON.stringify({ ok: false, seeded: true, error: String(e?.message || e) }),
+        { status: 500, headers: { "content-type": "application/json" } });
+    }
+  }
   try {
     const store = getStore("balance_history");
     const blob = await store.get("history.json", { type: "json" });
