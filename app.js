@@ -825,12 +825,68 @@ loadPaper();
 loadCombo();
 loadJackson();
 loadBalanceHistory();
+loadCalibration();
 setInterval(load, 60_000);
 setInterval(loadKalshi, 120_000);
 setInterval(loadPaper, 60_000);
 setInterval(loadCombo, 60_000);
 setInterval(loadJackson, 60_000);
 setInterval(loadBalanceHistory, 5 * 60_000);
+setInterval(loadCalibration, 5 * 60_000);
+
+// σ-calibration display. Refreshes every 5 min (matches the cron's */30 update
+// cadence loosely — we may show stale-by-up-to-5min data, which is fine).
+async function loadCalibration() {
+  const el = document.getElementById("calibration-wrap");
+  if (!el) return;
+  try {
+    const r = await fetch("/api/calibration_state", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if (!j.ok || !j.updated_at) {
+      el.innerHTML = `<span class="muted">No calibration data yet. The cron fires every 30 min — or trigger manually: <code>/api/calibration_state?seed=1</code>.</span>`;
+      return;
+    }
+    el.innerHTML = renderCalibration(j);
+  } catch (e) {
+    el.innerHTML = `<span class="muted">Calibration unavailable: ${e.message}</span>`;
+  }
+}
+
+function renderCalibration(c) {
+  const fmtPct = v => v == null ? "—" : (100 * v).toFixed(0) + "%";
+  const fmtNum = (v, d) => v == null ? "—" : v.toFixed(d ?? 2);
+  const updated = c.updated_at ? new Date(c.updated_at).toISOString().slice(11, 16) + " UTC" : "—";
+  // Color the factor: 1.0 neutral, >1.3 warm (heavy inflation = model overconfident),
+  // <1.0 shouldn't happen (floor protects) but mark cool if it does.
+  const factorCls = f => f == null ? "muted" : (f > 1.3 ? "warm" : (f < 1.0 ? "cool" : ""));
+  // Color coverage: green if within 5% of nominal, warm if much worse than nominal.
+  const covCls = (emp, nom) => emp == null ? "muted" : (Math.abs(emp - nom) <= 0.05 ? "" : "warm");
+  const sideRow = (label, s) => {
+    if (!s || s.n === 0) {
+      return `<tr><td><strong>${label}</strong></td><td colspan="6" class="muted">no matched bets yet</td></tr>`;
+    }
+    return `<tr>
+      <td><strong>${label}</strong></td>
+      <td class="${factorCls(s.inflation_factor)}"><strong>${fmtNum(s.inflation_factor, 2)}×</strong></td>
+      <td>n=${s.n}</td>
+      <td>stdev(z)=${fmtNum(s.stdev_z, 2)}</td>
+      <td class="${covCls(s.coverage_68, 0.68)}">68%CI cov=${fmtPct(s.coverage_68)}</td>
+      <td class="${covCls(s.coverage_95, 0.95)}">95%CI cov=${fmtPct(s.coverage_95)}</td>
+      <td class="muted small">w_data=${fmtPct(s.data_weight)}, cap=${fmtNum(s.adaptive_cap, 2)}</td>
+    </tr>`;
+  };
+  return `<div class="muted small">last update ${updated} · matched ${c.matched ?? 0} bets to actuals (${c.unmatched ?? 0} unmatched)</div>
+  <table class="paper-table" style="margin-top:6px">
+    <thead><tr>
+      <th>side</th><th>σ × factor</th><th>n</th><th>stdev(z)</th><th>68% cov</th><th>95% cov</th><th>diagnostics</th>
+    </tr></thead>
+    <tbody>
+      ${sideRow("HIGH", c.high)}
+      ${sideRow("LOW",  c.low)}
+    </tbody>
+  </table>`;
+}
 
 // Daily equity history — one row per UTC day from /api/balance_history.
 // Renders a small inline SVG line chart of total equity over time + stats.

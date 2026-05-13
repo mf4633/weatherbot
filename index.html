@@ -43,6 +43,15 @@
   <h3>Daily equity history</h3>
   <div id="balance-rollup" class="sub muted">Loading…</div>
   <div id="balance-chart-wrap" style="margin: 8px 0 16px 0;"></div>
+  <h3>σ-calibration (live)</h3>
+  <p class="sub muted">
+    Continuously-updated multiplier on σ_eff, derived from empirical
+    <code>stdev(z)</code> across settled-bet residuals. Bayesian-shrunk toward 1.0
+    when n is low; adaptively capped by observed tail behavior. Factor &gt; 1
+    means the model has been systematically overconfident and the bot is
+    inflating uncertainty to compensate.
+  </p>
+  <div id="calibration-wrap" class="sub muted">Loading…</div>
   <h3>Open positions</h3>
   <div id="jackson-open-wrap"></div>
   <h3>Recent fills</h3>
