@@ -513,7 +513,7 @@ async function loadJackson() {
         }
       }
       openEl.innerHTML = `<table class="paper-table"><thead><tr>
-        <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Contracts</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Model μ±σ</th><th>Purchased</th>
+        <th>City</th><th>Var</th><th>Bucket</th><th>Side</th><th>Contracts</th><th>Entry</th><th>Stake</th><th>Mkt now</th><th>Unreal P&L</th><th>Predicted high/low</th><th>Purchased</th>
       </tr></thead><tbody>${heldPositions.map(p => {
         const isYes = p._qty > 0;
         const contracts = Math.abs(p._qty);
@@ -524,21 +524,28 @@ async function loadJackson() {
         const bucket = mtm.bucket || p.ticker.split("-").pop();
         const sellPx = mtm.sellPrice;
         const unr = mtm.unrealized_pnl;
-        // Show raw μ and (when materially different) the obs-constrained effective μ.
-        // The constrained μ = E[min(X, minSoFar)] for LOW or E[max(X, maxSoFar)] for HIGH;
-        // it collapses toward the already-observed bound once the diurnal extremum is in.
-        // Display "77.7→78.1°F" tells the operator the bet is bounded by today's obs even
-        // though the raw forecast μ would imply more edge than really exists.
+        // Predicted-temp column: bet-type-aware model μ ± σ. For temp bets, append
+        // the obs-constrained effective μ ("→ 99.0°F") when it shifts the prediction
+        // by ≥ 0.1°F (HIGH max-floored or LOW min-ceiled — see weather.js obs-floor
+        // logic). Tag with "in" / "out" of the bet's bucket so the model-vs-strike
+        // relationship is visible at a glance: NO bets want "out", YES bets want "in".
         const isTemp = mtm.variable !== "rain";
         let muSig = "—";
         if (mtm.modelMean != null) {
           const u = isTemp ? '°F' : '″';
           const d = isTemp ? 1 : 2;
           const raw = `${mtm.modelMean.toFixed(d)}±${mtm.modelStd.toFixed(d)}`;
+          const effMu = isTemp ? (mtm.effectiveMean ?? mtm.modelMean) : mtm.modelMean;
           if (isTemp && mtm.effectiveMean != null && Math.abs(mtm.effectiveMean - mtm.modelMean) >= 0.1) {
             muSig = `${raw} → <span class="${mtm.variable === "low" ? 'cool' : 'warm'}">${mtm.effectiveMean.toFixed(1)}</span>${u}`;
           } else {
             muSig = `${raw}${u}`;
+          }
+          // Bucket-vs-prediction indicator (temp only — rain bets are threshold-based, not bucketed).
+          if (isTemp && Number.isFinite(mtm.loInt) && Number.isFinite(mtm.hiInt)) {
+            const inBucket = effMu >= (mtm.loInt - 0.5) && effMu < (mtm.hiInt + 0.5);
+            const goodForBet = inBucket === isYes;  // YES wants in-bucket, NO wants out
+            muSig += ` <span class="tag ${goodForBet ? 'warm' : 'cool'}">${inBucket ? 'in' : 'out'}</span>`;
           }
         }
         const purchasedRaw = firstBuyByTicker[p.ticker] || p.last_updated_ts || "";

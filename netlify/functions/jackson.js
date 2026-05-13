@@ -327,6 +327,7 @@ function enrichPositions(positions, kalshi, rain) {
     let modelMean = null, modelStd = null;
     let bucketLabel = bucketTicker;
     let effectiveMean = null, obsBound = null;
+    let loInt = null, hiInt = null;  // bucket bounds for temp bets (null for rain)
 
     if (variable === "rain") {
       // Rain branch: bid/p come from rainbot's full-ticker lookup. modelMean/modelStd
@@ -355,6 +356,8 @@ function enrichPositions(positions, kalshi, rain) {
       // the wrong key returned undefined and silently zeroed totalUnrealizedPnl.
       sellPrice = bucket ? (isYes ? bucket.yes_bid : bucket.no_bid) : null;
       bucketLabel = bucket?.bucket || bucketTicker;
+      loInt = bucket?.loInt ?? null;
+      hiInt = bucket?.hiInt ?? null;
       modelMean = (variable === "high") ? cityModelLocal?.highMean
                 : (variable === "low")  ? cityModelLocal?.lowMean  : null;
       modelStd  = (variable === "high") ? cityModelLocal?.highStd
@@ -382,6 +385,7 @@ function enrichPositions(positions, kalshi, rain) {
     }
     result[p.ticker] = {
       city: cityName, variable, bucket: bucketLabel,
+      loInt, hiInt,  // bucket bounds; null for rain. Dashboard uses these for the in/out tag.
       modelMean: modelMean != null ? Math.round(modelMean * 100) / 100 : null,
       modelStd:  modelStd  != null ? Math.round(modelStd  * 100) / 100 : null,
       effectiveMean: effectiveMean != null ? Math.round(effectiveMean * 100) / 100 : null,
