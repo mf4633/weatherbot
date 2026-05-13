@@ -17,8 +17,16 @@ const PREDICTIONS_STORE  = "predictions";
 const CALIBRATION_STORE  = "calibration_state";
 const CALIBRATION_KEY    = "current.json";
 
-const MIN_N_FOR_INFLATE = 20;  // below this, ship factor=1.0 (insufficient data)
-const MAX_INFLATION     = 2.5; // cap to avoid pathological blow-ups
+// Bayesian shrinkage replaces the old "n<20 → factor=1.0" cliff. The prior is
+// "model is well-calibrated" (factor=1.0) with PRIOR_EFFECTIVE_N synthetic
+// observations. Posterior factor is a precision-weighted blend of prior and
+// data: at n=0, factor=1.0; at n=10, half-weight to data; at n=100, ~91% to
+// data. Smooth transition — no discontinuity.
+const PRIOR_EFFECTIVE_N = 10;
+const PRIOR_FACTOR      = 1.0;
+// Never shrink σ_eff below the raw σ_ensemble — model is allowed to be
+// conservative, just not allowed to be more confident than it claimed.
+const FLOOR_FACTOR      = 1.0;
 
 // City name → CLI code, mirrored from weather.js CITIES to keep this file
 // self-contained (no cross-import side effects).
@@ -114,36 +122,74 @@ async function computeCalibration() {
     matched++;
   }
 
-  const inflate = (zs) => {
-    if (zs.length < MIN_N_FOR_INFLATE) return 1.0;
-    const s = stdev(zs);
-    if (!Number.isFinite(s) || s <= 1.0) return 1.0;
-    return Math.min(MAX_INFLATION, s);
+  // Learning calibration factor:
+  //   - shrunk: Bayesian-shrunk empirical stdev (smooths the n→0 transition)
+  //   - cap: adaptive 95th-percentile cap (data-derived ceiling — wider tails
+  //          require a higher cap to keep coverage honest; with few obs the
+  //          cap is loose so well-calibrated data can express itself)
+  //   - factor = max(FLOOR, min(shrunk, cap))
+  const calibrate = (zs) => {
+    if (zs.length === 0) {
+      return { factor: PRIOR_FACTOR, shrunk: PRIOR_FACTOR, cap: null, p95_abs_z: null };
+    }
+    const sd = stdev(zs);
+    // Bayesian shrinkage of stdev toward the PRIOR_FACTOR (1.0).
+    const w_data  = zs.length / (zs.length + PRIOR_EFFECTIVE_N);
+    const shrunk  = Number.isFinite(sd) && sd > 0
+      ? PRIOR_FACTOR * (1 - w_data) + sd * w_data
+      : PRIOR_FACTOR;
+    // Adaptive cap: 95th percentile of |z| / 1.96. Translates "the wildest
+    // observation we've seen (in the tail) needs to fit inside a 95% CI" into
+    // a σ multiplier. With <10 obs the cap is Infinity (let the data speak).
+    const abs_zs = zs.map(Math.abs).sort((a, b) => b - a);
+    const idx95  = Math.floor(0.05 * abs_zs.length);
+    const p95    = abs_zs[idx95] ?? abs_zs[0];
+    const cap    = (zs.length >= 10) ? Math.max(FLOOR_FACTOR, p95 / 1.96) : Infinity;
+    const factor = Math.max(FLOOR_FACTOR, Math.min(shrunk, cap));
+    return {
+      factor: Math.round(factor * 1000) / 1000,
+      shrunk: Math.round(shrunk * 1000) / 1000,
+      cap: Number.isFinite(cap) ? Math.round(cap * 1000) / 1000 : null,
+      p95_abs_z: Math.round(p95 * 1000) / 1000,
+      data_weight: Math.round(w_data * 1000) / 1000  // how much we trust the data vs. the prior
+    };
   };
   // Empirical 68% / 95% coverage diagnostics — useful for the dashboard.
   const coverageFraction = (zs, z_crit) =>
     zs.length ? zs.filter(z => Math.abs(z) <= z_crit).length / zs.length : null;
 
+  const cHigh = calibrate(zHigh);
+  const cLow  = calibrate(zLow);
   return {
     updated_at: new Date().toISOString(),
     high: {
       n: zHigh.length,
-      mean_z: zHigh.length ? mean(zHigh) : null,
-      stdev_z: zHigh.length ? stdev(zHigh) : null,
+      mean_z: zHigh.length ? Math.round(mean(zHigh) * 1000) / 1000 : null,
+      stdev_z: zHigh.length ? Math.round(stdev(zHigh) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zHigh, 1.0),
       coverage_95: coverageFraction(zHigh, 1.96),
-      inflation_factor: inflate(zHigh)
+      inflation_factor: cHigh.factor,
+      shrunk_estimate: cHigh.shrunk,
+      adaptive_cap: cHigh.cap,
+      p95_abs_z: cHigh.p95_abs_z,
+      data_weight: cHigh.data_weight
     },
     low: {
       n: zLow.length,
-      mean_z: zLow.length ? mean(zLow) : null,
-      stdev_z: zLow.length ? stdev(zLow) : null,
+      mean_z: zLow.length ? Math.round(mean(zLow) * 1000) / 1000 : null,
+      stdev_z: zLow.length ? Math.round(stdev(zLow) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zLow, 1.0),
       coverage_95: coverageFraction(zLow, 1.96),
-      inflation_factor: inflate(zLow)
+      inflation_factor: cLow.factor,
+      shrunk_estimate: cLow.shrunk,
+      adaptive_cap: cLow.cap,
+      p95_abs_z: cLow.p95_abs_z,
+      data_weight: cLow.data_weight
     },
     matched, unmatched,
-    notes: `Inflation = max(1.0, stdev(z)); floor 1.0, cap ${MAX_INFLATION}. Requires n≥${MIN_N_FOR_INFLATE} for non-trivial value.`
+    notes: `Factor = max(${FLOOR_FACTOR}, min(shrunk, adaptive_cap)). `
+         + `Shrunk = Bayesian blend of empirical stdev(z) with prior 1.0 at effective n=${PRIOR_EFFECTIVE_N}. `
+         + `Adaptive cap = quantile95(|z|) / 1.96, active once n≥10. No hard sample-size cliff.`
   };
 }
 
