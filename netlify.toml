@@ -20,6 +20,9 @@
 [functions."combo_trader"]
   schedule = "*/30 * * * *"
 
+[functions."balance_snapshot"]
+  schedule = "0 0 * * *"
+
 [[edge_functions]]
   path = "/*"
   function = "auth"
@@ -92,4 +95,14 @@
 [[redirects]]
   from = "/api/combo_trader"
   to = "/.netlify/functions/combo_trader"
+  status = 200
+
+[[redirects]]
+  from = "/api/balance_snapshot"
+  to = "/.netlify/functions/balance_snapshot"
+  status = 200
+
+[[redirects]]
+  from = "/api/balance_history"
+  to = "/.netlify/functions/balance_history"
   status = 200

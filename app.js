@@ -803,8 +803,87 @@ loadKalshi();
 loadPaper();
 loadCombo();
 loadJackson();
+loadBalanceHistory();
 setInterval(load, 60_000);
 setInterval(loadKalshi, 120_000);
 setInterval(loadPaper, 60_000);
 setInterval(loadCombo, 60_000);
 setInterval(loadJackson, 60_000);
+setInterval(loadBalanceHistory, 5 * 60_000);
+
+// Daily equity history — one row per UTC day from /api/balance_history.
+// Renders a small inline SVG line chart of total equity over time + stats.
+async function loadBalanceHistory() {
+  try {
+    const r = await fetch("/api/balance_history", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    renderBalanceRollup(j.rollup);
+    renderBalanceChart(j.entries || []);
+  } catch (e) {
+    const el = document.getElementById("balance-rollup");
+    if (el) el.textContent = `Balance history unavailable: ${e.message}`;
+  }
+}
+
+function renderBalanceRollup(rollup) {
+  const el = document.getElementById("balance-rollup");
+  if (!el) return;
+  if (!rollup) {
+    el.innerHTML = `No snapshots yet — first one fires at 00:00 UTC, or trigger manually: <code>/api/balance_snapshot</code>`;
+    return;
+  }
+  const fmt = n => (n >= 0 ? "+" : "") + "$" + n.toFixed(2);
+  const cls = n => n >= 0 ? "warm" : "cool";
+  const r = rollup;
+  el.innerHTML = `
+    <span>Equity <strong>$${r.currentEquity.toFixed(2)}</strong></span>
+    &nbsp;·&nbsp; peak $${r.peakEquity.toFixed(2)}
+    &nbsp;·&nbsp; drawdown $${r.drawdownDollars.toFixed(2)} (${r.drawdownPct.toFixed(1)}%)
+    &nbsp;·&nbsp; <span class="${cls(r.lastDayDelta)}">last 24h ${fmt(r.lastDayDelta)}</span>
+    &nbsp;·&nbsp; <span class="${cls(r.totalDelta)}">since start ${fmt(r.totalDelta)}</span>
+    &nbsp;·&nbsp; ${r.daysRunning} day${r.daysRunning === 1 ? "" : "s"} tracked
+  `;
+}
+
+function renderBalanceChart(entries) {
+  const wrap = document.getElementById("balance-chart-wrap");
+  if (!wrap) return;
+  if (entries.length < 2) {
+    wrap.innerHTML = `<div class="sub muted">Need ≥ 2 daily snapshots before the chart appears. Current: ${entries.length}.</div>`;
+    return;
+  }
+  const W = 720, H = 180, PADL = 50, PADR = 20, PADT = 12, PADB = 24;
+  const xs = entries.map((_, i) => i);
+  const ys = entries.map(e => e.totalEquityDollars);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const yRange = Math.max(maxY - minY, 1);
+  const sx = i => PADL + (i / (xs.length - 1)) * (W - PADL - PADR);
+  const sy = v => PADT + (1 - (v - minY) / yRange) * (H - PADT - PADB);
+  const pts = entries.map((e, i) => `${sx(i).toFixed(1)},${sy(e.totalEquityDollars).toFixed(1)}`).join(" ");
+  const firstY = sy(ys[0]);
+  const lastEntry = entries[entries.length - 1];
+  const lastY = sy(lastEntry.totalEquityDollars);
+  const ticksY = 4;
+  const yTicks = [];
+  for (let t = 0; t <= ticksY; t++) {
+    const v = minY + (yRange * t / ticksY);
+    yTicks.push(`<line x1="${PADL}" x2="${W - PADR}" y1="${sy(v)}" y2="${sy(v)}" stroke="#2a2a2a" stroke-width="0.5"/><text x="${PADL - 6}" y="${sy(v) + 3}" font-size="10" text-anchor="end" fill="#888">$${v.toFixed(0)}</text>`);
+  }
+  const xTicks = [];
+  const skip = Math.max(1, Math.floor(entries.length / 8));
+  for (let i = 0; i < entries.length; i += skip) {
+    xTicks.push(`<text x="${sx(i)}" y="${H - 6}" font-size="9" text-anchor="middle" fill="#888">${entries[i].dateUtc.slice(5)}</text>`);
+  }
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px; background:#0d0d0d; border:1px solid #222; border-radius:4px;">
+      ${yTicks.join("")}
+      <line x1="${PADL}" x2="${PADL}" y1="${PADT}" y2="${H - PADB}" stroke="#444" stroke-width="0.5"/>
+      <line x1="${PADL}" x2="${W - PADR}" y1="${H - PADB}" y2="${H - PADB}" stroke="#444" stroke-width="0.5"/>
+      <line x1="${PADL}" x2="${W - PADR}" y1="${firstY}" y2="${firstY}" stroke="#666" stroke-dasharray="3,3" stroke-width="0.5"/>
+      <polyline fill="none" stroke="#5fb3ff" stroke-width="1.6" points="${pts}"/>
+      <circle cx="${sx(entries.length - 1)}" cy="${lastY}" r="3" fill="#5fb3ff"/>
+      ${xTicks.join("")}
+    </svg>
+  `;
+}

@@ -28,16 +28,26 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // Tightened from 0.10/0.05 to 0.20/0.10 to filter out the cold-mean-tail-YES pattern
 // that lost ~$50 over May 2-3 by pricing left-tail outcomes the model couldn't actually
 // hit (model was running 1.5-2.3°F cold across cities).
-const MIN_EDGE = 0.20;
-const MIN_HALF_KELLY = 0.10;
-// Cheap-tail floor: settled-bet audit on 2026-05-06 (28 trades total) showed every
-// single catastrophic loss ($85 / 7 trades) was at price=$0.01 exactly. Set floor
-// at 4¢ — comfortably above the catastrophic 1¢ band, but doesn't over-prune the
-// 4-7¢ region where data is thin AND a current B88.5 YES trade at 6¢ is up 7x.
-// Re-evaluate after each settlement: if 4-5¢ trades lose consistently, raise back
-// to 5¢ or higher. Symmetric — applies to YES price AND NO price (NO at 3¢ is the
-// same tail-bet shape).
-const MIN_PRICE = 0.04;
+// 2026-05-13: MIN_EDGE held at 0.20 for HIGH, raised to 0.30 for LOW. n=138 settled
+// bet sweep (analyze_gate_sweeps.js): LOW at production 0.20 hit only 19.4% (6W/25L,
+// -$201, -68% ROI), and tightening LOW to 0.30 would have recouped +$99 with only
+// $7 of LOW wins forgone. HIGH at 0.20 was healthier (36.4% hit, -28% ROI); further
+// HIGH tightening masks an underlying EV-calibration bias rather than fixing it,
+// so leave at 0.20 and revisit once Kalman LOW (dcee27c) improves residuals.
+const MIN_EDGE_HIGH = 0.20;
+const MIN_EDGE_LOW  = 0.30;
+function minEdgeFor(b) { return b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH; }
+// 2026-05-13: MIN_HALF_KELLY raised from 0.10 → 0.15. n=138 sweep: tightening to 0.15
+// rejected 4 bets (0W/4L), recouped $44 with zero wins forgone — clean Pareto win.
+// 0.20 would recoup $152 but rejects 27 bets including 2 wins (risk of overfit on n=138).
+const MIN_HALF_KELLY = 0.15;
+// Cheap-tail floor: 2026-05-13 sweep on n=138 — bets at price ≤ 0.10 were 26/26
+// LOSSES, -$218 net. Raising 0.04 → 0.10 recoups $202 with ZERO wins forgone on
+// the existing population. The cleanest signal in the entire sweep. Cheap tails
+// continue to be a graveyard because the model can't price left-tail outcomes
+// accurately at sub-10¢ resolution — the EV calc bakes in pWin estimates that
+// settled-bet history shows are systematically too high in this band.
+const MIN_PRICE = 0.10;
 // Volume floor: skip orders on markets with paper-thin orderbook depth. Daily
 // volume is a proxy for liquidity (true book-depth isn't in our snapshot).
 // 20 contracts traded today = at least minimal interest; below that, partial
@@ -813,7 +823,7 @@ export default async () => {
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
       const qualifying = (kalshiData.topBets || []).filter(b =>
-        b.ev >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
+        b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
         && (b.volume == null || b.volume >= MIN_VOLUME));
       // Skip-reason log so we can see exactly how high vs low were weighed each run.
       // Listed in priority order matching the iteration below.
@@ -957,7 +967,7 @@ export default async () => {
           const fee = 0.07 * (1 - b.price);
           const evLCB = (lcb.pLCB - b.price) - fee;
           const halfKellyLCB = b.price < 1 ? Math.max(0, (lcb.pLCB - b.price) / (1 - b.price)) / 2 : 0;
-          if (evLCB < MIN_EDGE || halfKellyLCB < MIN_HALF_KELLY) {
+          if (evLCB < minEdgeFor(b) || halfKellyLCB < MIN_HALF_KELLY) {
             skipped.push({ ...briefBet(b), reason: "kelly-lcb-shrink",
                            pHat: lcb.pHat.toFixed(3), pLCB: lcb.pLCB.toFixed(3),
                            sigmaP: lcb.sigmaP.toFixed(3),
