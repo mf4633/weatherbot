@@ -298,6 +298,8 @@ export default async () => {
                            ensembleSourceCount: Array.isArray(city.ensembleSources) ? city.ensembleSources.length : null,
                            oneMinAsosAgeMin: city.oneMinAsos?.ageMin ?? null,
                            iemAgeMin: city.iemAgeMin ?? null,
+                           currentTempSource: city.currentTempSource ?? null,
+                           currentTempAgeMin: city.currentTempAgeMin ?? null,
                          } };
 
     // HIGH event. lowerFloor uses maxSoFarCli (integer °F) not raw maxSoFar — Kalshi

@@ -776,6 +776,11 @@ export default async () => {
           ensembleSourceCount: Array.isArray(c.ensembleSources) ? c.ensembleSources.length : null,
           oneMinAsosAgeMin: c.oneMinAsos?.ageMin ?? null,
           iemAgeMin: c.iemAgeMin ?? null,
+          // currentTempSource feeds the 778326d forward-monitor: stratify settled-bet
+          // residuals by whether currentTemp came from METAR or 1-min ASOS to validate
+          // the "use 1-min when fresher" change without minute-resolution backtest data.
+          currentTempSource: c.currentTempSource ?? null,
+          currentTempAgeMin: c.currentTempAgeMin ?? null,
         };
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
