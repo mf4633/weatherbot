@@ -176,6 +176,270 @@ function renderFreshness(f) {
   el.textContent = `${cacheStr} · ${fcStr} · ${note}`;
 }
 
+// Trader gates — kept in lockstep with netlify/functions/jackson_trader.js so the
+// UI can explain WHY a top-edge candidate didn't fire even when the trader cycle
+// didn't log it in `skipped` (the trader pre-filters by EV/Kelly/price/volume
+// before the skip-loop). Update both files when these change.
+const TEMP_GATES = {
+  MIN_EDGE_HIGH: 0.20,
+  MIN_EDGE_LOW: 0.25,
+  MIN_HALF_KELLY: 0.15,
+  MIN_PRICE: 0.10,
+  MIN_VOLUME: 20,
+  LOW_PAUSED:  new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]),
+  HIGH_PAUSED: new Set(["Los Angeles"])
+};
+const RAIN_GATES = {
+  MIN_EDGE: 0.10,
+  MIN_HALF_KELLY: 0.05,
+  MIN_PRICE: 0.04,
+  MIN_VOLUME: 20,
+  REQUIRE_KIND: "daily-binary"   // monthly disabled (bankroll-protection mode)
+};
+
+// Map cryptic trader reason codes → human-readable badge text.
+const REASON_LABEL = {
+  "out-of-cash":                "out of cash",
+  "low-city-paused":            "LOW paused for this city",
+  "high-city-paused":           "HIGH paused for this city",
+  "forecast-stale":             "forecast stale",
+  "city-not-in-kalshi-data":    "city missing in Kalshi data",
+  "event-not-listed-on-kalshi": "event not listed on Kalshi",
+  "already-held":               "already held",
+  "in-cooldown":                "in 60-min cooldown after sell",
+  "event-side-stack-cap":       "event-side stack cap reached",
+  "city-var-cooldown":          "city-var 60-min cooldown",
+  "tile-conflict":              "tile conflict (dual-loss risk)",
+  "bucket-margin-thin":         "bucket margin thin (vs obs)",
+  "sigma-margin-thin":          "σ-bucket margin thin",
+  "tail-posterior-skip":        "tail posterior < 10%",
+  "kelly-lcb-shrink":           "Kelly-LCB shrink rejected EV",
+  "no-strike-margin-thin":      "NO-strike margin thin",
+  "bucket-above-obs":           "B-bucket already past observed",
+  "synoptic-coverage-degraded": "synoptic coverage degraded",
+  "kalshi-rejected":            "Kalshi rejected order",
+  "no-spare-capacity":          "no spare slots (cap 30)",
+  "cap-days-budget":            "capital-days budget full",
+  "city-kind-cooldown":         "city-kind 60-min cooldown"
+};
+
+// Cached decision maps populated by loadTraderDecisions(). Keys:
+//   temp: `${city}|${variable}|${tickerCode}|${side}`   (side uppercase)
+//   rain: `${fullTicker}|${side}`
+let TEMP_DECISIONS = { map: {}, stamp: null, error: null };
+let RAIN_DECISIONS = { map: {}, stamp: null, error: null };
+
+function pickLatestActiveCycle(entries) {
+  // Just take the newest cycle. Empty placements+skipped is itself informative —
+  // means every candidate failed the pre-filter (which we'll classify locally
+  // from gate constants), and the cycle stamp still confirms the trader is running.
+  if (!entries || !entries.length) return null;
+  return entries[0];
+}
+
+async function loadTraderDecisions() {
+  // Two endpoints in parallel; either failure leaves that side's map empty.
+  const [tempRes, rainRes] = await Promise.allSettled([
+    fetch("/api/trader_log?limit=10", { cache: "no-store" }).then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))),
+    fetch("/api/rain_trader_log?limit=10", { cache: "no-store" }).then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+  ]);
+
+  TEMP_DECISIONS = { map: {}, stamp: null, error: null };
+  if (tempRes.status === "fulfilled") {
+    const cycle = pickLatestActiveCycle(tempRes.value.entries);
+    if (cycle) {
+      TEMP_DECISIONS.stamp = cycle.ranAtUTC;
+      for (const p of (cycle.placements || [])) {
+        // Newer placements carry explicit city/variable/bucketCode. Older log entries
+        // (pre-2026-05-14) don't, so fall back to parsing the full Kalshi ticker.
+        const code = p.bucketCode || (p.ticker || "").split("-").pop();
+        const variable = p.variable
+          || (/^KXLOW/i.test(p.ticker) ? "low"
+              : /^KXHIGH/i.test(p.ticker) ? "high" : null);
+        const side = (p.side || "").toUpperCase();
+        const entry = {
+          status: p.ok ? "bought" : "rejected",
+          stake: p.stake_dollars, count: p.count, priceCents: p.priceCents,
+          pWin: p.pWin, halfKelly: p.halfKelly, ev: p.ev,
+          reason: p.ok ? null : "kalshi-rejected",
+          detail: p.ok ? null : "order not accepted"
+        };
+        // Write a city-specific key when available AND a city-less wildcard for
+        // legacy entries. lookupTempDecision checks both.
+        if (p.city) TEMP_DECISIONS.map[`${p.city}|${variable}|${code}|${side}`] = entry;
+        TEMP_DECISIONS.map[`*|${variable}|${code}|${side}`] = entry;
+      }
+      for (const s of (cycle.skipped || [])) {
+        const key = `${s.city}|${s.variable || "high"}|${s.ticker}|${(s.side || "").toUpperCase()}`;
+        TEMP_DECISIONS.map[key] = {
+          status: s.reason === "kalshi-rejected" ? "rejected" : "skipped",
+          reason: s.reason, detail: s,
+          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev
+        };
+      }
+    }
+  } else {
+    TEMP_DECISIONS.error = String(tempRes.reason);
+  }
+
+  RAIN_DECISIONS = { map: {}, stamp: null, error: null };
+  if (rainRes.status === "fulfilled") {
+    const cycle = pickLatestActiveCycle(rainRes.value.entries);
+    if (cycle) {
+      RAIN_DECISIONS.stamp = cycle.ranAtUTC;
+      for (const p of (cycle.placements || [])) {
+        const key = `${p.ticker}|${(p.side || "").toUpperCase()}`;
+        RAIN_DECISIONS.map[key] = {
+          status: p.ok ? "bought" : "rejected",
+          stake: p.stake_dollars, count: p.count, priceCents: p.priceCents,
+          pWin: p.pWin, halfKelly: p.halfKelly, ev: p.ev,
+          reason: p.ok ? null : "kalshi-rejected",
+          detail: p.ok ? null : "order not accepted"
+        };
+      }
+      for (const s of (cycle.skipped || [])) {
+        const key = `${s.ticker}|${(s.side || "").toUpperCase()}`;
+        RAIN_DECISIONS.map[key] = {
+          status: s.reason === "kalshi-rejected" ? "rejected" : "skipped",
+          reason: s.reason, detail: s,
+          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev
+        };
+      }
+    }
+  } else {
+    RAIN_DECISIONS.error = String(rainRes.reason);
+  }
+}
+
+function fmtCycleStamp(iso) {
+  if (!iso) return "no recent cycle data";
+  const d = new Date(iso);
+  const ageMin = Math.round((Date.now() - d.getTime()) / 60000);
+  return `last cycle ${d.toLocaleTimeString()} (${ageMin} min ago)`;
+}
+
+function renderDecisionStamps() {
+  const high = document.getElementById("kalshi-decision-stamp");
+  if (high) {
+    const e = TEMP_DECISIONS.error;
+    const s = TEMP_DECISIONS.stamp;
+    high.textContent = e
+      ? `Trader log unavailable: ${e}`
+      : `Temp trader (every 5 min) — ${fmtCycleStamp(s)}.`;
+  }
+  const rain = document.getElementById("kalshi-rain-decision-stamp");
+  if (rain) {
+    const e = RAIN_DECISIONS.error;
+    const s = RAIN_DECISIONS.stamp;
+    rain.textContent = e
+      ? `Rain trader log unavailable: ${e}`
+      : `Rain trader (every 30 min) — ${fmtCycleStamp(s)}.`;
+  }
+}
+
+// Look up a temp bet's decision. Match priority:
+//   1. exact (city|var|code|side) from skip log
+//   2. wildcard (*|var|code|side) from placement log (placement records lack city)
+function lookupTempDecision(b) {
+  const variable = b.variable || "high";
+  const side = (b.side || "").toUpperCase();
+  const exact = `${b.city}|${variable}|${b.ticker}|${side}`;
+  if (TEMP_DECISIONS.map[exact]) return TEMP_DECISIONS.map[exact];
+  const partial = `*|${variable}|${b.ticker}|${side}`;
+  if (TEMP_DECISIONS.map[partial]) return TEMP_DECISIONS.map[partial];
+  return null;
+}
+
+function lookupRainDecision(b) {
+  const key = `${b.ticker}|${(b.side || "").toUpperCase()}`;
+  return RAIN_DECISIONS.map[key] || null;
+}
+
+// Pre-filter classifier for temp bets the trader silently dropped before logging.
+// Mirrors the `qualifying` filter at jackson_trader.js:856-858 plus city-pause sets.
+function classifyTempPreFilter(b) {
+  const variable = b.variable || "high";
+  const minEdge = variable === "low" ? TEMP_GATES.MIN_EDGE_LOW : TEMP_GATES.MIN_EDGE_HIGH;
+  if (b.ev < minEdge) {
+    return { status: "below", reason: `edge ${(b.ev*100).toFixed(1)}¢ < ${(minEdge*100).toFixed(0)}¢ floor (${variable.toUpperCase()})` };
+  }
+  if (b.halfKelly < TEMP_GATES.MIN_HALF_KELLY) {
+    return { status: "below", reason: `half-Kelly ${(b.halfKelly*100).toFixed(1)}% < ${(TEMP_GATES.MIN_HALF_KELLY*100).toFixed(0)}% floor` };
+  }
+  if (b.price < TEMP_GATES.MIN_PRICE) {
+    return { status: "below", reason: `price ${(b.price*100).toFixed(0)}¢ < ${(TEMP_GATES.MIN_PRICE*100).toFixed(0)}¢ floor` };
+  }
+  if (b.volume != null && b.volume < TEMP_GATES.MIN_VOLUME) {
+    return { status: "below", reason: `volume ${Math.round(b.volume)} < ${TEMP_GATES.MIN_VOLUME} floor` };
+  }
+  return { status: "pending", reason: "qualified — awaiting next 5-min cycle" };
+}
+
+function classifyRainPreFilter(b) {
+  if (b.kind !== RAIN_GATES.REQUIRE_KIND) {
+    return { status: "below", reason: "monthly disabled (bankroll-protection mode)" };
+  }
+  if (b.ev_net < RAIN_GATES.MIN_EDGE) {
+    return { status: "below", reason: `edge ${(b.ev_net*100).toFixed(1)}¢ < ${(RAIN_GATES.MIN_EDGE*100).toFixed(0)}¢ floor` };
+  }
+  if (b.halfKelly < RAIN_GATES.MIN_HALF_KELLY) {
+    return { status: "below", reason: `half-Kelly ${(b.halfKelly*100).toFixed(1)}% < ${(RAIN_GATES.MIN_HALF_KELLY*100).toFixed(0)}% floor` };
+  }
+  if (b.price < RAIN_GATES.MIN_PRICE) {
+    return { status: "below", reason: `price ${(b.price*100).toFixed(0)}¢ < ${(RAIN_GATES.MIN_PRICE*100).toFixed(0)}¢ floor` };
+  }
+  if (b.volume != null && b.volume < RAIN_GATES.MIN_VOLUME) {
+    return { status: "below", reason: `volume ${Math.round(b.volume)} < ${RAIN_GATES.MIN_VOLUME} floor` };
+  }
+  return { status: "pending", reason: "qualified — awaiting next 30-min cycle" };
+}
+
+// Compose the inline <span class="decision …"> cell. Decision = matched cycle log
+// entry if present, else local pre-filter classification.
+function renderDecisionCell(matched, preFilter) {
+  if (matched) {
+    if (matched.status === "bought") {
+      const text = `purchased $${(matched.stake ?? 0).toFixed(2)}`;
+      const title = `${matched.count} contracts @ ${matched.priceCents}¢ · pWin ${(matched.pWin*100||0).toFixed(1)}% · half-Kelly ${(matched.halfKelly*100||0).toFixed(1)}% · ev +$${(matched.ev||0).toFixed(2)}`;
+      return `<span class="decision bought" title="${escapeAttr(title)}">${text}</span>`;
+    }
+    if (matched.status === "rejected") {
+      const text = "Kalshi rejected";
+      const title = `${matched.reason || ""}${matched.detail ? " — " + JSON.stringify(matched.detail) : ""}`;
+      return `<span class="decision rejected" title="${escapeAttr(title)}">${text}</span>`;
+    }
+    // skipped
+    const label = REASON_LABEL[matched.reason] || matched.reason || "skipped";
+    const detailParts = [];
+    if (matched.detail && typeof matched.detail === "object") {
+      // Pluck the most informative numeric fields per reason.
+      const d = matched.detail;
+      if (d.marginF != null && d.thresholdF != null) detailParts.push(`margin ${d.marginF}°F vs ${d.thresholdF}°F`);
+      if (d.gapF != null) detailParts.push(`gap ${d.gapF}°F`);
+      if (d.pWinPosterior != null) detailParts.push(`pPost ${d.pWinPosterior}`);
+      if (d.pLCB != null) detailParts.push(`pLCB ${d.pLCB}`);
+      if (d.evLCB != null) detailParts.push(`evLCB ${d.evLCB}`);
+      if (d.halfKellyLCB != null) detailParts.push(`hKellyLCB ${d.halfKellyLCB}`);
+      if (d.ageMin != null) detailParts.push(`forecast ${d.ageMin}min old`);
+      if (d.coverage != null) detailParts.push(`coverage=${d.coverage}`);
+      if (d.eventTicker != null) detailParts.push(d.eventTicker);
+      if (d.detail != null && typeof d.detail !== "object") detailParts.push(String(d.detail));
+    }
+    const title = detailParts.length ? `${label} — ${detailParts.join(" · ")}` : label;
+    return `<span class="decision skipped" title="${escapeAttr(title)}">${label}</span>`;
+  }
+  const text = preFilter.status === "below" ? preFilter.reason : "pending next cycle";
+  const cls = preFilter.status === "below" ? "below" : "pending";
+  const title = preFilter.reason;
+  // Truncate long below-floor reasons for inline display; full text in tooltip.
+  const displayText = text.length > 36 ? text.slice(0, 33) + "…" : text;
+  return `<span class="decision ${cls}" title="${escapeAttr(title)}">${displayText}</span>`;
+}
+
+function escapeAttr(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
 function renderKalshiRows(bets, tbodyId, colspan) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
@@ -185,8 +449,17 @@ function renderKalshiRows(bets, tbodyId, colspan) {
   }
   tbody.innerHTML = bets.map((b, i) => {
     const muSig = (b.modelMean != null) ? `${b.modelMean.toFixed(1)} ± ${b.modelStd.toFixed(1)}` : "—";
-    // evPerDay is server-attached; for legacy temp data without it, fall back to ev (1d hold).
     const evPerDay = b.evPerDay != null ? b.evPerDay : b.ev;
+    const matched = lookupTempDecision(b);
+    // City-pause is a pre-filter that DOES flow through the skip-loop (so will appear in matched).
+    // But if matched isn't set, also surface the pause as a below-floor reason for completeness.
+    let pre = classifyTempPreFilter(b);
+    if (!matched && pre.status === "pending") {
+      const variable = b.variable || "high";
+      if (variable === "low" && TEMP_GATES.LOW_PAUSED.has(b.city))   pre = { status: "below", reason: "LOW paused for this city (audit)" };
+      else if (variable === "high" && TEMP_GATES.HIGH_PAUSED.has(b.city)) pre = { status: "below", reason: "HIGH paused for this city (audit)" };
+    }
+    const decisionCell = renderDecisionCell(matched, pre);
     return `
       <tr>
         <td>${i + 1}</td>
@@ -200,11 +473,17 @@ function renderKalshiRows(bets, tbodyId, colspan) {
         <td>+$${evPerDay.toFixed(3)}</td>
         <td><strong>${(b.halfKelly * 100).toFixed(1)}%</strong></td>
         <td>${Math.round(b.volume).toLocaleString()}</td>
+        <td>${decisionCell}</td>
       </tr>`;
   }).join("");
 }
 
 async function loadKalshi() {
+  // Pull the latest trader-cycle logs first so renderKalshiRows can annotate
+  // each candidate with its actual trader disposition (purchased / skipped / below floor).
+  await loadTraderDecisions();
+  renderDecisionStamps();
+
   try {
     const r = await fetch("/api/kalshi", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -213,12 +492,12 @@ async function loadKalshi() {
     const top = j.topBets || [];
     const highBets = top.filter(b => b.variable === "high" || !b.variable).slice(0, 15);
     const lowBets = top.filter(b => b.variable === "low").slice(0, 15);
-    renderKalshiRows(highBets, "kalshi-rows-high", 10);
-    renderKalshiRows(lowBets, "kalshi-rows-low", 10);
+    renderKalshiRows(highBets, "kalshi-rows-high", 12);
+    renderKalshiRows(lowBets, "kalshi-rows-low", 12);
   } catch (e) {
     for (const id of ["kalshi-rows-high", "kalshi-rows-low"]) {
       const t = document.getElementById(id);
-      if (t) t.innerHTML = `<tr><td colspan="10" class="muted">Kalshi load error: ${e.message}</td></tr>`;
+      if (t) t.innerHTML = `<tr><td colspan="12" class="muted">Kalshi load error: ${e.message}</td></tr>`;
     }
   }
   // Rain edges + outlook cards — both fed by a single /api/rain fetch (server-side
@@ -231,7 +510,7 @@ async function loadKalshi() {
     renderRainOutlookGrid(j.cities || []);
   } catch (e) {
     const t = document.getElementById("kalshi-rows-rain");
-    if (t) t.innerHTML = `<tr><td colspan="10" class="muted">Rain load error: ${e.message}</td></tr>`;
+    if (t) t.innerHTML = `<tr><td colspan="12" class="muted">Rain load error: ${e.message}</td></tr>`;
     const og = document.getElementById("rain-outlook-grid");
     if (og) og.innerHTML = `<p class="muted">Rain outlook load error: ${e.message}</p>`;
   }
@@ -294,7 +573,7 @@ function renderKalshiRainRows(bets) {
   const tbody = document.getElementById("kalshi-rows-rain");
   if (!tbody) return;
   if (!bets.length) {
-    tbody.innerHTML = `<tr><td colspan="10" class="muted">No +EV rain bets above 2¢ net edge right now.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="muted">No +EV rain bets above 2¢ net edge right now.</td></tr>`;
     return;
   }
   tbody.innerHTML = bets.map((b, i) => {
@@ -304,6 +583,9 @@ function renderKalshiRainRows(bets) {
       ? `daily <span class="muted small">(${b.holdingDays}d)</span>`
       : `monthly <span class="muted small">(${b.holdingDays}d)</span>`;
     const evPerDay = b.evPerDay != null ? b.evPerDay : (b.ev_net / Math.max(1, b.holdingDays || 1));
+    const matched = lookupRainDecision(b);
+    const pre = classifyRainPreFilter(b);
+    const decisionCell = renderDecisionCell(matched, pre);
     return `
       <tr>
         <td>${i + 1}</td>
@@ -317,6 +599,7 @@ function renderKalshiRainRows(bets) {
         <td>+$${evPerDay.toFixed(3)}</td>
         <td><strong>${(b.halfKelly * 100).toFixed(1)}%</strong></td>
         <td>${b.volume != null ? Math.round(b.volume).toLocaleString() : "—"}</td>
+        <td>${decisionCell}</td>
       </tr>`;
   }).join("");
 }

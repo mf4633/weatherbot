@@ -1093,6 +1093,8 @@ export default async () => {
         const pWin = b.p_model;  // p_model is set to pNo for NO side, p_yes for YES side
         const expectedPayout = contracts * (Number.isFinite(pWin) ? pWin : 0);
         placements.push({ ticker: fullTicker, side: b.side, count: contracts, priceCents,
+                          city: b.city, variable: b.variable || "high",
+                          bucket: b.bucket, bucketCode: b.ticker,
                           stake_dollars: Math.round(stake_dollars * 100) / 100,
                           ev: b.ev, halfKelly: b.halfKelly,
                           pWin: pWin != null ? Math.round(pWin * 1000) / 1000 : null,
@@ -1171,6 +1173,7 @@ export default async () => {
         ranAtUTC, cashDollars, spareCapacity, stake_ceil: stakeCeil,
         placements: placements.map(p => ({
           ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
+          city: p.city, variable: p.variable, bucket: p.bucket, bucketCode: p.bucketCode,
           stake_dollars: p.stake_dollars, ev: p.ev, halfKelly: p.halfKelly,
           pWin: p.pWin, expectedPayout: p.expectedPayout, ok: p.ok
         })),

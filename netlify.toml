@@ -91,6 +91,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/rain_trader_log"
+  to = "/.netlify/functions/rain_trader_log"
+  status = 200
+
+[[redirects]]
   from = "/api/combo"
   to = "/.netlify/functions/combo"
   status = 200

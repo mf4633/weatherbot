@@ -12,6 +12,13 @@
   .leader-row td:first-child::before { content:"🏆 "; }
   #combo-milestones-wrap ul { margin:4px 0; padding-left:18px; }
   #combo-milestones-wrap li { margin:2px 0; font-size:0.92em; }
+  .decision { display:inline-block; padding:2px 6px; border-radius:3px; font-size:11px; cursor:help; max-width:240px; }
+  .decision.bought { background:rgba(63,185,80,0.18); color:#3fb950; border:1px solid rgba(63,185,80,0.35); }
+  .decision.skipped { background:rgba(139,148,158,0.15); color:#c9d1d9; border:1px solid rgba(139,148,158,0.3); }
+  .decision.below   { background:rgba(255,123,114,0.12); color:#ff9c94; border:1px solid rgba(255,123,114,0.3); }
+  .decision.pending { background:rgba(88,166,255,0.12); color:#79c0ff; border:1px solid rgba(88,166,255,0.3); }
+  .decision.rejected{ background:rgba(255,123,114,0.22); color:#ff7b72; border:1px solid rgba(255,123,114,0.45); }
+  .decision .why { font-family: ui-monospace, Consolas, monospace; }
 </style>
 </head>
 <body>
@@ -89,11 +96,23 @@
     Bet half the Kelly value to protect against model error.
   </p>
 
+  <p id="kalshi-decision-stamp" class="sub muted" style="margin-top:4px"></p>
+  <p class="sub" style="margin-top:4px">
+    The <strong>Decision</strong> column reflects how the live Jackson trader weighed each edge on its most recent
+    cycle (every 5 min, temp) / (every 30 min, rain). <span class="decision bought">purchased</span>
+    means a real Kalshi buy fired. <span class="decision skipped">skipped</span> means a downstream safety gate
+    rejected it (tile-conflict, bucket-margin, tail-posterior, Kelly-LCB shrink, city-pause, cooldown, etc.).
+    <span class="decision below">below floor</span> means it never reached the trader's qualifying set
+    (edge / half-Kelly / price / volume floor). <span class="decision pending">pending</span> means it
+    qualified but the next trader cycle hasn't run yet (or the candidate appeared after the last cycle).
+    Hover for the numeric reason.
+  </p>
+
   <h3>HIGH temperature bets</h3>
   <table id="kalshi-table-high" class="kalshi-table">
     <thead><tr>
       <th>#</th><th>City</th><th>Model μ±σ</th><th>Bucket</th><th>Side</th>
-      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th>
+      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th><th>Decision</th>
     </tr></thead>
     <tbody id="kalshi-rows-high"></tbody>
   </table>
@@ -102,7 +121,7 @@
   <table id="kalshi-table-low" class="kalshi-table">
     <thead><tr>
       <th>#</th><th>City</th><th>Model μ±σ</th><th>Bucket</th><th>Side</th>
-      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th>
+      <th>Price</th><th>Model P</th><th>Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th><th>Decision</th>
     </tr></thead>
     <tbody id="kalshi-rows-low"></tbody>
   </table>
@@ -117,10 +136,11 @@
     Use <em>Edge / day</em> for apples-to-apples comparison against temp; use
     <em>Half-Kelly</em> for sizing, which is what the trader does.
   </p>
+  <p id="kalshi-rain-decision-stamp" class="sub muted" style="margin-top:4px"></p>
   <table id="kalshi-table-rain" class="kalshi-table">
     <thead><tr>
       <th>#</th><th>City</th><th>Kind</th><th>Threshold</th><th>Side</th>
-      <th>Price</th><th>Model P</th><th>Net Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th>
+      <th>Price</th><th>Model P</th><th>Net Edge / $1</th><th>Edge / day</th><th>Half-Kelly</th><th>Volume</th><th>Decision</th>
     </tr></thead>
     <tbody id="kalshi-rows-rain"></tbody>
   </table>
