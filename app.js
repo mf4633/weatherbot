@@ -186,11 +186,14 @@ const TEMP_GATES = {
   MIN_HALF_KELLY: 0.15,
   MIN_PRICE: 0.10,
   MIN_VOLUME: 20,
-  LOW_PAUSED:  new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]),
+  LOW_PAUSED:  new Set(["San Antonio", "Phoenix"]),
   HIGH_PAUSED: new Set(),
   // city|variable → halfKelly multiplier. Mirror of SOFT_REOPEN_DERATE in
   // netlify/functions/jackson_trader.js — keep in sync.
-  SOFT_REOPEN: new Map([["Los Angeles|high", 0.5]])
+  SOFT_REOPEN: new Map([
+    ["Los Angeles|high", 0.5],
+    ["Houston|low", 0.5]
+  ])
 };
 const RAIN_GATES = {
   MIN_EDGE: 0.10,

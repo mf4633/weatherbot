@@ -94,13 +94,28 @@ const AUTO_CLOSE_AT_PRICE = 0.99;
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
 const STAKE_CEIL_FRAC = 0.10;
-// Hard-pause LOW bets in cities with a sustained warm-overnight bias the model
-// hasn't priced in. 2026-05-11 audit (114 settled): SATX/PHX/HOU/DFW LOW =
-// 17 bets, 1 win, –$131 (–67% ROI); rest of book is –$48 combined. Pattern is
-// NO-side at strikes near μ losing because actual mins come in 1–3°F warmer
-// than forecast — a per-city residual bias, not a sigma problem. Reopen after
-// per-city LOW residuals come back to mean (~10 fresh bets / +$0 cumulative).
-const LOW_PAUSED_CITIES = new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]);
+// Hard-pause LOW bets where settled-bet evidence is decisive AND a passive
+// observable defines the unpause condition (not a bet count the pause itself
+// suppresses; see feedback_hard_pause_exit_criteria memory).
+//
+// 2026-05-11 original pause: SATX/PHX/HOU/DFW LOW = 17 bets, 1 win, –$131
+// (–67% ROI). Pattern: NO-side at strikes near μ, actuals come in 1–3°F
+// warmer than forecast — per-city LOW residual bias.
+//
+// 2026-05-14 PM review against jackson_settled.ndjson (n=148 + diff by city):
+//   SATX LOW:  0W/6L lifetime, 0W/4L last 7d.  Strong signal — keep paused.
+//   PHX  LOW:  0W/5L lifetime, 0W/5L last 7d.  Strong signal — keep paused.
+//   HOU  LOW:  1W/3L lifetime, 0W/1L last 7d.  Thin — soft-reopen at 0.5×
+//                                              (see SOFT_REOPEN_DERATE).
+//   DFW  LOW:  1W/2L lifetime, 1W/1L last 7d.  Sample too small to justify
+//                                              a pause at all — full unpause.
+//
+// Unpause criterion for SATX and PHX (replaces the original "≥10 fresh bets"
+// which was structurally unmeasurable while paused): the city's
+// per_city_residual_mean_7d_low value in the regime blob (written by
+// logger.js from passive prediction settlement, no betting required) must
+// satisfy |residual| < 1.0°F. Read manually until automation lands.
+const LOW_PAUSED_CITIES = new Set(["San Antonio", "Phoenix"]);
 
 // HIGH pauses. Currently empty — LA moved to SOFT_REOPEN_DERATE on 2026-05-14 PM
 // because the "≥5 fresh HIGH bets back to mean" criterion was unreachable while
@@ -119,7 +134,12 @@ const HIGH_PAUSED_CITIES = new Set();
 // to 1.0 once LA's per_city_residual_mean_7d in the regime blob crosses |biasF| <
 // 1.0°F (manually verified — no automation yet).
 const SOFT_REOPEN_DERATE = new Map([
-  ["Los Angeles|high", 0.5]
+  ["Los Angeles|high", 0.5],
+  // 2026-05-14 PM: Houston LOW. Lifetime 1W/3L is too thin to justify a hard
+  // pause; half size lets the sample grow toward unpause-decision power.
+  // Promote to 1.0 once 6+ fresh LOW settled bets at non-negative cumulative
+  // P&L, OR per_city_residual_mean_7d_low |<1.0°F|.
+  ["Houston|low", 0.5]
 ]);
 
 // Parse a B-bucket ticker code into integer outcome range. Only B-prefix is
