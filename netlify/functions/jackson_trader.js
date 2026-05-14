@@ -873,7 +873,14 @@ export default async () => {
         // ensemble + METAR + NWS grid, not just NWS's grid issue time. NWS grid often
         // sits 4-6h old for west-coast/quiet-regime cities while our ensemble + obs
         // are minutes old; gating on raw forecastUpdateTime over-skipped those.
-        if (c.dataAgeMin != null) cityForecastAge[c.name] = c.dataAgeMin;
+        // Bug fix 2026-05-14 PM: dataAgeMin lives at c.inputAges.dataAgeMin (kalshi.js
+        // nests it under inputAges, not top-level). Pre-fix lookup `c.dataAgeMin` was
+        // always undefined, causing fall-through to the NWS-grid-only path — exactly
+        // the failure mode the author's comment above warned against. Result: 7 of 12
+        // candidates per cycle were being killed by forecast-stale on cities (Seattle,
+        // LA, NY, DFW, etc.) where our ensemble + METAR data was minutes old.
+        const composite = c.inputAges?.dataAgeMin ?? c.dataAgeMin;  // tolerate either path
+        if (composite != null) cityForecastAge[c.name] = composite;
         else if (c.forecastUpdateTime) cityForecastAge[c.name] = (Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000;
         cityInputAges[c.name] = {
           nwsGridAgeMin: c.forecastUpdateTime
