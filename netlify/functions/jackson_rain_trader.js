@@ -57,6 +57,15 @@ const STAKE_CEIL_FRAC = 0.05;
 // trivially cheap on this metric.
 const CAPITAL_DAYS_PER_BANKROLL = 30;
 
+// Monthly rain tickers carry a 2-segment date (e.g. KXRAINNYCM-26MAY-3); daily
+// tickers carry a 3-segment date with day (e.g. KXRAINNYC-26MAY08). Used to
+// gate monthly bets out of the rain trader entirely (bankroll-protection mode).
+function isMonthlyRainTicker(ticker) {
+  const parts = ticker.split("-");
+  if (parts.length < 2) return false;
+  return /^\d{2}[A-Z]{3}$/.test(parts[1]);
+}
+
 // Compute holding days for a rainbot candidate. Mirrors the helper in rain.js so
 // the trader doesn't depend on the /api/rain proxy. Returns days from now until
 // expected Kalshi settlement (5d after end-of-month for monthly tiers, 1d for
@@ -333,6 +342,7 @@ export default async () => {
 
     // 2. Sell positions where forward EV diverges from current bid by more than
     // SELL_HYSTERESIS. ONLY among bot-placed rain positions.
+    // Monthly positions are force-sold regardless of EV: same-day rain only.
     const snapshot = buildRainSnapshot(rainResp);
     for (const p of positions) {
       if (p.qty === 0) continue;
@@ -340,14 +350,28 @@ export default async () => {
       const side = p.qty > 0 ? "YES" : "NO";
       if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip non-rain / user-placed
       const m = snapshot[ticker];
-      if (!m) continue;
       const isYes = side === "YES";
+      const contracts = Math.abs(p.qty);
+      if (contracts <= 0) continue;
+      const isMonthly = isMonthlyRainTicker(ticker);
+      // Force-sell monthly: dump at the bid regardless of EV.
+      if (isMonthly) {
+        const sellPrice = m ? (isYes ? m.yes_bid : m.no_bid) : null;
+        if (sellPrice == null || sellPrice <= 0) continue;
+        const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
+        const res = isDryRun ? { ok: true, body: { dryRun: true } }
+                             : await placeSellOrder(ticker, side, contracts, sellPriceCents);
+        sales.push({ ticker, side, count: contracts, sellPriceCents,
+                     dryRun: isDryRun, ok: res.ok, reason: "force-sell-monthly" });
+        if (!res.ok) errors.push({ where: "sell-monthly", ticker, response: res.body });
+        else if (!isDryRun) cooldownMap[botKey(ticker, side)] = new Date().toISOString();
+        continue;
+      }
+      if (!m) continue;
       const sellPrice = isYes ? m.yes_bid : m.no_bid;
       if (sellPrice == null || sellPrice <= 0) continue;
       if (m.p_yes_model == null) continue;
       const pNow = isYes ? m.p_yes_model : (1 - m.p_yes_model);
-      const contracts = Math.abs(p.qty);
-      if (contracts <= 0) continue;
       const sellProceeds = contracts * sellPrice;
       const holdEV = contracts * pNow;
       if (holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
@@ -360,9 +384,12 @@ export default async () => {
     }
 
     // 3. Place new bets from rainbot topBets, ranked by halfKelly desc.
+    // Bankroll-protection: same-day rain only. Monthly tiers have 5–30 day holds
+    // that lock capital while the bot is operating below sustainable equity.
     if (rainResp?.topBets && spareCapacity > 0) {
       const qualifying = rainResp.topBets
         .filter(b => Number.isFinite(b.ev_net) && Number.isFinite(b.halfKelly))
+        .filter(b => b.kind === "daily-binary")
         .filter(b => b.ev_net >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY
                   && b.price >= MIN_PRICE
                   && (b.volume == null || b.volume >= MIN_VOLUME))
