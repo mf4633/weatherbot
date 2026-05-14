@@ -187,7 +187,10 @@ const TEMP_GATES = {
   MIN_PRICE: 0.10,
   MIN_VOLUME: 20,
   LOW_PAUSED:  new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]),
-  HIGH_PAUSED: new Set(["Los Angeles"])
+  HIGH_PAUSED: new Set(),
+  // city|variable → halfKelly multiplier. Mirror of SOFT_REOPEN_DERATE in
+  // netlify/functions/jackson_trader.js — keep in sync.
+  SOFT_REOPEN: new Map([["Los Angeles|high", 0.5]])
 };
 const RAIN_GATES = {
   MIN_EDGE: 0.10,
@@ -261,6 +264,7 @@ async function loadTraderDecisions() {
           status: p.ok ? "bought" : "rejected",
           stake: p.stake_dollars, count: p.count, priceCents: p.priceCents,
           pWin: p.pWin, halfKelly: p.halfKelly, ev: p.ev,
+          softReopen: p.softReopen ?? null,
           reason: p.ok ? null : "kalshi-rejected",
           detail: p.ok ? null : "order not accepted"
         };
@@ -372,6 +376,11 @@ function classifyTempPreFilter(b) {
   if (b.volume != null && b.volume < TEMP_GATES.MIN_VOLUME) {
     return { status: "below", reason: `volume ${Math.round(b.volume)} < ${TEMP_GATES.MIN_VOLUME} floor` };
   }
+  const softReopen = TEMP_GATES.SOFT_REOPEN.get(`${b.city}|${variable}`);
+  if (softReopen != null && softReopen < 1.0) {
+    const pct = Math.round(softReopen * 100);
+    return { status: "pending", reason: `qualified — ${pct}% soft-reopen size, awaiting next 5-min cycle` };
+  }
   return { status: "pending", reason: "qualified — awaiting next 5-min cycle" };
 }
 
@@ -399,8 +408,10 @@ function classifyRainPreFilter(b) {
 function renderDecisionCell(matched, preFilter) {
   if (matched) {
     if (matched.status === "bought") {
-      const text = `purchased $${(matched.stake ?? 0).toFixed(2)}`;
-      const title = `${matched.count} contracts @ ${matched.priceCents}¢ · pWin ${(matched.pWin*100||0).toFixed(1)}% · half-Kelly ${(matched.halfKelly*100||0).toFixed(1)}% · ev +$${(matched.ev||0).toFixed(2)}`;
+      const softTag = matched.softReopen != null && matched.softReopen < 1.0
+        ? ` (½ soft-reopen)` : "";
+      const text = `purchased $${(matched.stake ?? 0).toFixed(2)}${softTag}`;
+      const title = `${matched.count} contracts @ ${matched.priceCents}¢ · pWin ${(matched.pWin*100||0).toFixed(1)}% · half-Kelly ${(matched.halfKelly*100||0).toFixed(1)}% · ev +$${(matched.ev||0).toFixed(2)}${matched.softReopen != null ? " · soft-reopen × " + matched.softReopen : ""}`;
       return `<span class="decision bought" title="${escapeAttr(title)}">${text}</span>`;
     }
     if (matched.status === "rejected") {
@@ -458,6 +469,8 @@ function renderKalshiRows(bets, tbodyId, colspan) {
       const variable = b.variable || "high";
       if (variable === "low" && TEMP_GATES.LOW_PAUSED.has(b.city))   pre = { status: "below", reason: "LOW paused for this city (audit)" };
       else if (variable === "high" && TEMP_GATES.HIGH_PAUSED.has(b.city)) pre = { status: "below", reason: "HIGH paused for this city (audit)" };
+      // SOFT_REOPEN cities (e.g. LA HIGH) fall through and stay "pending — ½ soft-reopen"
+      // as set by classifyTempPreFilter above.
     }
     const decisionCell = renderDecisionCell(matched, pre);
     return `

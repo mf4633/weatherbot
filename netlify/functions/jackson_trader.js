@@ -102,13 +102,25 @@ const STAKE_CEIL_FRAC = 0.10;
 // per-city LOW residuals come back to mean (~10 fresh bets / +$0 cumulative).
 const LOW_PAUSED_CITIES = new Set(["San Antonio", "Phoenix", "Houston", "Dallas-Fort Worth"]);
 
-// Hard-pause HIGH bets in LA. 2026-05-11 audit: 0 wins / 7 bets, −$40 (−100% ROI).
-// Mode is marine-layer regime: model leans toward stratus burn-off (μ 71-72°F)
-// but actual stays 68-70°F. 3 of 4 recent failures had σ ≈ 5.5°F — wide member
-// spread that should have suppressed sizing but didn't. Last 3 bounded HIGH
-// residuals: +2.1, +2.9, +2.15°F (mean +2.4, std 0.4°F). Reopen after marine-
-// layer regime breaks AND ≥5 fresh HIGH bets come back to mean.
-const HIGH_PAUSED_CITIES = new Set(["Los Angeles"]);
+// HIGH pauses. Currently empty — LA moved to SOFT_REOPEN_DERATE on 2026-05-14 PM
+// because the "≥5 fresh HIGH bets back to mean" criterion was unreachable while
+// the city was hard-paused (chicken-and-egg). LA still on a half-size leash; see
+// SOFT_REOPEN_DERATE comment below.
+const HIGH_PAUSED_CITIES = new Set();
+
+// Soft-reopen de-rate: city|variable → halfKelly multiplier in (0, 1]. Lets a
+// previously-paused city accumulate fresh settled bets at reduced stake so the
+// "back to mean" check can actually be evaluated. Applied multiplicatively on top
+// of synopticCoverage de-rate (so the two compose if both fire).
+//
+// 2026-05-14 PM: LA HIGH re-enabled at 0.5 after biasF improved 2.4 → 1.9°F and
+// σ_eff tightened 5.5 → 3.86°F over 3 days. Memo's "5 fresh HIGH bets" criterion
+// can't be met from inside a hard pause; this is the structural fix. Auto-promote
+// to 1.0 once LA's per_city_residual_mean_7d in the regime blob crosses |biasF| <
+// 1.0°F (manually verified — no automation yet).
+const SOFT_REOPEN_DERATE = new Map([
+  ["Los Angeles|high", 0.5]
+]);
 
 // Parse a B-bucket ticker code into integer outcome range. Only B-prefix is
 // safely parseable from the code alone — T-prefix is direction-ambiguous (Kalshi
@@ -1084,8 +1096,10 @@ export default async () => {
         // bounded by the cash actually still available after prior placements in this run.
         // Coverage de-rate scales the Kelly fraction (not the EV gate, not the price):
         // a 50% de-rate on hourly-only coverage means we bet half size, preserving the
-        // edge but reducing variance from the unmonitored window.
-        const effectiveHalfKelly = b.halfKelly * coverageDeRate;
+        // edge but reducing variance from the unmonitored window. Soft-reopen de-rate
+        // (see SOFT_REOPEN_DERATE) composes multiplicatively for cities mid-reopen.
+        const softReopen = SOFT_REOPEN_DERATE.get(`${b.city}|${b.variable || "high"}`) ?? 1.0;
+        const effectiveHalfKelly = b.halfKelly * coverageDeRate * softReopen;
         const remaining = cashDollars - committed;
         const stake_dollars = Math.max(STAKE_FLOOR,
           Math.min(cashDollars * STAKE_CEIL_FRAC, effectiveHalfKelly * cashDollars, remaining));
@@ -1104,6 +1118,7 @@ export default async () => {
                           bucket: b.bucket, bucketCode: b.ticker,
                           stake_dollars: Math.round(stake_dollars * 100) / 100,
                           ev: b.ev, halfKelly: b.halfKelly,
+                          softReopen: softReopen < 1.0 ? softReopen : null,
                           pWin: pWin != null ? Math.round(pWin * 1000) / 1000 : null,
                           expectedPayout: Math.round(expectedPayout * 100) / 100,
                           marginDebug: b._marginDebug,  // debug instrumentation
@@ -1182,6 +1197,7 @@ export default async () => {
           ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
           city: p.city, variable: p.variable, bucket: p.bucket, bucketCode: p.bucketCode,
           stake_dollars: p.stake_dollars, ev: p.ev, halfKelly: p.halfKelly,
+          softReopen: p.softReopen,
           pWin: p.pWin, expectedPayout: p.expectedPayout, ok: p.ok
         })),
         sales: sales.map(s => ({ ticker: s.ticker, side: s.side, count: s.count,
