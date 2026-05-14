@@ -200,3 +200,76 @@ export function kalmanCorrection(cliCode, variable, regimeBlob, now = Date.now()
   const Padvanced = state.P + sp.sigma_walk * sp.sigma_walk * Math.max(1, daysStale);
   return { mu: state.mu, P: Padvanced, daysStale, source };
 }
+
+// Hierarchical (global) regime Kalman. Captures synoptic-scale bias that hits
+// every city the same way — e.g., NWS deterministic running cool nationwide,
+// regime shift between fronts, monthly model-revision artifacts. Applied
+// ON TOP of per-city Kalman, not instead of it: per-city captures local bias,
+// global captures network-wide bias. Together: hierarchical partial pooling.
+//
+// Why this exists: per-city Kalman has |mu_seed|<0.5°F for ~60% of cities
+// (BOS,DEN,PHL excepted) → KALMAN_FLOOR_F zeroes their corrections out. But a
+// 0.3°F bias × 13 cities is a real network signal worth $1-2/day in expected
+// losses. Global Kalman has σ_obs ≈ per-city σ_obs / √n, so a 0.3°F signal
+// reads as ~2σ on the global observation and updates quickly.
+//
+// Seasonal params not fit yet — uses single (walk, obs) pair. Treats as warm-
+// season default until backfilled. mu_seed=0 because there's no prior reason
+// to believe the network-wide forecast is biased one way before observing.
+export const KALMAN_GLOBAL = {
+  high: { sigma_walk: 0.30, sigma_obs: 0.50, mu_seed: 0, p_seed: 0.5 },
+  low:  { sigma_walk: 0.30, sigma_obs: 0.50, mu_seed: 0, p_seed: 0.5 },
+};
+// No floor: small global corrections are meaningful (they aggregate signal
+// across all cities). Stricter than per-city KALMAN_FLOOR_F=0.5 is unnecessary
+// — global observation noise is already √n smaller.
+export const KALMAN_GLOBAL_FLOOR_F = 0.0;
+
+function globalBlobKey(variable) {
+  return variable === "low" ? "kalman_state_global_low" : "kalman_state_global";
+}
+
+// Initial global Kalman state (used by logger.js when blob has no entry yet
+// and by weather.js as fallback).
+export function kalmanGlobalInit(variable = "high") {
+  const p = KALMAN_GLOBAL[variable];
+  return { mu: p.mu_seed, P: p.p_seed, last_update: null };
+}
+
+// One forward-filter step for the global Kalman. Observation is the mean
+// (predicted − actual) across all cities that settled today. Sign matches
+// per-city convention.
+export function kalmanGlobalStep(state, observation, variable = "high", now = new Date()) {
+  const p = KALMAN_GLOBAL[variable];
+  if (!p || !state || !Number.isFinite(observation)) return state;
+  if (Math.abs(observation) > 20) return state;
+  const muPred = state.mu;
+  const Ppred  = state.P + p.sigma_walk * p.sigma_walk;
+  const K      = Ppred / (Ppred + p.sigma_obs * p.sigma_obs);
+  return {
+    mu: muPred + K * (observation - muPred),
+    P:  (1 - K) * Ppred,
+    last_update: now.toISOString(),
+  };
+}
+
+// Read the global Kalman state and advance the predict step (variance growth
+// over days stale). Returns { mu, P, daysStale, source } analogous to
+// kalmanCorrection(). weather.js gates by |mu| against KALMAN_GLOBAL_FLOOR_F.
+export function kalmanGlobalCorrection(variable, regimeBlob, now = Date.now()) {
+  const p = KALMAN_GLOBAL[variable];
+  if (!p) return null;
+  const blobState = regimeBlob?.[globalBlobKey(variable)];
+  let state, source;
+  if (blobState && Number.isFinite(blobState.mu) && Number.isFinite(blobState.P)) {
+    state = blobState; source = "blob";
+  } else {
+    state = kalmanGlobalInit(variable); source = "seed";
+  }
+  let daysStale = 0;
+  if (state.last_update) {
+    daysStale = Math.max(0, (now - new Date(state.last_update).getTime()) / 86400000);
+  }
+  const Padvanced = state.P + p.sigma_walk * p.sigma_walk * Math.max(1, daysStale);
+  return { mu: state.mu, P: Padvanced, daysStale, source };
+}

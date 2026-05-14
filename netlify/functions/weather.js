@@ -5,7 +5,8 @@ import { getStore } from "@netlify/blobs";
 import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
-import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS } from "./lib/regime.js";
+import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
+         kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
 const CITIES = [
   { name: "Asheville",      cli: "AVL", station: "KAVL", lat: 35.4362, lon: -82.5414, tz: "America/New_York" },
@@ -863,6 +864,15 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
         priorMean -= damping * regimeResidual;
       }
     }
+    // Hierarchical global Kalman correction: applied on top of per-city.
+    // Captures network-wide forecast bias (e.g., NWS running cool everywhere)
+    // that individual per-city corrections miss because they're zeroed under
+    // KALMAN_FLOOR_F. No floor on global — observation noise is √n smaller.
+    const kalmanG = kalmanGlobalCorrection("high", regimeBlob);
+    if (kalmanG && Math.abs(kalmanG.mu) >= KALMAN_GLOBAL_FLOOR_F) {
+      priorMean -= kalmanG.mu;
+      kalmanBiasSigma2 += kalmanG.P;
+    }
     // (If kalman is non-null but |μ|<floor, we skip the correction entirely —
     // matches the heuristic REGIME_FLOOR_F=0.5°F gate.)
     // Warming-rate observation term (V3): project current obs trajectory forward and
@@ -1054,6 +1064,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     if (kalmanLow && Math.abs(kalmanLow.mu) >= KALMAN_FLOOR_F) {
       priorLowMean -= kalmanLow.mu;
       kalmanLowBiasSigma2 = kalmanLow.P;
+    }
+    // Hierarchical global Kalman correction for LOW (mirror of HIGH path).
+    const kalmanGLow = kalmanGlobalCorrection("low", regimeBlob);
+    if (kalmanGLow && Math.abs(kalmanGLow.mu) >= KALMAN_GLOBAL_FLOOR_F) {
+      priorLowMean -= kalmanGLow.mu;
+      kalmanLowBiasSigma2 += kalmanGLow.P;
     }
     // Bayesian σ for LOW: σ_post² = σ_ensemble_trough² + σ_resolution_low².
     // 5y backtest TEST RMSE 0.91°F = √(σ_ens_avg² + σ_res²) with σ_ens_avg ≈ 0.5°F →

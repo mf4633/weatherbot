@@ -21,7 +21,7 @@
 //       REGIME_RESIDUAL_SEED whenever it's defined.
 
 import { getStore } from "@netlify/blobs";
-import { kalmanInit, kalmanStep } from "./lib/regime.js";
+import { kalmanInit, kalmanStep, kalmanGlobalInit, kalmanGlobalStep } from "./lib/regime.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const UA = "weatherbot-logger";
@@ -155,6 +155,12 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
   // exist for the city (all 20 currently in lib/regime.js KALMAN_PARAMS).
   const kalmanState = regimeBlob.per_city_kalman_state || {};
   const kalmanStateLow = regimeBlob.per_city_kalman_state_low || {};
+  // Global (hierarchical) Kalman state: one μ across all cities, captures
+  // network-wide forecast bias that the per-city floor blocks individually.
+  let kalmanGlobalState = regimeBlob.kalman_state_global || kalmanGlobalInit("high");
+  let kalmanGlobalStateLow = regimeBlob.kalman_state_global_low || kalmanGlobalInit("low");
+  const highResiduals = [];
+  const lowResiduals  = [];
   const settledNow = [];
   let dirty = false;
 
@@ -201,6 +207,7 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
         if (posterior) kalmanState[cliCode] = posterior;
       }
     }
+    highResiduals.push(residual);
     // Kalman regime update (LOW): only fires when CLI report includes minF.
     // Symmetric to HIGH; separate blob key per_city_kalman_state_low to keep
     // schema migrations local. lowResidual = pred.predLow − cliData.minF.
@@ -213,6 +220,7 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
         const posteriorLow = kalmanStep(priorLow, lowResidual, cliCode, "low");
         if (posteriorLow) kalmanStateLow[cliCode] = posteriorLow;
       }
+      lowResiduals.push(lowResidual);
     }
 
     pred.settled = true;
@@ -231,11 +239,25 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
     dirty = true;
   }
 
+  // Global Kalman update: one step on the mean residual across all settled
+  // cities this cycle. Requires ≥3 cities to keep observation noise sane
+  // (σ_obs scales as 1/√n; with n=1-2 the global is just noisy per-city).
+  if (highResiduals.length >= 3) {
+    const meanResid = highResiduals.reduce((a, b) => a + b, 0) / highResiduals.length;
+    kalmanGlobalState = kalmanGlobalStep(kalmanGlobalState, meanResid, "high");
+  }
+  if (lowResiduals.length >= 3) {
+    const meanResid = lowResiduals.reduce((a, b) => a + b, 0) / lowResiduals.length;
+    kalmanGlobalStateLow = kalmanGlobalStep(kalmanGlobalStateLow, meanResid, "low");
+  }
+
   if (dirty) {
     regimeBlob.per_city_residual_mean_7d = dyn;
     regimeBlob.per_city_residual_mean_3d = dyn3;
     regimeBlob.per_city_kalman_state = kalmanState;
     regimeBlob.per_city_kalman_state_low = kalmanStateLow;
+    regimeBlob.kalman_state_global = kalmanGlobalState;
+    regimeBlob.kalman_state_global_low = kalmanGlobalStateLow;
     regimeBlob.per_city_history = hist;
     regimeBlob.updated_at = new Date(now).toISOString();
     await regimeStore.setJSON("global", regimeBlob);
