@@ -860,7 +860,11 @@ export default async () => {
     }
 
     // 3. Place new bets.
-    if (kalshiData?.topBets && spareCapacity > 0) {
+    // Enter the loop even when spareCapacity === 0 so qualifying candidates get
+    // an explicit "out-of-cash" skip entry (line 962). Without this, the buy
+    // loop is bypassed silently and the dashboard's per-bet decision lookup
+    // finds nothing, leaving every candidate stuck on "pending next cycle".
+    if (kalshiData?.topBets) {
       const fr = kalshiData.freshness || {};
       const cityForecastAge = {};
       // cityInputAges feeds Bayesian work-order #6b: settled bets carry input ages
