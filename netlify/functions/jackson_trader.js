@@ -39,7 +39,14 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // below sustainable rate. The σ bump is the principled overconfidence fix; the EV
 // gate should be measured in σ_eff-units, so loosening here just compensates for the
 // nominal EV scale shift, not unwinding the May-13 risk control.
-const MIN_EDGE_HIGH = 0.20;
+// 2026-05-14 (PM): MIN_EDGE_HIGH 0.20 → 0.17 — symmetric counterpart to the LOW
+// relaxation. Live decision-column audit at 102 min post-bump showed 7 of 15 HIGH
+// candidates clustered at 16–19.4¢ edge with halfKelly 19–36% (e.g., Boston B59.5
+// NO at 18¢/35.7% hK, Chicago B66.5 NO at 17.2¢/23.1% hK). The σ_irred bump dropped
+// nominal EV scale by ~15-20% across the candidate pool, so the floor needs to drop
+// by the same fraction to preserve placement volume without unwinding the May-13 risk
+// envelope. halfKelly ≥ 15% remains the hard conviction backstop.
+const MIN_EDGE_HIGH = 0.17;
 const MIN_EDGE_LOW  = 0.25;
 function minEdgeFor(b) { return b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH; }
 // 2026-05-13: MIN_HALF_KELLY raised from 0.10 → 0.15. n=138 sweep: tightening to 0.15

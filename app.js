@@ -181,7 +181,7 @@ function renderFreshness(f) {
 // didn't log it in `skipped` (the trader pre-filters by EV/Kelly/price/volume
 // before the skip-loop). Update both files when these change.
 const TEMP_GATES = {
-  MIN_EDGE_HIGH: 0.20,
+  MIN_EDGE_HIGH: 0.17,
   MIN_EDGE_LOW: 0.25,
   MIN_HALF_KELLY: 0.15,
   MIN_PRICE: 0.10,
