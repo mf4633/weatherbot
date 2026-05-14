@@ -167,7 +167,8 @@ const BUCKET_MARGIN_MIN_F = 0.6;       // NO-side threshold
 // staged-heuristic bets, median P&L improvement +$99 (95% CI [-$25, +$222]).
 // CI doesn't exclude 0 but the lower bound is small and the conceptual
 // argument is independent of the data. Mirrors kalshi.js's SIGMA_IRREDUCIBLE_F.
-const SIGMA_IRREDUCIBLE_F      = 1.0;
+// 2026-05-14: 1.0 → 1.3, see kalshi.js comment for full calibration history.
+const SIGMA_IRREDUCIBLE_F      = 1.3;
 const SIGMA_BUCKET_MARGIN_Z    = 0.5;
 const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see header)
 // Tail-bucket (T-prefix) YES gate: for cold-tail LOW YES or hot-tail HIGH YES, the

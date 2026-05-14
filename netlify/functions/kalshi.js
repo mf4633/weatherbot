@@ -99,8 +99,13 @@ async function fetchKalshiMarkets(eventTicker) {
 // the historical 49-bet sample shows +$82 net vs +$52 for the old floor (same scale).
 // Theoretically justified by ensemble-mean RMSE 1.67°F (analyze.log) factored against
 // typical ensemble-disagreement ~1°F: irreducible component ≈ √(1.67² − 1²) = 1.34°F.
-// We ship 1.0 first for continuity; revisit upward to 1.3 once we have ~150 bets.
-const SIGMA_IRREDUCIBLE_F = 1.0;
+// 2026-05-14: bumped 1.0 → 1.3 per pre-registered plan after reaching n=148 settled
+// bets. Residual audit on May 5-7 carnage window (audit_carnage_window.js) showed
+// |residual|/modelStd = 1.77 — model underestimates own σ. σ-sweep replay
+// (backtest_sigma_irred.js) on 148 bets at current MIN_EDGE_HIGH=0.20/LOW=0.30/halfK=0.15
+// gates: σ_irred=1.3 cuts 5 losses + 2 wins → +$103 net vs +$83 at σ_irred=1.0.
+// Retention 40% (59/148 bets) — well above "never play, never lose" floor.
+const SIGMA_IRREDUCIBLE_F = 1.3;
 
 // Kalshi fee per $1 staked at a given binary contract price.
 // Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
