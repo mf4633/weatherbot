@@ -34,8 +34,13 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // $7 of LOW wins forgone. HIGH at 0.20 was healthier (36.4% hit, -28% ROI); further
 // HIGH tightening masks an underlying EV-calibration bias rather than fixing it,
 // so leave at 0.20 and revisit once Kalman LOW (dcee27c) improves residuals.
+// 2026-05-14: MIN_EDGE_LOW relaxed 0.30 → 0.25 after σ_irred bump 1.0 → 1.3 (commit
+// e7ad122) made σ_eff wider and pulled effective EV down, dropping placement volume
+// below sustainable rate. The σ bump is the principled overconfidence fix; the EV
+// gate should be measured in σ_eff-units, so loosening here just compensates for the
+// nominal EV scale shift, not unwinding the May-13 risk control.
 const MIN_EDGE_HIGH = 0.20;
-const MIN_EDGE_LOW  = 0.30;
+const MIN_EDGE_LOW  = 0.25;
 function minEdgeFor(b) { return b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH; }
 // 2026-05-13: MIN_HALF_KELLY raised from 0.10 → 0.15. n=138 sweep: tightening to 0.15
 // rejected 4 bets (0W/4L), recouped $44 with zero wins forgone — clean Pareto win.
