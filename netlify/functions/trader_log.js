@@ -6,7 +6,7 @@ import { getStore } from "@netlify/blobs";
 
 export default async (req) => {
   const url = new URL(req.url);
-  const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get("limit") || "50", 10)));
+  const limit = Math.max(1, Math.min(5000, parseInt(url.searchParams.get("limit") || "50", 10)));
   const filter = url.searchParams.get("filter");  // "placed" | "skipped" | null
   try {
     const store = getStore("trader_logs");
