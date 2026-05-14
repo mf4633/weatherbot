@@ -298,6 +298,75 @@ for (const floor of FLOOR_VARIANTS) {
 }
 
 // ===========================================================================
+// SIGMA-BUCKET-MARGIN A/B (2026-05-14 PM)
+// Tests SIGMA_BUCKET_MARGIN_Z ∈ {0.3, 0.4, 0.5, 0.6, 0.7} at production
+// σ_irred = 1.3 against settled bets. Gate skips B-bucket bets where the
+// model μ sits closer than Z·σ_eff to either continuous bucket boundary.
+//
+// Run after the next 20+ post-bump settled bets accumulate (commit e7ad122
+// shipped 2026-05-14 AM) to validate whether production Z=0.5 needs to
+// loosen in the post-bump regime. Today's dashboard shows the gate firing
+// on ~8 of 15 HIGH candidates — wider σ_eff means the candidate pool is
+// more edge-proximal in σ units. Question: are those skips net-positive?
+// ===========================================================================
+const SIGMA_IRREDUCIBLE_PROD = 1.3;   // current production (e7ad122)
+const SIGMA_IRRED_PRE_BUMP   = 1.0;   // pre-2026-05-14 baseline for comparison
+const Z_VARIANTS = [0.0, 0.3, 0.4, 0.5, 0.6, 0.7];
+
+function sigmaBucketMargin(bet, sigmaIrred) {
+  // Only B-bucket bets are gated (T-tail bets handled by tail-posterior gate).
+  const code = bet.ticker?.split("-").pop();
+  if (!code || !code.startsWith("B")) return null;
+  const bb = parseBucketStr(bet.bucket);
+  if (!bb) return null;
+  if (!Number.isFinite(bb.loInt) || !Number.isFinite(bb.hiInt)) return null;
+  if (bet.modelMean == null || bet.modelStd == null) return null;
+  const sigmaEff = Math.sqrt(bet.modelStd ** 2 + sigmaIrred ** 2);
+  const contLo = bb.loInt - 0.5;
+  const contHi = bb.hiInt + 0.5;
+  return Math.min(
+    Math.abs(bet.modelMean - contLo) / sigmaEff,
+    Math.abs(bet.modelMean - contHi) / sigmaEff
+  );
+}
+
+function runSigmaMarginSweep(sigmaIrred, label) {
+  console.log(`\n=== σ-BUCKET-MARGIN A/B at σ_irred=${sigmaIrred} ${label} ===`);
+  console.log(`Z      | gate-bites | TP (loss) | FP (win) | $loss recouped | $win forgone | net`);
+  console.log(`-------+------------+-----------+----------+----------------+--------------+------`);
+  const perZSkipped = {};
+  for (const Z of Z_VARIANTS) {
+    let tp = 0, fp = 0, lossRec = 0, winForgone = 0;
+    const skipped = [];
+    for (const bet of candidates) {
+      const m = sigmaBucketMargin(bet, sigmaIrred);
+      if (m == null) continue;
+      if (m >= Z) continue;
+      if (bet.outcome === "LOSS") { tp++; lossRec += -(bet.realized_pnl || 0); }
+      else if (bet.outcome === "WIN") { fp++; winForgone += (bet.realized_pnl || 0); }
+      skipped.push({ bet, sigmaMargin: m });
+    }
+    const net = lossRec - winForgone;
+    const flag = Z === 0.5 ? " ←PROD" : "";
+    console.log(` ${Z.toFixed(1)}   |    ${String(tp+fp).padStart(3)}     |    ${String(tp).padStart(2)}    |    ${String(fp).padStart(2)}    |    $${lossRec.toFixed(2).padStart(7)}   |   $${winForgone.toFixed(2).padStart(6)}  | $${net.toFixed(2)}${flag}`);
+    perZSkipped[Z] = skipped;
+  }
+  // Per-bet detail at production Z so the user can see which bets the gate killed.
+  console.log(`  (Z=0.5 detail — what the production gate currently skips:)`);
+  for (const s of perZSkipped[0.5]) {
+    const out = s.bet.outcome === "LOSS" ? "✓" : "✗";
+    const pnl = s.bet.realized_pnl ?? 0;
+    console.log(`    ${out} ${s.bet.city.padEnd(20)} ${s.bet.ticker} ${s.bet.variable}/${s.bet.side}  μ=${s.bet.modelMean}±${s.bet.modelStd}  z=${s.sigmaMargin.toFixed(3)}  pnl=$${pnl.toFixed(2)}`);
+  }
+}
+
+// Production regime (current). Use this for the actual gate-tuning decision.
+runSigmaMarginSweep(SIGMA_IRREDUCIBLE_PROD, "(production, post-2026-05-14 bump)");
+// Pre-bump regime for sanity-check that the original gate calibration would
+// reproduce on the historical bet population.
+runSigmaMarginSweep(SIGMA_IRRED_PRE_BUMP, "(pre-bump baseline — sanity check)");
+
+// ===========================================================================
 // KELLY-UNDER-UNCERTAINTY A/B (Bayes work order #5)
 // p_LCB = p_hat − z_α × σ_p  where σ_p ≈ φ(z_strike) × σ_μ / σ
 // Shrink stake by using LCB instead of point estimate. σ_μ ≈ 0.5°F (forecast
