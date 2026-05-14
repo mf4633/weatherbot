@@ -6,13 +6,16 @@ import { getStore } from "@netlify/blobs";
 
 export default async (req) => {
   const url = new URL(req.url);
-  const limit = Math.max(1, Math.min(5000, parseInt(url.searchParams.get("limit") || "50", 10)));
+  const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get("limit") || "50", 10)));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset") || "0", 10));
   const filter = url.searchParams.get("filter");  // "placed" | "skipped" | null
   try {
     const store = getStore("trader_logs");
     const list = await store.list();
     // Keys are ISO timestamps; lexical sort puts newest last → reverse.
-    const keys = (list.blobs || []).map(b => b.key).sort().reverse().slice(0, limit);
+    const allKeys = (list.blobs || []).map(b => b.key).sort().reverse();
+    const totalAvailable = allKeys.length;
+    const keys = allKeys.slice(offset, offset + limit);
     const entries = (await Promise.all(
       keys.map(k => store.get(k, { type: "json" }).catch(() => null))
     )).filter(Boolean);
@@ -23,7 +26,8 @@ export default async (req) => {
                    : entries;
 
     return new Response(JSON.stringify({
-      total_cycles_in_store: keys.length,
+      total_cycles_in_store: totalAvailable,
+      offset, limit,
       returned: filtered.length,
       filter,
       entries: filtered
