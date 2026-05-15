@@ -869,6 +869,8 @@ export default async () => {
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
                      reason: autoClose ? "auto-close" : "ev-flip",
                      marketImplied: marketImpliedOurSide != null ? Math.round(marketImpliedOurSide * 100) / 100 : null,
+                     pNow: Number.isFinite(pNow) ? Math.round(pNow * 1000) / 1000 : null,
+                     avgEntry: Math.round(avgEntry * 100) / 100,
                      dryRun: isDryRun, ok: res.ok });
         if (!res.ok) errors.push({ where: "sell", ticker, response: res.body });
         else if (!isDryRun) {
@@ -1276,7 +1278,12 @@ export default async () => {
           pWin: p.pWin, expectedPayout: p.expectedPayout, ok: p.ok
         })),
         sales: sales.map(s => ({ ticker: s.ticker, side: s.side, count: s.count,
-                                   priceCents: s.priceCents, ok: s.ok })),
+                                   priceCents: s.sellPriceCents,
+                                   reason: s.reason,
+                                   marketImplied: s.marketImplied,
+                                   pNow: s.pNow,
+                                   avgEntry: s.avgEntry,
+                                   ok: s.ok })),
         skipped: skipped.slice(0, 30),  // cap to avoid huge blobs
         errors: errors.slice(0, 10)
       });
