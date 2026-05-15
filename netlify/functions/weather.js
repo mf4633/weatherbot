@@ -70,17 +70,36 @@ const CITY_OFFSETS = Object.fromEntries(
 // when the NWS grid forecast is hours stale, ensemble models agree because they
 // all carry the same upper-air analysis — σ_ensemble collapses and σ_post under-
 // estimates true uncertainty. Add σ_revision in quadrature so stale forecasts
-// widen σ_post organically. Initial α values are conservative pending empirical
-// calibration via analyze_sigma_revision.js (multi-snapshot capture in logger.js).
-// HIGH α larger because diurnal peaks are noisier than overnight troughs.
-const SIGMA_REVISION_ALPHA_HIGH = 0.4;   // °F per stale-hour
-const SIGMA_REVISION_ALPHA_LOW  = 0.3;   // °F per stale-hour
-const SIGMA_REVISION_AGE_FREE_HR = 1.0;  // first hour free (operational latency)
-function sigmaRevisionF(forecastAgeMin, variable) {
+// widen σ_post organically. Seed α values used until logger.js fits them
+// empirically via pairwise Δpred/Δage on the prediction_snapshots blob and
+// writes regimeBlob.sigma_revision_state. resolveSigmaRevisionAlphas() picks
+// fit values when valid (clamped, n≥MIN_PAIRS), seeds otherwise.
+const SIGMA_REVISION_ALPHA_HIGH_SEED = 0.4;   // °F per stale-hour
+const SIGMA_REVISION_ALPHA_LOW_SEED  = 0.3;   // °F per stale-hour
+const SIGMA_REVISION_AGE_FREE_HR = 1.0;       // first hour free (operational latency)
+const SIGMA_REVISION_ALPHA_MIN = 0.1;
+const SIGMA_REVISION_ALPHA_MAX = 1.5;
+function resolveSigmaRevisionAlphas(regimeBlob) {
+  const fit = regimeBlob?.sigma_revision_state;
+  const pick = (fitVal, seed) => {
+    if (!Number.isFinite(fitVal)) return { value: seed, source: "seed" };
+    if (fitVal < SIGMA_REVISION_ALPHA_MIN || fitVal > SIGMA_REVISION_ALPHA_MAX) {
+      return { value: seed, source: "seed-clamped" };
+    }
+    return { value: fitVal, source: "fit" };
+  };
+  return {
+    high: pick(fit?.α_high, SIGMA_REVISION_ALPHA_HIGH_SEED),
+    low:  pick(fit?.α_low,  SIGMA_REVISION_ALPHA_LOW_SEED),
+    fitAtUTC: fit?.fitAtUTC || null,
+    nPairsHigh: fit?.n_pairs_high ?? 0,
+    nPairsLow:  fit?.n_pairs_low  ?? 0
+  };
+}
+function sigmaRevisionF(forecastAgeMin, alpha) {
   if (forecastAgeMin == null) return 0;
   const ageHr = forecastAgeMin / 60;
-  const α = variable === "low" ? SIGMA_REVISION_ALPHA_LOW : SIGMA_REVISION_ALPHA_HIGH;
-  return α * Math.max(0, ageHr - SIGMA_REVISION_AGE_FREE_HR);
+  return alpha * Math.max(0, ageHr - SIGMA_REVISION_AGE_FREE_HR);
 }
 
 // LOW-temp per-city offsets — fit on 1y backtest with hrs-to-trough σ formula.
@@ -804,6 +823,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   const forecastAgeMin = forecast?.updateTime
     ? Math.round((Date.now() - new Date(forecast.updateTime).getTime()) / 60000)
     : null;
+  const sigmaRevisionAlphas = resolveSigmaRevisionAlphas(regimeBlob);
 
   // Bias correction uses ensembleAt (or ensemble-of-NWS-only if no Open-Meteo response).
   let biasF = null;
@@ -957,7 +977,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // cross-day component while keeping that floor for the intraday signal.
     // σ_revision: forecast-staleness uncertainty. Only the bias-corrected branch
     // gets this — peak-realized has the extremum observed, no revision risk left.
-    const sigmaRevHigh = sigmaRevisionF(forecastAgeMin, "high");
+    const sigmaRevHigh = sigmaRevisionF(forecastAgeMin, sigmaRevisionAlphas.high.value);
     let priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
                               + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F
                               + kalmanBiasSigma2
@@ -1109,7 +1129,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // double-inflating when cold-front branch already widens σ to 1.5°F floor.
     // Kalman P_low + σ_walk² added in quadrature (cross-day bias uncertainty).
     // σ_revision: forecast-staleness uncertainty (same shape as HIGH; α_LOW < α_HIGH).
-    const sigmaRevLow = sigmaRevisionF(forecastAgeMin, "low");
+    const sigmaRevLow = sigmaRevisionF(forecastAgeMin, sigmaRevisionAlphas.low.value);
     const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
                                  + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F
                                  + kalmanLowBiasSigma2
@@ -1304,6 +1324,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowCi95: lowCi95 ? [round(lowCi95[0]), round(lowCi95[1])] : null,
     forecastUpdateTime: forecast?.updateTime || null,
     forecastAgeMin,
+    sigmaRevisionAlphas: {
+      high: sigmaRevisionAlphas.high.value,
+      low:  sigmaRevisionAlphas.low.value,
+      highSource: sigmaRevisionAlphas.high.source,
+      lowSource:  sigmaRevisionAlphas.low.source,
+      fitAtUTC:   sigmaRevisionAlphas.fitAtUTC
+    },
     dataAgeMin,
     ensembleSources: sources.map(s => ({
       model: s.model, peak: Math.round(s.peak * 10) / 10,

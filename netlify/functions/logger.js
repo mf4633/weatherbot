@@ -206,6 +206,110 @@ async function runSnapshotSettle(snapshotsStore, predData, now) {
   return settled;
 }
 
+// σ_revision auto-fit. Pulls the last N days of `prediction_snapshots`, groups
+// by (cli, date), and forms pairwise (Δpred, Δage) samples within each group.
+// Bins by |Δage|. Per bin: sample std of Δpred. Fits α by weighted OLS through
+// origin: σ_bin = α × max(0, midHr − 1). Writes to regimeBlob.sigma_revision_state.
+// Validation: ≥ MIN_PAIRS pairs total per variable; α clamped to [0.1, 1.5].
+// Outside the clamp, write null (weather.js falls back to seed).
+//
+// Why pairwise instead of residual-vs-age (settled snapshots only):
+//   pairs are dense (every same-day pair contributes), don't need CLI settlement,
+//   and measure forecast-revision noise directly — independent of model bias.
+//   The residual-vs-age estimator is the ground-truth cross-check once n_settled
+//   per bin > 30; that lives in analyze_sigma_revision.js for offline runs.
+const SIGMA_REVISION_AGE_BINS_HR = [
+  [0, 1], [1, 2], [2, 4], [4, 6], [6, 8], [8, 12], [12, 16], [16, 20], [20, 30]
+];
+const SIGMA_REVISION_FIT_LOOKBACK_DAYS = 14;
+const SIGMA_REVISION_MIN_PAIRS = 30;            // total pairs needed to attempt a fit
+const SIGMA_REVISION_MIN_PAIRS_PER_BIN = 5;     // bin counted in fit only if it has this many
+const SIGMA_REVISION_ALPHA_CLAMP = [0.1, 1.5];
+
+function sigmaRevisionBinIndex(ageHr) {
+  for (let i = 0; i < SIGMA_REVISION_AGE_BINS_HR.length; i++) {
+    const [lo, hi] = SIGMA_REVISION_AGE_BINS_HR[i];
+    if (ageHr >= lo && ageHr < hi) return i;
+  }
+  return null;
+}
+function sampleStd(xs) {
+  if (xs.length < 2) return null;
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1));
+}
+function fitAlphaThroughOrigin(rows) {
+  // σ = α × (midHr − 1) on the rows where midHr > 1 and we have ≥ MIN_PAIRS_PER_BIN.
+  // Weighted by n_pairs in the bin.
+  const pts = rows.filter(r => r.sigma != null && r.midHr > 1 && r.n >= SIGMA_REVISION_MIN_PAIRS_PER_BIN)
+                  .map(r => ({ x: r.midHr - 1, y: r.sigma, w: r.n }));
+  if (pts.length < 2) return null;
+  const sumWxx = pts.reduce((a, p) => a + p.w * p.x * p.x, 0);
+  const sumWxy = pts.reduce((a, p) => a + p.w * p.x * p.y, 0);
+  return sumWxx > 0 ? sumWxy / sumWxx : null;
+}
+function fitVariableAlpha(snaps, predKey) {
+  const byGroup = new Map();
+  for (const s of snaps) {
+    if (s[predKey] == null || s.forecastAgeMin == null) continue;
+    const k = `${s.cli}|${s.date}`;
+    if (!byGroup.has(k)) byGroup.set(k, []);
+    byGroup.get(k).push(s);
+  }
+  const binDeltas = SIGMA_REVISION_AGE_BINS_HR.map(() => []);
+  let totalPairs = 0;
+  for (const arr of byGroup.values()) {
+    for (let i = 0; i < arr.length; i++) {
+      for (let j = i + 1; j < arr.length; j++) {
+        const a = arr[i], b = arr[j];
+        if (a[predKey] == null || b[predKey] == null) continue;
+        const dPred = b[predKey] - a[predKey];
+        const dAgeHr = Math.abs(b.forecastAgeMin - a.forecastAgeMin) / 60;
+        const idx = sigmaRevisionBinIndex(dAgeHr);
+        if (idx == null) continue;
+        binDeltas[idx].push(dPred);
+        totalPairs++;
+      }
+    }
+  }
+  const bins = SIGMA_REVISION_AGE_BINS_HR.map(([lo, hi], i) => ({
+    bin: `${lo}-${hi}h`, midHr: (lo + hi) / 2, n: binDeltas[i].length,
+    sigma: sampleStd(binDeltas[i])
+  }));
+  return { totalPairs, bins, alphaRaw: fitAlphaThroughOrigin(bins) };
+}
+async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
+  const cutoffUTC = now - SIGMA_REVISION_FIT_LOOKBACK_DAYS * 86_400_000;
+  const { blobs } = await snapshotsStore.list();
+  const recentKeys = (blobs || []).map(b => b.key);
+  const records = (await Promise.all(
+    recentKeys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))
+  )).filter(r => r && r.capturedAtUTC && new Date(r.capturedAtUTC).getTime() >= cutoffUTC);
+  if (records.length === 0) return { fit: false, reason: "no-recent-snapshots" };
+  const high = fitVariableAlpha(records, "predHigh");
+  const low  = fitVariableAlpha(records, "predLow");
+  const clamp = (raw) => {
+    if (!Number.isFinite(raw)) return null;
+    if (raw < SIGMA_REVISION_ALPHA_CLAMP[0] || raw > SIGMA_REVISION_ALPHA_CLAMP[1]) return null;
+    return raw;
+  };
+  const α_high = high.totalPairs >= SIGMA_REVISION_MIN_PAIRS ? clamp(high.alphaRaw) : null;
+  const α_low  = low.totalPairs  >= SIGMA_REVISION_MIN_PAIRS ? clamp(low.alphaRaw)  : null;
+  const regimeBlob = (await regimeStore.get("global", { type: "json" })) || {};
+  regimeBlob.sigma_revision_state = {
+    α_high, α_low,
+    α_high_raw: high.alphaRaw, α_low_raw: low.alphaRaw,
+    n_pairs_high: high.totalPairs, n_pairs_low: low.totalPairs,
+    bins_high: high.bins, bins_low: low.bins,
+    lookbackDays: SIGMA_REVISION_FIT_LOOKBACK_DAYS,
+    clamp: SIGMA_REVISION_ALPHA_CLAMP,
+    fitAtUTC: new Date(now).toISOString()
+  };
+  regimeBlob.updated_at = new Date(now).toISOString();
+  await regimeStore.setJSON("global", regimeBlob);
+  return { fit: true, α_high, α_low, n_pairs_high: high.totalPairs, n_pairs_low: low.totalPairs };
+}
+
 async function runCapture(predictionsStore, predData, now) {
   const writes = [];
   for (const c of predData.cities || []) {
@@ -363,12 +467,22 @@ export default async () => {
     const settled  = await runSettle(predictionsStore, regimeStore, predData, now);
     const snapshots = await runSnapshot(snapshotsStore, predData, now);
     const snapshotsSettled = await runSnapshotSettle(snapshotsStore, predData, now);
+    // σ_revision auto-fit runs once per logger cycle (5 min cron) — cheap given
+    // the bounded lookback (14 days) and pairwise compute. Falls back silently
+    // when n_pairs < MIN_PAIRS; weather.js reads from regimeBlob.sigma_revision_state.
+    let sigmaRevisionFit = null;
+    try {
+      sigmaRevisionFit = await runRefitSigmaRevision(snapshotsStore, regimeStore, now);
+    } catch (e) {
+      sigmaRevisionFit = { fit: false, error: String(e) };
+    }
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
       captureCount: captures.length, captures,
       settleCount: settled.length, settled,
       snapshotCount: snapshots.length, snapshots,
-      snapshotsSettledCount: snapshotsSettled.length, snapshotsSettled
+      snapshotsSettledCount: snapshotsSettled.length, snapshotsSettled,
+      sigmaRevisionFit
     }, null, 2), { status: 200, headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({

@@ -380,21 +380,25 @@ function noStrikeMargin(b) {
 // scales σ_μ with staleness so the LCB tightens on stale-forecast bets.
 // Calibrated against backtest_gates.js Kelly-LCB A/B at z_α=0.5: +$112 net.
 const SIGMA_FORECAST_REVISION_F = 0.5;  // σ_μ — revision of model mean over short horizon
-// σ_μ growth with forecast age (added 2026-05-15, mirror of weather.js
-// sigmaRevisionF). HIGH α larger than LOW because diurnal peaks are noisier.
-const SIGMA_MU_ALPHA_HIGH = 0.4;        // °F per stale-hour
-const SIGMA_MU_ALPHA_LOW  = 0.3;
-const SIGMA_MU_AGE_FREE_HR = 1.0;       // first hour free
-function sigmaForecastRevisionMu(b, cityInputAges) {
+// Seed α values, used when the prediction payload doesn't carry the resolved
+// sigmaRevisionAlphas (legacy / missing field). When weather.js exposes them
+// (post-48339d0 follow-up), we use the SAME α that built σ_post — keeps prior
+// and Kelly-LCB in lockstep so the auto-fit propagates cleanly.
+const SIGMA_MU_ALPHA_HIGH_SEED = 0.4;
+const SIGMA_MU_ALPHA_LOW_SEED  = 0.3;
+const SIGMA_MU_AGE_FREE_HR = 1.0;
+function sigmaForecastRevisionMu(b, cityInputAges, alphasFromWeather) {
   const ageMin = cityInputAges?.nwsGridAgeMin;
   if (ageMin == null) return SIGMA_FORECAST_REVISION_F;
   const ageHr = ageMin / 60;
-  const α = b.variable === "low" ? SIGMA_MU_ALPHA_LOW : SIGMA_MU_ALPHA_HIGH;
+  const seed = b.variable === "low" ? SIGMA_MU_ALPHA_LOW_SEED : SIGMA_MU_ALPHA_HIGH_SEED;
+  const fit  = b.variable === "low" ? alphasFromWeather?.low  : alphasFromWeather?.high;
+  const α = Number.isFinite(fit) ? fit : seed;
   const dynamic = α * Math.max(0, ageHr - SIGMA_MU_AGE_FREE_HR);
   return Math.max(SIGMA_FORECAST_REVISION_F, dynamic);
 }
 const KELLY_LCB_Z = 0.5;                // 0.5σ lower bound (mild); 1.0/1.65 more aggressive
-function kellyLcbAdjust(b, cityInputAges) {
+function kellyLcbAdjust(b, cityInputAges, alphasFromWeather) {
   const σ = b.modelStd, μ = b.modelMean;
   if (!Number.isFinite(σ) || σ <= 0 || !Number.isFinite(μ)) return null;
   const lo = b.loInt, hi = b.hiInt;
@@ -404,7 +408,7 @@ function kellyLcbAdjust(b, cityInputAges) {
   const phiLo = zLo == null ? 0 : phi(zLo);
   const phiHi = zHi == null ? 0 : phi(zHi);
   const dPdMu = Math.abs(phiLo - phiHi) / σ;
-  const sigmaMu = sigmaForecastRevisionMu(b, cityInputAges);
+  const sigmaMu = sigmaForecastRevisionMu(b, cityInputAges, alphasFromWeather);
   const sigmaP = dPdMu * sigmaMu;
   const pHat = b.pWin;
   if (!Number.isFinite(pHat)) return null;
@@ -895,6 +899,9 @@ export default async () => {
       // existing settled-bet stream once ~80-150 bets accumulate. See
       // project_weatherbot_bayesian_workorder.md for the resume sequence.
       const cityInputAges = {};
+      // σ_revision α (from logger.js auto-fit if present, seed otherwise). All
+      // cities share the same fit object — read once from first city that has it.
+      let alphasFromWeather = null;
       for (const c of (weatherData.cities || [])) {
         // Prefer server-computed dataAgeMin (weather.js): reflects the freshest of
         // ensemble + METAR + NWS grid, not just NWS's grid issue time. NWS grid often
@@ -923,6 +930,9 @@ export default async () => {
           currentTempSource: c.currentTempSource ?? null,
           currentTempAgeMin: c.currentTempAgeMin ?? null,
         };
+        if (!alphasFromWeather && c.sigmaRevisionAlphas) {
+          alphasFromWeather = c.sigmaRevisionAlphas;
+        }
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
@@ -1101,7 +1111,7 @@ export default async () => {
         // where σ is small and a tiny shift in μ flips the bet — exactly the SATX
         // 2026-05-06 T68 NO failure pattern. Calibrated z_α=0.5 against the 49-bet
         // sample (+$112 net in backtest_gates.js Kelly-LCB A/B).
-        const lcb = kellyLcbAdjust(b, cityInputAges[b.city]);
+        const lcb = kellyLcbAdjust(b, cityInputAges[b.city], alphasFromWeather);
         if (lcb) {
           const fee = 0.07 * (1 - b.price);
           const evLCB = (lcb.pLCB - b.price) - fee;
