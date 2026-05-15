@@ -81,8 +81,12 @@ function reconstructPWin(bet) {
   return null;
 }
 
-// Platt fit via Newton-Raphson. Targets are Platt-smoothed labels.
-// Loss: cross-entropy on smoothed targets, no L2 (small param count + smoothing handles).
+// Platt fit via regularized Newton-Raphson with backtracking line search.
+// Loss: cross-entropy on Platt-smoothed targets + L2 prior toward identity (A=1, B=0).
+// Regularization prevents the parameter explosion that happens when data is
+// only weakly informative about calibration (Hessian becomes ill-conditioned
+// without it — actual failure mode observed on first deploy with n=146).
+// Line search prevents Newton from overshooting on saturated samples.
 function fitPlatt(samples) {
   const nPos = samples.filter(s => s.y === 1).length;
   const nNeg = samples.length - nPos;
@@ -91,16 +95,32 @@ function fitPlatt(samples) {
   const tNeg = 1 / (nNeg + 2);
   const targets = samples.map(s => s.y === 1 ? tPos : tNeg);
   const x = samples.map(s => logitClamp(s.pHat));
+  // L2 strength: scales with n so prior weight stays meaningful as n grows.
+  // λ = 1 means prior worth ~1 effective sample. At n=146 the prior is light.
+  const LAMBDA = 1.0;
+  const PRIOR_A = 1, PRIOR_B = 0;
 
-  let A = 1, B = 0;
-  const MAX_ITER = 100, TOL = 1e-7;
-  for (let iter = 0; iter < MAX_ITER; iter++) {
-    let g0 = 0, g1 = 0;          // gradient (∂/∂B, ∂/∂A)
-    let h00 = 0, h01 = 0, h11 = 0;  // Hessian
+  function loss(A, B) {
+    let s = 0;
     for (let i = 0; i < samples.length; i++) {
       const z = A * x[i] + B;
       const p = sigmoid(z);
-      const r = p - targets[i];   // residual
+      const eps = 1e-12;
+      s -= targets[i] * Math.log(Math.max(eps, p)) + (1 - targets[i]) * Math.log(Math.max(eps, 1 - p));
+    }
+    s += 0.5 * LAMBDA * ((A - PRIOR_A) ** 2 + (B - PRIOR_B) ** 2);
+    return s;
+  }
+
+  let A = 1, B = 0;
+  const MAX_ITER = 200, TOL = 1e-6;
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let g0 = 0, g1 = 0;
+    let h00 = 0, h01 = 0, h11 = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const z = A * x[i] + B;
+      const p = sigmoid(z);
+      const r = p - targets[i];
       g0 += r;
       g1 += r * x[i];
       const w = p * (1 - p);
@@ -108,20 +128,34 @@ function fitPlatt(samples) {
       h01 += w * x[i];
       h11 += w * x[i] * x[i];
     }
+    g0 += LAMBDA * (B - PRIOR_B);
+    g1 += LAMBDA * (A - PRIOR_A);
+    h00 += LAMBDA;
+    h11 += LAMBDA;
     const det = h00 * h11 - h01 * h01;
-    if (Math.abs(det) < 1e-12) return { A, B, converged: false, reason: "singular-hessian" };
+    if (det <= 0) return { A, B, converged: false, reason: "non-pd-hessian", iter };
     const dB = (h11 * g0 - h01 * g1) / det;
     const dA = (-h01 * g0 + h00 * g1) / det;
-    A -= dA; B -= dB;
-    if (Math.abs(dA) < TOL && Math.abs(dB) < TOL) return { A, B, converged: true, iter };
+    // Backtracking line search — half the step until loss decreases.
+    const lossBefore = loss(A, B);
+    let step = 1.0;
+    let lossAfter = loss(A - step * dA, B - step * dB);
+    while (step > 1e-6 && lossAfter > lossBefore - 1e-4 * step * (dA * dA + dB * dB)) {
+      step *= 0.5;
+      lossAfter = loss(A - step * dA, B - step * dB);
+    }
+    A -= step * dA; B -= step * dB;
+    if (Math.abs(step * dA) < TOL && Math.abs(step * dB) < TOL) {
+      return { A, B, converged: true, iter, finalLoss: lossAfter };
+    }
   }
   return { A, B, converged: false, reason: "max-iter" };
 }
 
 // PAV isotonic regression. Returns array of {from, to, pCal, n, wins} sorted by from.
+// After PAV, adjacent blocks with the same pCal are merged for readable output.
 function fitIsotonic(samples) {
   const sorted = [...samples].sort((a, b) => a.pHat - b.pHat);
-  // Each point starts as its own block
   const blocks = sorted.map(s => ({ from: s.pHat, to: s.pHat, sum: s.y, n: 1 }));
   let i = 0;
   while (i < blocks.length - 1) {
@@ -129,16 +163,29 @@ function fitIsotonic(samples) {
       blocks[i].to = blocks[i+1].to;
       blocks[i].sum += blocks[i+1].sum;
       blocks[i].n += blocks[i+1].n;
-      blocks.splice(i+1, 1);
+      blocks.splice(i + 1, 1);
       if (i > 0) i--;
     } else {
       i++;
     }
   }
-  return blocks.map(b => ({
+  // Merge adjacent blocks with identical pCal (PAV leaves singletons with same value
+  // un-pooled when their pHat differs but win-rate is equal — e.g., five 0-win
+  // singletons in a row).
+  const merged = [];
+  for (const b of blocks) {
+    const pCal = b.sum / b.n;
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(last.pCal - pCal) < 1e-9) {
+      last.to = b.to; last.sum += b.sum; last.n += b.n;
+    } else {
+      merged.push({ from: b.from, to: b.to, pCal, sum: b.sum, n: b.n });
+    }
+  }
+  return merged.map(b => ({
     from: Math.round(b.from * 1000) / 1000,
     to: Math.round(b.to * 1000) / 1000,
-    pCal: Math.round((b.sum / b.n) * 1000) / 1000,
+    pCal: Math.round(b.pCal * 1000) / 1000,
     n: b.n,
     wins: b.sum
   }));
