@@ -162,6 +162,9 @@ async function runSnapshot(snapshotsStore, predData, now) {
       dataAgeMin: c.dataAgeMin ?? null,
       lastMetarAgeMin: c.lastMetarAgeMin ?? null,
       ensembleSourceCount: Array.isArray(c.ensembleSources) ? c.ensembleSources.length : null,
+      ensembleSources: Array.isArray(c.ensembleSources)
+        ? c.ensembleSources.map(s => ({ model: s.model, peak: s.peak, trough: s.trough ?? null }))
+        : null,
       hrsToPeak: c.hrsToPeak ?? null,
       hrsToTrough: c.hrsToTrough ?? null,
       capturedAtUTC: new Date(now).toISOString()
