@@ -33,6 +33,15 @@ const HISTORY_TRIM   = 30;   // entries kept per city
 const ROLLING_WINDOW = 7;    // size of the rolling mean weather.js consumes
 const SHORT_WINDOW   = 3;    // size of the regime-change window (adaptive damping)
 
+// σ_revision instrumentation (added 2026-05-15): multi-snapshot capture into a
+// SEPARATE `prediction_snapshots` blob so the canonical `predictions` blob (which
+// drives Kalman + 7d residuals) keeps its once-per-day semantics. Snapshots are
+// keyed `{cli}/{date}/{HHMM}` in local time, captured once per 30-min slot at any
+// hour of the day. After CLI settles, snapshots get backfilled with actual+
+// residual so analyze_sigma_revision.js can fit σ_revision(forecastAgeMin)
+// empirically across the full forecast-age distribution.
+const SNAPSHOT_SLOT_MIN = 30;     // one snapshot per 30-min slot per city
+
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
 function localDateAndHour(tz, date = new Date()) {
@@ -117,6 +126,84 @@ async function fetchPredictions() {
   });
   if (!r.ok) throw new Error(`weather API ${r.status}`);
   return await r.json();
+}
+
+// σ_revision snapshot capture. Separate from runCapture above — writes to the
+// `prediction_snapshots` blob, one snapshot per 30-min slot per city, all hours.
+// Each snapshot carries forecastAgeMin so analyze_sigma_revision.js can fit α
+// from pairwise (Δprediction, Δage) AND from (modelMean - actual) residuals.
+async function runSnapshot(snapshotsStore, predData, now) {
+  const writes = [];
+  for (const c of predData.cities || []) {
+    if (c.error || c.mean == null || !c.cli || !c.tz || !c.name) continue;
+    // Slot = local hour + minute floored to SNAPSHOT_SLOT_MIN. Logger ticks every
+    // 5 min so each 30-min slot gets 6 attempts; first wins via if-exists guard.
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: c.tz, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false
+    });
+    const p = Object.fromEntries(fmt.formatToParts(new Date(now)).map(x => [x.type, x.value]));
+    const date = `${p.year}-${p.month}-${p.day}`;
+    const hh = p.hour;
+    const mm = String(Math.floor(parseInt(p.minute, 10) / SNAPSHOT_SLOT_MIN) * SNAPSHOT_SLOT_MIN).padStart(2, "0");
+    const key = `${c.cli}/${date}/${hh}${mm}`;
+    const existing = await snapshotsStore.get(key, { type: "json" });
+    if (existing) continue;
+    const record = {
+      name: c.name,
+      cli: c.cli,
+      date,
+      localHHMM: `${hh}${mm}`,
+      predHigh: c.mean,
+      predLow: c.lowMean ?? null,
+      stdHigh: c.std,
+      stdLow: c.lowStd ?? null,
+      forecastAgeMin: c.forecastAgeMin ?? null,
+      dataAgeMin: c.dataAgeMin ?? null,
+      lastMetarAgeMin: c.lastMetarAgeMin ?? null,
+      ensembleSourceCount: Array.isArray(c.ensembleSources) ? c.ensembleSources.length : null,
+      hrsToPeak: c.hrsToPeak ?? null,
+      hrsToTrough: c.hrsToTrough ?? null,
+      capturedAtUTC: new Date(now).toISOString()
+    };
+    await snapshotsStore.setJSON(key, record);
+    writes.push({ city: c.name, slot: `${date}/${hh}${mm}` });
+  }
+  return writes;
+}
+
+// σ_revision snapshot settle. When yesterday's CLI lands, iterate every snapshot
+// key under {cli}/{yesterday}/* and backfill actual + residuals. Cheap (≤48 puts
+// per city per day on the settlement tick that wins the race).
+async function runSnapshotSettle(snapshotsStore, predData, now) {
+  const settled = [];
+  for (const c of predData.cities || []) {
+    if (!c.name || !c.cli || !c.tz) continue;
+    const { date: todayLocal, hour } = localDateAndHour(c.tz, now);
+    if (!SETTLE_HOURS.has(hour)) continue;
+    const yesterday = previousLocalDate(todayLocal);
+    const cliData = await fetchLatestCLI(c.cli);
+    if (!cliData || cliData.coversDate !== yesterday || cliData.isPartial) continue;
+    if (cliData.maxF == null && cliData.minF == null) continue;
+    const prefix = `${c.cli}/${yesterday}/`;
+    const list = await snapshotsStore.list({ prefix });
+    const keys = (list.blobs || []).map(b => b.key);
+    for (const key of keys) {
+      const snap = await snapshotsStore.get(key, { type: "json" });
+      if (!snap || snap.settled) continue;
+      snap.actualHigh = cliData.maxF;
+      snap.actualLow = cliData.minF;
+      snap.residualHigh = (cliData.maxF != null && snap.predHigh != null)
+        ? snap.predHigh - cliData.maxF : null;
+      snap.residualLow = (cliData.minF != null && snap.predLow != null)
+        ? snap.predLow - cliData.minF : null;
+      snap.settled = true;
+      snap.settledAtUTC = new Date(now).toISOString();
+      await snapshotsStore.setJSON(key, snap);
+    }
+    settled.push({ city: c.name, date: yesterday, keys: keys.length });
+  }
+  return settled;
 }
 
 async function runCapture(predictionsStore, predData, now) {
@@ -271,12 +358,17 @@ export default async () => {
     const predData = await fetchPredictions();
     const predictionsStore = getStore("predictions");
     const regimeStore = getStore("regime_corrections");
+    const snapshotsStore = getStore("prediction_snapshots");
     const captures = await runCapture(predictionsStore, predData, now);
     const settled  = await runSettle(predictionsStore, regimeStore, predData, now);
+    const snapshots = await runSnapshot(snapshotsStore, predData, now);
+    const snapshotsSettled = await runSnapshotSettle(snapshotsStore, predData, now);
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
       captureCount: captures.length, captures,
-      settleCount: settled.length, settled
+      settleCount: settled.length, settled,
+      snapshotCount: snapshots.length, snapshots,
+      snapshotsSettledCount: snapshotsSettled.length, snapshotsSettled
     }, null, 2), { status: 200, headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({

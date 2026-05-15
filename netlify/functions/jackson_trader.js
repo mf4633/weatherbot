@@ -67,6 +67,11 @@ const MIN_PRICE = 0.10;
 // intent at 63¢, 1-share fill, 6 contracts canceled at expiration.
 const MIN_VOLUME = 20;
 const PER_CITY_FRESHNESS_MAX_MIN = 180;
+// Bayesian humility cap on pWin. Anything > 0.95 implies our σ_post collapsed
+// below ~σ_resolution (=1.0°F HIGH, 0.7°F LOW), which physically only happens
+// if all ensemble models agree AND they're stale together. See comments at the
+// gate site in the buy loop for the empirical anchor.
+const P_WIN_CAP = 0.95;
 // Don't re-enter a ticker+side within this window after selling it.
 const COOLDOWN_MIN = 60;
 // After ANY successful buy on (city, variable), block ALL further buys on the same
@@ -370,9 +375,26 @@ function noStrikeMargin(b) {
 //   p_LCB = p_hat − z_α × σ_p
 // Then check the trader's MIN_EDGE/MIN_HALF_KELLY using p_LCB instead of p_hat.
 // Calibrated against backtest_gates.js Kelly-LCB A/B at z_α=0.5: +$112 net.
+// σ_μ floor — used when no forecast-age info is on the bet (legacy bets / null
+// inputAges). When age IS available, see sigmaForecastRevisionMu below — α × age
+// scales σ_μ with staleness so the LCB tightens on stale-forecast bets.
+// Calibrated against backtest_gates.js Kelly-LCB A/B at z_α=0.5: +$112 net.
 const SIGMA_FORECAST_REVISION_F = 0.5;  // σ_μ — revision of model mean over short horizon
+// σ_μ growth with forecast age (added 2026-05-15, mirror of weather.js
+// sigmaRevisionF). HIGH α larger than LOW because diurnal peaks are noisier.
+const SIGMA_MU_ALPHA_HIGH = 0.4;        // °F per stale-hour
+const SIGMA_MU_ALPHA_LOW  = 0.3;
+const SIGMA_MU_AGE_FREE_HR = 1.0;       // first hour free
+function sigmaForecastRevisionMu(b, cityInputAges) {
+  const ageMin = cityInputAges?.nwsGridAgeMin;
+  if (ageMin == null) return SIGMA_FORECAST_REVISION_F;
+  const ageHr = ageMin / 60;
+  const α = b.variable === "low" ? SIGMA_MU_ALPHA_LOW : SIGMA_MU_ALPHA_HIGH;
+  const dynamic = α * Math.max(0, ageHr - SIGMA_MU_AGE_FREE_HR);
+  return Math.max(SIGMA_FORECAST_REVISION_F, dynamic);
+}
 const KELLY_LCB_Z = 0.5;                // 0.5σ lower bound (mild); 1.0/1.65 more aggressive
-function kellyLcbAdjust(b) {
+function kellyLcbAdjust(b, cityInputAges) {
   const σ = b.modelStd, μ = b.modelMean;
   if (!Number.isFinite(σ) || σ <= 0 || !Number.isFinite(μ)) return null;
   const lo = b.loInt, hi = b.hiInt;
@@ -382,7 +404,8 @@ function kellyLcbAdjust(b) {
   const phiLo = zLo == null ? 0 : phi(zLo);
   const phiHi = zHi == null ? 0 : phi(zHi);
   const dPdMu = Math.abs(phiLo - phiHi) / σ;
-  const sigmaP = dPdMu * SIGMA_FORECAST_REVISION_F;
+  const sigmaMu = sigmaForecastRevisionMu(b, cityInputAges);
+  const sigmaP = dPdMu * sigmaMu;
   const pHat = b.pWin;
   if (!Number.isFinite(pHat)) return null;
   // For NO-side bets, pWin = 1 - pYes; sensitivity flips sign but |·| same.
@@ -974,6 +997,17 @@ export default async () => {
         }
         const ageMin = cityForecastAge[b.city];
         if (ageMin != null && ageMin > PER_CITY_FRESHNESS_MAX_MIN) { skipped.push({ ...briefBet(b), reason: "forecast-stale", ageMin: Math.round(ageMin) }); continue; }
+        // pWin cap (Bayesian humility, 2026-05-15): pWin > P_WIN_CAP is almost
+        // always a model artifact — agreeing-but-stale ensemble runs collapse
+        // σ_post to ~0, driving pWin to ~1.0 on a forecast that's structurally
+        // due for revision. Empirical anchor: Chicago LOW T51 NO 2026-05-15 with
+        // pWin=1.000 lost when actual landed +7°F warmer than the model μ. No
+        // future temperature deserves >95% confidence at our σ_resolution scale.
+        if (b.pWin != null && b.pWin > P_WIN_CAP) {
+          skipped.push({ ...briefBet(b), reason: "pwin-cap-exceeded",
+                         pWin: b.pWin, cap: P_WIN_CAP });
+          continue;
+        }
         // Resolve event ticker → full market ticker like KXHIGHNY-26MAY02-B65.5.
         const cityKalshi = (kalshiData.cities || []).find(c => c.name === b.city);
         if (!cityKalshi) { skipped.push({ ...briefBet(b), reason: "city-not-in-kalshi-data" }); continue; }
@@ -1067,7 +1101,7 @@ export default async () => {
         // where σ is small and a tiny shift in μ flips the bet — exactly the SATX
         // 2026-05-06 T68 NO failure pattern. Calibrated z_α=0.5 against the 49-bet
         // sample (+$112 net in backtest_gates.js Kelly-LCB A/B).
-        const lcb = kellyLcbAdjust(b);
+        const lcb = kellyLcbAdjust(b, cityInputAges[b.city]);
         if (lcb) {
           const fee = 0.07 * (1 - b.price);
           const evLCB = (lcb.pLCB - b.price) - fee;

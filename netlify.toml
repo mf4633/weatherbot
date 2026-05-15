@@ -114,3 +114,8 @@
   from = "/api/calibration_state"
   to = "/.netlify/functions/calibration_state"
   status = 200
+
+[[redirects]]
+  from = "/api/snapshots"
+  to = "/.netlify/functions/snapshots"
+  status = 200

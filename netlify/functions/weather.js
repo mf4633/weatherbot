@@ -66,6 +66,23 @@ const CITY_OFFSETS = Object.fromEntries(
   Object.entries(CITY_OFFSETS_RAW).map(([k, v]) => [k, v * OFFSET_SCALE])
 );
 
+// σ_revision (added 2026-05-15 after staleness audit on Chicago LOW T51 NO):
+// when the NWS grid forecast is hours stale, ensemble models agree because they
+// all carry the same upper-air analysis — σ_ensemble collapses and σ_post under-
+// estimates true uncertainty. Add σ_revision in quadrature so stale forecasts
+// widen σ_post organically. Initial α values are conservative pending empirical
+// calibration via analyze_sigma_revision.js (multi-snapshot capture in logger.js).
+// HIGH α larger because diurnal peaks are noisier than overnight troughs.
+const SIGMA_REVISION_ALPHA_HIGH = 0.4;   // °F per stale-hour
+const SIGMA_REVISION_ALPHA_LOW  = 0.3;   // °F per stale-hour
+const SIGMA_REVISION_AGE_FREE_HR = 1.0;  // first hour free (operational latency)
+function sigmaRevisionF(forecastAgeMin, variable) {
+  if (forecastAgeMin == null) return 0;
+  const ageHr = forecastAgeMin / 60;
+  const α = variable === "low" ? SIGMA_REVISION_ALPHA_LOW : SIGMA_REVISION_ALPHA_HIGH;
+  return α * Math.max(0, ageHr - SIGMA_REVISION_AGE_FREE_HR);
+}
+
 // LOW-temp per-city offsets — fit on 1y backtest with hrs-to-trough σ formula.
 // Held-out TEST RMSE 0.91°F. Subtract from prediction (positive = model warm-biased on low).
 // NOTE: 2026-05-11 May regime override for PHX and DFW. Settled LOW-bet audit
@@ -781,6 +798,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   const forecastHighF = ensemblePeak != null ? Math.round(ensemblePeak) : (forecast.dailyHigh ?? null);
   const forecastLowF = ensembleTrough != null ? Math.round(ensembleTrough) : null;
 
+  // NWS grid age — proxy for forecast staleness. Hoisted here so HIGH and LOW
+  // priorStd branches can add σ_revision (see sigmaRevisionF at top of file).
+  // The dataAgeMin computation downstream still uses this same value.
+  const forecastAgeMin = forecast?.updateTime
+    ? Math.round((Date.now() - new Date(forecast.updateTime).getTime()) / 60000)
+    : null;
+
   // Bias correction uses ensembleAt (or ensemble-of-NWS-only if no Open-Meteo response).
   let biasF = null;
   if (currentTemp != null && ensembleAt != null) {
@@ -931,9 +955,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // is small (~0.2-0.7°F², σ contribution 0.4-0.8°F); during regime changes P
     // expands. This replaces the Change #1 heuristic σ floor at |biasF| for the
     // cross-day component while keeping that floor for the intraday signal.
+    // σ_revision: forecast-staleness uncertainty. Only the bias-corrected branch
+    // gets this — peak-realized has the extremum observed, no revision risk left.
+    const sigmaRevHigh = sigmaRevisionF(forecastAgeMin, "high");
     let priorStd = Math.sqrt(sigmaEnsembleEffective * sigmaEnsembleEffective
                               + SIGMA_RESOLUTION_F * SIGMA_RESOLUTION_F
-                              + kalmanBiasSigma2);
+                              + kalmanBiasSigma2
+                              + sigmaRevHigh * sigmaRevHigh);
     if (obsDisagreementFired) {
       // σ floor: |biasF| as the magnitude of forecast error already realized.
       // Capped at 3°F to avoid pathologically wide CIs when bias is extreme.
@@ -1080,9 +1108,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // σ_frontal applied below as fallback after cold-front check, not here — avoids
     // double-inflating when cold-front branch already widens σ to 1.5°F floor.
     // Kalman P_low + σ_walk² added in quadrature (cross-day bias uncertainty).
+    // σ_revision: forecast-staleness uncertainty (same shape as HIGH; α_LOW < α_HIGH).
+    const sigmaRevLow = sigmaRevisionF(forecastAgeMin, "low");
     const priorLowStd = Math.sqrt(sigmaEnsembleLowEffective * sigmaEnsembleLowEffective
                                  + SIGMA_LOW_RESOLUTION_F * SIGMA_LOW_RESOLUTION_F
-                                 + kalmanLowBiasSigma2);
+                                 + kalmanLowBiasSigma2
+                                 + sigmaRevLow * sigmaRevLow);
     // Daily MIN object: E[min(X, minSoFar)], symmetric to HIGH expectedMaxNormal.
     // Replaces truncNormalMeanUpper (= E[X | X ≤ minSoFar]) which undershoots
     // when priorLowMean is above minSoFar. The trough-realized branch above
@@ -1169,9 +1200,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // the prediction is current even if NWS hasn't reissued the grid forecast
   // (Seattle/Denver/LA grid often goes 4-6h between issuances).
   // Trader (jackson_trader.js:43 PER_CITY_FRESHNESS_MAX_MIN) gates on this.
-  const forecastAgeMin = forecast?.updateTime
-    ? Math.round((Date.now() - new Date(forecast.updateTime).getTime()) / 60000)
-    : null;
+  // forecastAgeMin already computed above (hoisted for σ_revision wiring).
   const ensembleHealthy = sources.length >= 3;
   const metarFreshEnough = lastMetarAgeMin != null && lastMetarAgeMin < 90;
   let dataAgeMin;
@@ -1274,6 +1303,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowCi68: lowCi68 ? [round(lowCi68[0]), round(lowCi68[1])] : null,
     lowCi95: lowCi95 ? [round(lowCi95[0]), round(lowCi95[1])] : null,
     forecastUpdateTime: forecast?.updateTime || null,
+    forecastAgeMin,
     dataAgeMin,
     ensembleSources: sources.map(s => ({
       model: s.model, peak: Math.round(s.peak * 10) / 10,

@@ -186,6 +186,7 @@ const TEMP_GATES = {
   MIN_HALF_KELLY: 0.15,
   MIN_PRICE: 0.10,
   MIN_VOLUME: 20,
+  P_WIN_CAP: 0.95,                  // 2026-05-15 Bayesian humility cap
   LOW_PAUSED:  new Set(["San Antonio", "Phoenix"]),
   HIGH_PAUSED: new Set(),
   // city|variable → halfKelly multiplier. Mirror of SOFT_REOPEN_DERATE in
@@ -222,6 +223,7 @@ const REASON_LABEL = {
   "kelly-lcb-shrink":           "Kelly-LCB shrink rejected EV",
   "no-strike-margin-thin":      "NO-strike margin thin",
   "bucket-above-obs":           "B-bucket already past observed",
+  "pwin-cap-exceeded":          "pWin > 0.95 (humility cap)",
   "synoptic-coverage-degraded": "synoptic coverage degraded",
   "kalshi-rejected":            "Kalshi rejected order",
   "no-spare-capacity":          "no spare slots (cap 30)",
