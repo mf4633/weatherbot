@@ -26,6 +26,9 @@
 [functions."calibration_update"]
   schedule = "*/30 * * * *"
 
+[functions."pwin_calibration_fit"]
+  schedule = "*/30 * * * *"
+
 [[edge_functions]]
   path = "/*"
   function = "auth"
@@ -118,4 +121,9 @@
 [[redirects]]
   from = "/api/snapshots"
   to = "/.netlify/functions/snapshots"
+  status = 200
+
+[[redirects]]
+  from = "/api/pwin_calibration"
+  to = "/.netlify/functions/pwin_calibration"
   status = 200
