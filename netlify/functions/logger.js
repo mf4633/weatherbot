@@ -283,8 +283,20 @@ function fitVariableAlpha(snaps, predKey) {
 }
 async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
   const cutoffUTC = now - SIGMA_REVISION_FIT_LOOKBACK_DAYS * 86_400_000;
+  const cutoffDate = new Date(cutoffUTC).toISOString().slice(0, 10);  // "YYYY-MM-DD"
   const { blobs } = await snapshotsStore.list();
-  const recentKeys = (blobs || []).map(b => b.key);
+  // Key shape: "<cli>/<YYYY-MM-DD>/<HHMM>" (see runSnapshot line 149). Filter on the
+  // date segment of the key BEFORE issuing GETs, so refit cost stays bounded as the
+  // snapshot store grows. Was N GETs for N total snapshots (~1500+ today, ~9000 at
+  // 30d × 14 cities × 48 slots) → now N GETs only for the lookback window.
+  // The capturedAtUTC filter on the records below is kept as a precise second pass
+  // (covers TZ-vs-UTC date-edge cases where the local-date key sits across a UTC day).
+  const recentKeys = (blobs || [])
+    .map(b => b.key)
+    .filter(k => {
+      const parts = k.split("/");
+      return parts.length === 3 && parts[1] >= cutoffDate;
+    });
   const records = (await Promise.all(
     recentKeys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))
   )).filter(r => r && r.capturedAtUTC && new Date(r.capturedAtUTC).getTime() >= cutoffUTC);
