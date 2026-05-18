@@ -306,6 +306,14 @@ function bucketBoundaryMargin(b, weatherCity) {
 // Hot-tail HIGH: boundary = lo - 0.5 (continuous CLI bound).
 //   YES wins iff high ≥ lo → P(YES) = 1 − Φ((boundary - m) / σ_cooling)
 //   NO  wins iff high <  lo → P(NO)  = Φ((boundary - m) / σ_cooling)
+// Hot-tail LOW (added 2026-05-18 after KXLOWTDAL-26MAY18-T77 NO lost $0.76 — minSoFar
+// 78.1°F locked at 04:53 CDT, bet placed at 07:58 CDT with raw μ=76.5 letting it past
+// noStrikeMargin's 1.0°F threshold). boundary = lo - 0.5.
+//   YES wins iff low ≥ lo (continuous low ≥ boundary) → P(YES) = 1 − Φ((boundary - m)/σ)
+//   NO  wins iff low <  lo → P(NO) = Φ((boundary - m)/σ)
+// Cold-tail HIGH (added same): boundary = hi + 0.5.
+//   YES wins iff high < boundary → P(YES) = Φ((boundary - m)/σ)
+//   NO  wins iff high ≥ boundary → P(NO) = 1 − Φ((boundary - m)/σ)
 function normCdf01(z) {
   // Abramowitz–Stegun 7.1.26 approximation; max error ~1.5e-7.
   const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
@@ -338,6 +346,25 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
     const pYes = 1 - pYesLose;
     return { pWin: side === "yes" ? pYes : (1 - pYes),
              obs: maxObs, boundary, kind: "hot-tail-high" };
+  }
+  // Hot-tail LOW (low ≥ N markets, e.g. T77 = "≥ 78°F"). Boundary = lo - 0.5.
+  if (b.variable === "low" && minObs != null
+      && hi == null && Number.isFinite(lo)) {
+    const boundary = lo - 0.5;
+    const z = (boundary - minObs) / sigmaCooling;
+    const pYesLose = normCdf01(z);  // P(low < boundary) = P(YES loses)
+    const pYes = 1 - pYesLose;
+    return { pWin: side === "yes" ? pYes : (1 - pYes),
+             obs: minObs, boundary, kind: "hot-tail-low" };
+  }
+  // Cold-tail HIGH (high ≤ N markets). Boundary = hi + 0.5.
+  if (b.variable === "high" && maxObs != null
+      && lo == null && Number.isFinite(hi)) {
+    const boundary = hi + 0.5;
+    const z = (boundary - maxObs) / sigmaCooling;
+    const pYes = normCdf01(z);  // P(high < boundary) = P(YES wins)
+    return { pWin: side === "yes" ? pYes : (1 - pYes),
+             obs: maxObs, boundary, kind: "cold-tail-high" };
   }
   return null;
 }
@@ -758,6 +785,35 @@ export default async () => {
         await settledStore.setJSON(`${entry.betId}.json`, settledRecord)
           .catch(err => errors.push({ where: "settled-write", betId: entry.betId, err: String(err) }));
         await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+
+        // Over-sell self-heal (added 2026-05-18 after KXHIGHDEN-26MAY18-T50 over-sold
+        // by 8 contracts due to eventual-consistency lag, auto-flipping into long YES
+        // that the sell loop's botPlacedKeys safety check then orphaned). If the bet
+        // settled as SOLD but Kalshi still holds a position on the OPPOSITE side, that
+        // residual is the bot's own auto-flip — write a synthetic ledger entry so the
+        // next cycle's sell loop can close it normally.
+        if (outcome === "SOLD") {
+          const flippedSide = sideLower === "no" ? "YES" : "NO";
+          const flipped = positions.find(p => p.ticker === entry.ticker
+            && ((flippedSide === "YES" && p.qty > 0) || (flippedSide === "NO" && p.qty < 0)));
+          if (flipped) {
+            const contracts = Math.abs(flipped.qty);
+            const avgEntry = contracts > 0 ? flipped.exposure / contracts : 0;
+            const syntheticBetId = `${entry.ticker}-${flippedSide}-flipped-${Date.now()}`;
+            const syntheticEntry = {
+              betId: syntheticBetId, ticker: entry.ticker, side: flippedSide, contracts,
+              price: avgEntry, stake_dollars: flipped.exposure,
+              city: entry.city, variable: entry.variable, bucket: entry.bucket,
+              placedAtUTC: new Date().toISOString(),
+              kalshiOrderId: null,
+              flippedFromBetId: entry.betId,
+            };
+            await ledgerStore.setJSON(`${syntheticBetId}.json`, syntheticEntry)
+              .catch(err => errors.push({ where: "synthetic-ledger-write",
+                                          betId: syntheticBetId, err: String(err) }));
+            liveLedger.push(syntheticEntry);  // make available to THIS cycle's sell loop
+          }
+        }
       }
     }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
@@ -811,6 +867,13 @@ export default async () => {
         const ticker = p.ticker;
         const side = p.qty > 0 ? "YES" : "NO";
         if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
+        // Eventual-consistency guard (added 2026-05-18 after KXHIGHDEN-26MAY18-T50 auto-flip).
+        // The cooldown stamp set at line 904 after a successful sell was previously only
+        // checked by the buy loop. Without a sell-side check, when Kalshi's positions
+        // endpoint lagged the fill (~2 min), the next cycle re-issued the sell and
+        // over-sold the position, auto-flipping it to the opposite side and orphaning
+        // it from the ledger.
+        if (cooldownMap[botKey(ticker, side)]) continue;
         // Find this market in our Kalshi snapshot to get current bid + model probability.
         let bucket = null, citySide = null, soldVariable = null;
         for (const c of kalshiData.cities) {
