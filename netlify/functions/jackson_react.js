@@ -118,7 +118,22 @@ export default async () => {
         if (p.qty === 0) continue;
         const ticker = p.ticker;
         const side = p.qty > 0 ? "YES" : "NO";
-        if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
+        // Orphan auto-heal — see jackson_trader.js for rationale. Mirror.
+        if (!botPlacedKeys.has(botKey(ticker, side))) {
+          const contracts = Math.abs(p.qty);
+          const avgEntry = contracts > 0 ? p.exposure / contracts : 0;
+          const syntheticBetId = `${ticker}-${side}-orphan-${Date.now()}`;
+          await ledgerStore.setJSON(`${syntheticBetId}.json`, {
+            betId: syntheticBetId, ticker, side, contracts,
+            price: avgEntry, stake_dollars: p.exposure,
+            city: null, variable: null, bucket: null,
+            placedAtUTC: new Date().toISOString(),
+            kalshiOrderId: null,
+            orphanHealed: true,
+          }).catch(err => errors.push({ where: "orphan-heal-ledger-write",
+                                       betId: syntheticBetId, err: String(err) }));
+          botPlacedKeys.add(botKey(ticker, side));
+        }
         // Eventual-consistency guard — see jackson_trader.js line 870 for rationale.
         // react.js runs every ~30s; without this, Kalshi positions endpoint lag almost
         // always triggers a same-ticker re-sell within the lag window, auto-flipping

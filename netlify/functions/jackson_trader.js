@@ -866,7 +866,29 @@ export default async () => {
         if (p.qty === 0) continue;
         const ticker = p.ticker;
         const side = p.qty > 0 ? "YES" : "NO";
-        if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
+        // Orphan auto-heal (replaces the old "skip user-placed" safety check).
+        // Memory: project_kalshi_account_state.md — account is 100% bot-driven since
+        // 2026-05-13. Any Kalshi position with no matching ledger entry is a bot-caused
+        // state-sync bug (over-sell auto-flip residual, deleted-then-reappearing entry,
+        // or pre-2026-05-13 leftover that never settled). Write a synthetic ledger entry
+        // inline so the sell loop proceeds; future cycles reconcile it normally.
+        if (!botPlacedKeys.has(botKey(ticker, side))) {
+          const contracts = Math.abs(p.qty);
+          const avgEntry = contracts > 0 ? p.exposure / contracts : 0;
+          const syntheticBetId = `${ticker}-${side}-orphan-${Date.now()}`;
+          const syntheticEntry = {
+            betId: syntheticBetId, ticker, side, contracts,
+            price: avgEntry, stake_dollars: p.exposure,
+            city: null, variable: null, bucket: null,  // discovered fresh from kalshiData below
+            placedAtUTC: new Date().toISOString(),
+            kalshiOrderId: null,
+            orphanHealed: true,
+          };
+          await ledgerStore.setJSON(`${syntheticBetId}.json`, syntheticEntry)
+            .catch(err => errors.push({ where: "orphan-heal-ledger-write",
+                                        betId: syntheticBetId, err: String(err) }));
+          botPlacedKeys.add(botKey(ticker, side));
+        }
         // Eventual-consistency guard (added 2026-05-18 after KXHIGHDEN-26MAY18-T50 auto-flip).
         // The cooldown stamp set at line 904 after a successful sell was previously only
         // checked by the buy loop. Without a sell-side check, when Kalshi's positions

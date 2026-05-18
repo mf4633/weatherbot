@@ -378,7 +378,26 @@ export default async () => {
       if (p.qty === 0) continue;
       const ticker = p.ticker;
       const side = p.qty > 0 ? "YES" : "NO";
-      if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip non-rain / user-placed
+      // Orphan auto-heal — see jackson_trader.js for rationale. Rain-specific: only heal
+      // when the ticker is in the rain snapshot (filters out temp-trader positions that
+      // sit on the same Kalshi account but aren't rain markets).
+      if (!botPlacedKeys.has(botKey(ticker, side))) {
+        if (!snapshot[ticker]) continue;  // not a rain market — skip
+        const contracts = Math.abs(p.qty);
+        const avgEntry = contracts > 0 ? p.exposure / contracts : 0;
+        const syntheticBetId = `${ticker}-${side}-orphan-${Date.now()}`;
+        await ledgerStore.setJSON(`${syntheticBetId}.json`, {
+          betId: syntheticBetId, ticker, side, contracts,
+          price: avgEntry, stake_dollars: p.exposure,
+          city: null, kind: null, bucket: null, threshold: null, eventTicker: null,
+          holdingDaysAtPlace: 0, settlementUTC: null,
+          placedAtUTC: new Date().toISOString(),
+          kalshiOrderId: null,
+          orphanHealed: true,
+        }).catch(err => errors.push({ where: "orphan-heal-ledger-write",
+                                     betId: syntheticBetId, err: String(err) }));
+        botPlacedKeys.add(botKey(ticker, side));
+      }
       // Eventual-consistency guard — see jackson_trader.js for rationale. Without this,
       // a recently-sold position can be re-sold before Kalshi reflects the fill, causing
       // an auto-flip into the opposite side.
