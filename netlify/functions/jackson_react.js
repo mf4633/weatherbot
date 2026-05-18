@@ -119,6 +119,11 @@ export default async () => {
         const ticker = p.ticker;
         const side = p.qty > 0 ? "YES" : "NO";
         if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip user-placed
+        // Eventual-consistency guard — see jackson_trader.js line 870 for rationale.
+        // react.js runs every ~30s; without this, Kalshi positions endpoint lag almost
+        // always triggers a same-ticker re-sell within the lag window, auto-flipping
+        // the position. Mirror of jackson_trader.js cooldown read.
+        if (cooldownMap[botKey(ticker, side)]) continue;
 
         // Locate this market in our snapshot.
         let bucket = null, citySide = null, soldVariable = null;

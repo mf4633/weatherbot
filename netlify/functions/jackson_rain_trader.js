@@ -311,6 +311,36 @@ export default async () => {
         await settledStore.setJSON(`${entry.betId}.json`, settledRecord)
           .catch(err => errors.push({ where: "settled-write", betId: entry.betId, err: String(err) }));
         await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+
+        // Over-sell self-heal — mirror of jackson_trader.js. If reconcile detects this
+        // bet as SOLD but Kalshi still holds a position on the opposite side, that
+        // residual is the bot's own auto-flip from a double-sell. Write a synthetic
+        // ledger entry so the next cycle's sell loop can close the orphan.
+        if (outcome === "SOLD") {
+          const flippedSide = sideLower === "no" ? "YES" : "NO";
+          const flipped = positions.find(p => p.ticker === entry.ticker
+            && ((flippedSide === "YES" && p.qty > 0) || (flippedSide === "NO" && p.qty < 0)));
+          if (flipped) {
+            const contracts = Math.abs(flipped.qty);
+            const avgEntry = contracts > 0 ? flipped.exposure / contracts : 0;
+            const syntheticBetId = `${entry.ticker}-${flippedSide}-flipped-${Date.now()}`;
+            const syntheticEntry = {
+              betId: syntheticBetId, ticker: entry.ticker, side: flippedSide, contracts,
+              price: avgEntry, stake_dollars: flipped.exposure,
+              city: entry.city, kind: entry.kind, bucket: entry.bucket, threshold: entry.threshold,
+              eventTicker: entry.eventTicker || null,
+              holdingDaysAtPlace: entry.holdingDaysAtPlace || 0,
+              settlementUTC: entry.settlementUTC || null,
+              placedAtUTC: new Date().toISOString(),
+              kalshiOrderId: null,
+              flippedFromBetId: entry.betId,
+            };
+            await ledgerStore.setJSON(`${syntheticBetId}.json`, syntheticEntry)
+              .catch(err => errors.push({ where: "synthetic-ledger-write",
+                                          betId: syntheticBetId, err: String(err) }));
+            liveLedger.push(syntheticEntry);
+          }
+        }
       }
     }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
@@ -349,6 +379,10 @@ export default async () => {
       const ticker = p.ticker;
       const side = p.qty > 0 ? "YES" : "NO";
       if (!botPlacedKeys.has(botKey(ticker, side))) continue;  // SAFETY: skip non-rain / user-placed
+      // Eventual-consistency guard — see jackson_trader.js for rationale. Without this,
+      // a recently-sold position can be re-sold before Kalshi reflects the fill, causing
+      // an auto-flip into the opposite side.
+      if (cooldownMap[botKey(ticker, side)]) continue;
       const m = snapshot[ticker];
       const isYes = side === "YES";
       const contracts = Math.abs(p.qty);
