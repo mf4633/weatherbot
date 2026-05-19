@@ -371,6 +371,83 @@ function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
 const SIGMA_COOLING_F = 0.7;     // residual extremum noise given running min/max
 const PI_TAIL_SKIP    = 0.10;    // skip when posterior P(win) < this
 
+// σ_climb (2026-05-19) — additional uncertainty on final daily extremum when the
+// day hasn't peaked yet. Anchored on n=406 settled prediction_snapshots: residual
+// std of (actualHigh − predHigh) grows from 0.77°F post-peak to 1.84°F at 8+hr
+// pre-peak. The model's std already absorbs ensemble spread + σ_resolution +
+// kalman + σ_revision, but those don't capture "the temperature still has to
+// climb." Adds in quadrature: σ_eff_climb = √(modelStd² + σ_climb(hrs)²). The
+// gate downstream recomputes pWin/EV/halfKelly under σ_eff_climb and skips if
+// the bet falls below trader minimums.
+//
+// Empirical bins (std of actualHigh − predHigh):
+//   hrsToPeak [0, 0.5):  0.77   → 0 (post-peak; σ_cooling regime handles this)
+//   hrsToPeak [1, 2):    1.41   → σ_climb ≈ √(1.41² − 0.75²) = 1.19
+//   hrsToPeak [2, 4):    1.48   → σ_climb ≈ √(1.48² − 0.75²) = 1.27
+//   hrsToPeak [4, 8):    1.70   → σ_climb ≈ √(1.70² − 0.75²) = 1.53
+//   hrsToPeak [8, 24):   1.84   → σ_climb ≈ √(1.84² − 0.75²) = 1.68
+//
+// 2026-05-19 calibration target: Houston T87 YES cluster (5 buy/sell cycles).
+// At hrsToPeak=2, modelStd≈1.5, σ_climb=1.2 → σ_eff=1.92, pWin drops from
+// 0.577 → ~0.40, ev drops from 0.21 → ~0.03, hits MIN_EDGE_HIGH=0.17 floor.
+function sigmaClimbF(hrs) {
+  if (hrs == null || hrs <= 0.5) return 0;
+  if (hrs < 2)  return 1.2;
+  if (hrs < 4)  return 1.3;
+  if (hrs < 8)  return 1.5;
+  return 1.7;
+}
+// μ_climb (2026-05-19) — empirical mean of (actualHigh − predHigh) by hrsToPeak
+// across n=406 settled prediction_snapshots. The model is systematically COOL
+// pre-peak (predicts lower than actuals) and the bias grows with horizon. σ_climb
+// alone is insufficient to reject Houston-style cool-bias trades because widening
+// σ pulls pWin toward 0.5 — which can *increase* pWin when μ is already near the
+// bucket boundary. Adding μ_climb shifts the center upward and tightens the gate.
+//
+// Empirical means (actualHigh − predHigh):
+//   hrsToPeak [0, 1):  -0.13  → 0 (post-peak, no shift)
+//   hrsToPeak [1, 2):   0.00  → 0
+//   hrsToPeak [2, 4):  +0.32  → 0.3
+//   hrsToPeak [4, 8):  +0.44  → 0.4
+//   hrsToPeak [8, 24): +0.79  → 0.8
+//
+// HIGH-only. LOW-side residual mean by hrsToTrough not yet computed — leave 0
+// for now to avoid spurious adjustments on the cooler-than-forecast direction.
+function muClimbF(hrs, variable) {
+  if (variable !== "high") return 0;
+  if (hrs == null || hrs <= 1) return 0;
+  if (hrs < 2)  return 0.0;
+  if (hrs < 4)  return 0.3;
+  if (hrs < 8)  return 0.4;
+  return 0.8;
+}
+
+// Tail-obs-pyramid (2026-05-19) — inversion of AUTO_CLOSE_AT_PRICE. When a bot
+// position is post-peak/trough AND observed extremum is comfortably past the
+// bucket boundary in our favor AND market still offers our side at a discount,
+// ADD contracts. Captures slow-market mispricing on near-certain outcomes.
+// Bypasses already-held / city-var-cooldown / event-side-stack-cap (those are
+// designed to prevent loss pyramids, not block winning-side obs-arbs). Strict
+// per-event caps keep risk bounded even on $10 bankroll.
+//
+// Trigger conditions (all must hold):
+//   1. Position is bot-placed and held this cycle
+//   2. Not in cycleSellTickerKeys (we didn't just sell it this cycle)
+//   3. hrsToPeak ≤ 0.5 (HIGH) or hrsToTrough ≤ 0.5 (LOW)  — extremum realized
+//   4. tailBucketPosteriorP(obs-anchored, σ_cooling).pWin ≥ PYRAMID_PWIN_MIN
+//   5. Observed extremum past boundary by ≥ PYRAMID_MARGIN_F in our direction
+//   6. Market ask on our side ≤ PYRAMID_MAX_PRICE
+//   7. Cash available ≥ STAKE_FLOOR
+//
+// Sizing: contracts = min(PYRAMID_MAX_CONTRACTS, floor(budget/price)) where
+// budget = min(PYRAMID_MAX_DOLLARS, remaining cash). On a 95% bet at 38¢ this
+// adds 5 contracts × 38¢ = $1.90, EV ≈ +$0.95.
+const PYRAMID_PWIN_MIN      = 0.90;
+const PYRAMID_MAX_PRICE     = 0.70;
+const PYRAMID_MARGIN_F      = 1.0;
+const PYRAMID_MAX_CONTRACTS = 5;
+const PYRAMID_MAX_DOLLARS   = 2.0;
+
 // LOW-NO-near-strike gate (2026-05-11). T-tail NO bets in southern cities lost
 // 8 of last 10 at strikes within 1°F of model μ — pattern: μ=70.9 σ=1.8, strike
 // at 71, NO wins if min ≤ 70 (boundary 70.5); margin = 70.5 − 70.9 = −0.4°F.
@@ -680,6 +757,9 @@ export default async () => {
       realizedPnl: parseFloat(p.realized_pnl_dollars || "0")
     }));
     const allOpenCount = positions.filter(p => p.qty !== 0).length;
+    // Shared across pyramid loop (2b) and buy loop (3). Each placement adds its
+    // dollar cost; cash-floor checks read `cashDollars - committed`.
+    let committed = 0;
 
     // Bot ledger: entries we placed. Sell-loser logic ONLY iterates these.
     // User's pre-existing positions are off-limits.
@@ -973,6 +1053,134 @@ export default async () => {
       }
     }
 
+    // 2b. Tail-obs-pyramid (2026-05-19). Mirror of AUTO_CLOSE_AT_PRICE: when a
+    // position is post-extremum AND obs is past the bucket boundary in our favor
+    // AND market still offers our side cheap, ADD contracts. Captures slow-market
+    // mispricing on near-certain outcomes. See PYRAMID_* constants header for
+    // trigger conditions and sizing. Bypasses cooldowns and already-held checks
+    // (those guard against loss pyramids, not winning obs-arbs).
+    const pyramids = [];
+    let pyramidCommitted = 0;
+    const cycleSellKeys = new Set();
+    for (const s of sales) cycleSellKeys.add(botKey(s.ticker, s.side));
+    if (kalshiData?.cities) {
+      for (const p of positions) {
+        if (p.qty === 0) continue;
+        if (cashDollars - committed - pyramidCommitted < STAKE_FLOOR) break;
+        const ticker = p.ticker;
+        const side = p.qty > 0 ? "YES" : "NO";
+        // Bot-placed only (orphan-heal would have written a ledger entry already).
+        if (!botPlacedKeys.has(botKey(ticker, side))) continue;
+        // Don't pyramid what we just sold this cycle — Kalshi eventual-consistency
+        // could re-open the same flip the sell loop was trying to close.
+        if (cycleSellKeys.has(botKey(ticker, side))) continue;
+
+        // Find the bucket in kalshi snapshot for current ask + numeric bounds.
+        let bucket = null, citySide = null, variable = null;
+        for (const c of kalshiData.cities) {
+          for (const [v, buckets] of [["high", c.highBuckets], ["low", c.lowBuckets]]) {
+            if (!buckets) continue;
+            const found = buckets.find(b => b.ticker === ticker);
+            if (found) { bucket = found; citySide = c; variable = v; break; }
+          }
+          if (bucket) break;
+        }
+        if (!bucket || !citySide) continue;
+
+        const cityWeather = (weatherData.cities || []).find(c => c.name === citySide.name);
+        if (!cityWeather) continue;
+
+        // Post-extremum only — pre-peak/trough the model is the better anchor.
+        const hrs = variable === "high" ? cityWeather.hrsToPeak : cityWeather.hrsToTrough;
+        if (hrs == null || hrs > 0.5) continue;
+
+        // Obs-anchored posterior P(win) via σ_cooling. Handles T-tail buckets
+        // (via tailBucketPosteriorP) and B-buckets (inline below). For B-buckets,
+        // P(YES) = Φ((hi+0.5 − obs)/σ) − Φ((lo−0.5 − obs)/σ), and the relevant
+        // margin = obs − nearer-bucket-edge in the NO-winning direction.
+        const lo = bucket.loInt, hi = bucket.hiInt;
+        const obs = variable === "high" ? cliMaxObs(cityWeather) : cliMinObs(cityWeather);
+        if (obs == null) continue;
+        let pWinObs, marginF, kind;
+        if (Number.isFinite(lo) && Number.isFinite(hi)) {
+          // B-bucket [lo, hi]
+          const pYes = normCdf01((hi + 0.5 - obs) / SIGMA_COOLING_F)
+                     - normCdf01((lo - 0.5 - obs) / SIGMA_COOLING_F);
+          pWinObs = side === "YES" ? pYes : (1 - pYes);
+          // NO-winning direction: obs above hi+0.5 OR below lo-0.5 (whichever it's near).
+          // YES-winning direction: obs near the bucket center.
+          if (side === "NO") {
+            marginF = Math.max(obs - (hi + 0.5), (lo - 0.5) - obs);
+          } else {
+            // YES: margin = how far obs is from the nearer outside edge — we want
+            // obs comfortably INSIDE the bucket. Negative if outside.
+            marginF = Math.min(obs - (lo - 0.5), (hi + 0.5) - obs);
+          }
+          kind = "b-bucket";
+        } else {
+          const postP = tailBucketPosteriorP(
+            { ...bucket, variable, side: side.toLowerCase() },
+            cityWeather, SIGMA_COOLING_F);
+          if (!postP) continue;
+          pWinObs = postP.pWin;
+          if (postP.kind === "cold-tail-high")      marginF = postP.boundary - postP.obs;
+          else if (postP.kind === "hot-tail-high")  marginF = postP.obs - postP.boundary;
+          else if (postP.kind === "cold-tail-low")  marginF = postP.boundary - postP.obs;
+          else if (postP.kind === "hot-tail-low")   marginF = postP.obs - postP.boundary;
+          else continue;
+          if (side === "NO") marginF = -marginF;
+          kind = postP.kind;
+        }
+        if (pWinObs < PYRAMID_PWIN_MIN) continue;
+        if (marginF < PYRAMID_MARGIN_F) continue;
+
+        // Our-side ask (cost to buy more). yes_ask for YES side, no_ask for NO.
+        const ourAsk = side === "YES" ? bucket.yes_ask : bucket.no_ask;
+        if (ourAsk == null || ourAsk <= 0.01 || ourAsk > PYRAMID_MAX_PRICE) continue;
+
+        const budget = Math.min(PYRAMID_MAX_DOLLARS, cashDollars - committed - pyramidCommitted);
+        if (budget < STAKE_FLOOR) continue;
+        const contractsToAdd = Math.min(PYRAMID_MAX_CONTRACTS, Math.floor(budget / ourAsk));
+        if (contractsToAdd < 1) continue;
+
+        const askCents = Math.max(1, Math.min(99, Math.round(ourAsk * 100)));
+        const res = isDryRun
+          ? { ok: true, body: { dryRun: true, order: { client_order_id: `dryrun-pyramid-${Date.now()}` } } }
+          : await placeBuyOrder(ticker, side, contractsToAdd, askCents);
+
+        pyramids.push({
+          ticker, side, count: contractsToAdd, priceCents: askCents,
+          city: citySide.name, variable, kind,
+          pWinPosterior: Math.round(pWinObs * 1000) / 1000,
+          marginF: Math.round(marginF * 100) / 100,
+          hrsToExtremum: hrs,
+          stake_dollars: Math.round(contractsToAdd * ourAsk * 100) / 100,
+          ok: res.ok, dryRun: isDryRun,
+        });
+
+        if (res.ok) {
+          pyramidCommitted += contractsToAdd * ourAsk;
+          if (!isDryRun) {
+            const betId = res.body?.order?.client_order_id
+                       || `${ticker}-${side}-pyramid-${Date.now()}`;
+            await ledgerStore.setJSON(`${betId}.json`, {
+              betId, ticker, side, contracts: contractsToAdd,
+              price: ourAsk, stake_dollars: contractsToAdd * ourAsk,
+              city: citySide.name, variable, bucket: bucket.label || null,
+              placedAtUTC: new Date().toISOString(),
+              kalshiOrderId: res.body?.order?.order_id || null,
+              pyramidAdd: true,
+            }).catch(err => errors.push({ where: "pyramid-ledger-write", err: String(err) }));
+          }
+        } else {
+          errors.push({ where: "pyramid-buy", ticker, response: res.body });
+        }
+      }
+      // Roll pyramidCommitted into committed so the buy loop sees the correct
+      // remaining cash floor.
+      committed += pyramidCommitted;
+    }
+
     // 3. Place new bets.
     // Enter the loop even when spareCapacity === 0 so qualifying candidates get
     // an explicit "out-of-cash" skip entry (line 962). Without this, the buy
@@ -1035,7 +1243,8 @@ export default async () => {
                                pWin: b.p_model != null ? Math.round(b.p_model*1000)/1000 : null,
                                price: b.price });
       let placed = 0;
-      let committed = 0;
+      // `committed` is declared outside the buy loop (see line ~736) so the
+      // pyramid loop (2b) can share the cash-budget accounting.
       // Track committed bets per event-ticker for tile-coverage checks across the run.
       const committedByEvent = {};
       // (city, variable) pairs that received a NEW buy this run. Cooldown set at the
@@ -1193,6 +1402,48 @@ export default async () => {
                          tailDebug: { ...postP, ticker: b.ticker, cityName: b.city } });
           continue;
         }
+        // σ_climb gate (2026-05-19): pre-peak, modelStd systematically understates
+        // final-extremum uncertainty (n=406 snapshots: σ_pre 1.65 vs σ_post 0.75).
+        // Inflate σ in quadrature, recompute pWin/EV/halfKelly, skip if below trader
+        // minimums. Calibrated to catch the Houston T87 YES 2026-05-19 cluster.
+        const hrsToExtremum = b.variable === "high" ? cityWeather?.hrsToPeak
+                            : b.variable === "low"  ? cityWeather?.hrsToTrough : null;
+        const sigmaClimb = sigmaClimbF(hrsToExtremum);
+        if (sigmaClimb > 0 && b.modelStd != null && b.modelMean != null
+            && (Number.isFinite(b.loInt) || Number.isFinite(b.hiInt))) {
+          const sigmaEffClimb = Math.sqrt(b.modelStd ** 2 + sigmaClimb ** 2);
+          const muClimb = muClimbF(hrsToExtremum, b.variable);
+          const muShifted = b.modelMean + muClimb;
+          let pYesClimb;
+          if (b.loInt === -Infinity || b.loInt == null) {
+            // Cold tail (high ≤ N or low ≤ N): P(YES) = Φ((hi+0.5 − μ)/σ)
+            pYesClimb = normCdf01((b.hiInt + 0.5 - muShifted) / sigmaEffClimb);
+          } else if (b.hiInt === Infinity || b.hiInt == null) {
+            // Hot tail (high ≥ N or low ≥ N): P(YES) = 1 − Φ((lo−0.5 − μ)/σ)
+            pYesClimb = 1 - normCdf01((b.loInt - 0.5 - muShifted) / sigmaEffClimb);
+          } else {
+            // B-bucket [lo, hi]: continuity-corrected window.
+            pYesClimb = normCdf01((b.hiInt + 0.5 - muShifted) / sigmaEffClimb)
+                      - normCdf01((b.loInt - 0.5 - muShifted) / sigmaEffClimb);
+          }
+          const pWinClimb = b.side?.toLowerCase() === "yes" ? pYesClimb : (1 - pYesClimb);
+          const feeClimb = 0.07 * (1 - b.price);
+          const evClimb = (pWinClimb - b.price) - feeClimb;
+          const halfKellyClimb = b.price < 1
+            ? Math.max(0, (pWinClimb - b.price) / (1 - b.price)) / 2 : 0;
+          if (evClimb < minEdgeFor(b) || halfKellyClimb < MIN_HALF_KELLY) {
+            skipped.push({ ...briefBet(b), reason: "sigma-climb-thin",
+                           sigmaClimb: sigmaClimb.toFixed(2),
+                           muClimb: muClimb.toFixed(2),
+                           sigmaEffClimb: sigmaEffClimb.toFixed(2),
+                           muShifted: Math.round(muShifted * 100) / 100,
+                           pWinClimb: Math.round(pWinClimb * 1000) / 1000,
+                           evClimb: Math.round(evClimb * 1000) / 1000,
+                           halfKellyClimb: Math.round(halfKellyClimb * 1000) / 1000,
+                           hrsToExtremum: Math.round(hrsToExtremum * 100) / 100 });
+            continue;
+          }
+        }
         // Kelly-LCB gate (Bayes work order #5): re-check EV/halfKelly using the lower
         // confidence bound on pWin. Catches "model very confident at the strike" cases
         // where σ is small and a tiny shift in μ flips the bet — exactly the SATX
@@ -1346,7 +1597,7 @@ export default async () => {
       spareCapacity,
       stake_floor: STAKE_FLOOR,
       stake_ceil_dollars: stakeCeil,
-      sales, placements, skipped, errors
+      sales, placements, pyramids, skipped, errors
     };
 
     // Write per-cycle structured log to trader_logs blob. Filename = ISO timestamp.
@@ -1369,6 +1620,13 @@ export default async () => {
                                    pNow: s.pNow,
                                    avgEntry: s.avgEntry,
                                    ok: s.ok })),
+        pyramids: pyramids.map(p => ({
+          ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
+          city: p.city, variable: p.variable,
+          pWinPosterior: p.pWinPosterior, marginF: p.marginF,
+          hrsToExtremum: p.hrsToExtremum,
+          stake_dollars: p.stake_dollars, ok: p.ok
+        })),
         skipped: skipped.slice(0, 30),  // cap to avoid huge blobs
         errors: errors.slice(0, 10)
       });
