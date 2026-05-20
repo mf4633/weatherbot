@@ -1,0 +1,20 @@
+name: Combo balance snapshot cron
+
+on:
+  schedule:
+    - cron: "5 0 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit combo_balance_snapshot
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 60 -sS -u "$BASIC_AUTH" -X POST \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/combo_balance_snapshot" \
+            -o /tmp/snap.json -w "HTTP %{http_code}\n"
+          jq '{ok, dateUtc, accountValueDollars, entries}' /tmp/snap.json

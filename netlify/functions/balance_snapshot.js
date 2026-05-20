@@ -19,16 +19,18 @@ function todayUtcKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
-async function loadSettledStats() {
-  // Mirror jackson_audit's load — settled bets live in jackson_settled_bets.
-  const store = getStore("jackson_settled_bets");
+async function loadAllFromStore(storeName, source) {
+  const store = getStore(storeName);
   const { blobs } = await store.list().catch(() => ({ blobs: [] }));
   const entries = await Promise.all(
     blobs.map(b => store.get(b.key, { type: "json" }).catch(() => null))
   );
-  const settled = entries.filter(Boolean);
+  return entries.filter(Boolean).map(b => ({ ...b, _source: source }));
+}
+
+function aggregate(bets) {
   let wins = 0, losses = 0, pnl = 0, fees = 0, stake = 0;
-  for (const b of settled) {
+  for (const b of bets) {
     if (b.outcome === "WIN")  wins++;
     if (b.outcome === "LOSS") losses++;
     pnl   += b.realized_pnl ?? 0;
@@ -37,13 +39,32 @@ async function loadSettledStats() {
   }
   const decided = wins + losses;
   return {
-    settledBets: settled.length,
+    settledBets: bets.length,
     wins, losses,
     hitRate: decided ? wins / decided : 0,
     realizedPnl: Math.round(pnl   * 100) / 100,
     feesPaid:    Math.round(fees  * 100) / 100,
     stakeTotal:  Math.round(stake * 100) / 100,
     roi: stake > 0 ? Math.round((pnl / stake) * 1000) / 1000 : 0,
+  };
+}
+
+async function loadSettledStats() {
+  // Weather (jackson_trader) + rain (jackson_rain_trader) share one Kalshi account,
+  // so total-equity snapshot needs both. Stats include a per-source breakdown for
+  // attribution; bySource['weather'].realizedPnl + bySource['rain'].realizedPnl
+  // should reconcile to total.realizedPnl modulo rounding.
+  const [weather, rain] = await Promise.all([
+    loadAllFromStore("jackson_settled_bets",      "weather"),
+    loadAllFromStore("jackson_rain_settled_bets", "rain"),
+  ]);
+  const all = [...weather, ...rain];
+  return {
+    ...aggregate(all),
+    bySource: {
+      weather: aggregate(weather),
+      rain:    aggregate(rain),
+    },
   };
 }
 

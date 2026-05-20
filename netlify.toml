@@ -23,6 +23,9 @@
 [functions."balance_snapshot"]
   schedule = "0 0 * * *"
 
+[functions."combo_balance_snapshot"]
+  schedule = "0 0 * * *"
+
 [functions."calibration_update"]
   schedule = "*/30 * * * *"
 
