@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>weatherbot — CLI max-temp predictions, top 20 US cities</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/style.css">
 <style>
   #combo-banner { display:none; padding:8px 12px; margin:8px 0; background:linear-gradient(90deg,#fff7d6,#ffe98a); border:1px solid #d4a000; border-radius:6px; font-weight:600; color:#5a4400; }
@@ -23,7 +24,10 @@
 </head>
 <body>
 <header>
-  <h1>weatherbot</h1>
+  <div class="brand">
+    <img src="/favicon.svg" alt="" class="logo" width="48" height="48">
+    <h1>weatherbot</h1>
+  </div>
   <p class="sub">
     Statistical predictions of <strong>today's high temperature</strong> at the top 20 US cities,
     matched to each city's NWS <code>CLI&lt;station&gt;</code> climate-report station. Predictions update as
