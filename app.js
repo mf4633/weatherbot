@@ -254,12 +254,18 @@ async function loadTraderDecisions() {
 
   TEMP_DECISIONS = { map: {}, stamp: null, error: null };
   if (tempRes.status === "fulfilled") {
-    const cycle = pickLatestActiveCycle(tempRes.value.entries);
-    if (cycle) {
-      TEMP_DECISIONS.stamp = cycle.ranAtUTC;
+    const entries = (tempRes.value.entries || []);
+    const latest = entries[0];
+    if (latest) TEMP_DECISIONS.stamp = latest.ranAtUTC;
+    // Merge across the last N cycles so candidates that fell out of the topBets
+    // pool for one cycle (and are therefore absent from its placements/skipped
+    // arrays) still show their most-recent decision instead of "pending next
+    // cycle". Iterate OLDEST → newest so newer cycles overwrite older entries
+    // for the same key. Each entry stamps cycleAtUTC so the UI can age it.
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const cycle = entries[i];
+      const cycleAt = cycle.ranAtUTC;
       for (const p of (cycle.placements || [])) {
-        // Newer placements carry explicit city/variable/bucketCode. Older log entries
-        // (pre-2026-05-14) don't, so fall back to parsing the full Kalshi ticker.
         const code = p.bucketCode || (p.ticker || "").split("-").pop();
         const variable = p.variable
           || (/^KXLOW/i.test(p.ticker) ? "low"
@@ -271,10 +277,9 @@ async function loadTraderDecisions() {
           pWin: p.pWin, halfKelly: p.halfKelly, ev: p.ev,
           softReopen: p.softReopen ?? null,
           reason: p.ok ? null : "kalshi-rejected",
-          detail: p.ok ? null : "order not accepted"
+          detail: p.ok ? null : "order not accepted",
+          cycleAtUTC: cycleAt
         };
-        // Write a city-specific key when available AND a city-less wildcard for
-        // legacy entries. lookupTempDecision checks both.
         if (p.city) TEMP_DECISIONS.map[`${p.city}|${variable}|${code}|${side}`] = entry;
         TEMP_DECISIONS.map[`*|${variable}|${code}|${side}`] = entry;
       }
@@ -283,7 +288,8 @@ async function loadTraderDecisions() {
         TEMP_DECISIONS.map[key] = {
           status: s.reason === "kalshi-rejected" ? "rejected" : "skipped",
           reason: s.reason, detail: s,
-          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev
+          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev,
+          cycleAtUTC: cycleAt
         };
       }
     }
@@ -293,9 +299,12 @@ async function loadTraderDecisions() {
 
   RAIN_DECISIONS = { map: {}, stamp: null, error: null };
   if (rainRes.status === "fulfilled") {
-    const cycle = pickLatestActiveCycle(rainRes.value.entries);
-    if (cycle) {
-      RAIN_DECISIONS.stamp = cycle.ranAtUTC;
+    const entries = (rainRes.value.entries || []);
+    const latest = entries[0];
+    if (latest) RAIN_DECISIONS.stamp = latest.ranAtUTC;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const cycle = entries[i];
+      const cycleAt = cycle.ranAtUTC;
       for (const p of (cycle.placements || [])) {
         const key = `${p.ticker}|${(p.side || "").toUpperCase()}`;
         RAIN_DECISIONS.map[key] = {
@@ -303,7 +312,8 @@ async function loadTraderDecisions() {
           stake: p.stake_dollars, count: p.count, priceCents: p.priceCents,
           pWin: p.pWin, halfKelly: p.halfKelly, ev: p.ev,
           reason: p.ok ? null : "kalshi-rejected",
-          detail: p.ok ? null : "order not accepted"
+          detail: p.ok ? null : "order not accepted",
+          cycleAtUTC: cycleAt
         };
       }
       for (const s of (cycle.skipped || [])) {
@@ -311,7 +321,8 @@ async function loadTraderDecisions() {
         RAIN_DECISIONS.map[key] = {
           status: s.reason === "kalshi-rejected" ? "rejected" : "skipped",
           reason: s.reason, detail: s,
-          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev
+          pWin: s.pWin, halfKelly: s.halfKelly, ev: s.ev,
+          cycleAtUTC: cycleAt
         };
       }
     }
@@ -408,6 +419,15 @@ function classifyRainPreFilter(b) {
   return { status: "pending", reason: "qualified — awaiting next 30-min cycle" };
 }
 
+// Returns "(Xm ago)" tag when the matched cycle is older than the dashboard's
+// latest stamp by more than one cycle width. Empty string for fresh entries.
+function ageTagFromCycle(cycleAtUTC) {
+  if (!cycleAtUTC) return "";
+  const ageMin = Math.round((Date.now() - new Date(cycleAtUTC).getTime()) / 60000);
+  if (ageMin < 6) return "";  // within one normal cycle width — treat as current
+  return `(${ageMin}m ago)`;
+}
+
 // Compose the inline <span class="decision …"> cell. Decision = matched cycle log
 // entry if present, else local pre-filter classification.
 function renderDecisionCell(matched, preFilter) {
@@ -441,8 +461,13 @@ function renderDecisionCell(matched, preFilter) {
       if (d.eventTicker != null) detailParts.push(d.eventTicker);
       if (d.detail != null && typeof d.detail !== "object") detailParts.push(String(d.detail));
     }
-    const title = detailParts.length ? `${label} — ${detailParts.join(" · ")}` : label;
-    return `<span class="decision skipped" title="${escapeAttr(title)}">${label}</span>`;
+    // When the matched entry is from an older cycle (candidate dropped out of
+    // the latest cycle's pool), tag the cell with cycle age so the staleness
+    // is visible. Threshold: any cycle older than the latest stamp.
+    const ageTag = ageTagFromCycle(matched.cycleAtUTC);
+    const fullLabel = ageTag ? `${label} ${ageTag}` : label;
+    const title = detailParts.length ? `${fullLabel} — ${detailParts.join(" · ")}` : fullLabel;
+    return `<span class="decision skipped" title="${escapeAttr(title)}">${fullLabel}</span>`;
   }
   const text = preFilter.status === "below" ? preFilter.reason : "pending next cycle";
   const cls = preFilter.status === "below" ? "below" : "pending";
