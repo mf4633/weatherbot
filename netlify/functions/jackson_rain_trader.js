@@ -57,6 +57,19 @@ const STAKE_CEIL_FRAC = 0.05;
 // trivially cheap on this metric.
 const CAPITAL_DAYS_PER_BANKROLL = 30;
 
+// Equity threshold for allowing monthly-tier rain bets. Below this, only
+// daily-binary (1-day hold) is permitted. Above, monthly is unlocked and the
+// capital-days budget (above) becomes the binding constraint instead.
+//
+// 2026-05-14 (ce8d392) set this effectively to Infinity — monthly was hard-off
+// because the bot was drifting and 30d holds locked capital. 2026-05-20: with
+// 0 settled rain bets at the current cap and end-of-month near-arb tiers
+// (pWin >= 0.96) sitting in the candidate pool, the hard cutoff was costing
+// us positive-EV exposure. Lowered to $10 so today's $15.72 cash passes; the
+// cap-days budget still throttles concentration even when monthly is allowed.
+// Raise this back to $50 if monthly positions start dominating cap-days.
+const MIN_EQUITY_FOR_MONTHLY = 10;
+
 // Monthly rain tickers carry a 2-segment date (e.g. KXRAINNYCM-26MAY-3); daily
 // tickers carry a 3-segment date with day (e.g. KXRAINNYC-26MAY08). Used to
 // gate monthly bets out of the rain trader entirely (bankroll-protection mode).
@@ -437,12 +450,16 @@ export default async () => {
     }
 
     // 3. Place new bets from rainbot topBets, ranked by halfKelly desc.
-    // Bankroll-protection: same-day rain only. Monthly tiers have 5–30 day holds
-    // that lock capital while the bot is operating below sustainable equity.
+    // Bankroll-protection: monthly tiers gated by MIN_EQUITY_FOR_MONTHLY (above).
+    // When monthly is allowed, the capital-days budget still caps concentration —
+    // a $1 / 15-day hold costs 15 cap-days, so a $15.72 bankroll's 472-cap-day
+    // budget tolerates ~30 monthly positions before throttling kicks in.
+    const equityDollars = cashDollars + ((balance.portfolio_value ?? 0) / 100);
+    const allowMonthly = equityDollars >= MIN_EQUITY_FOR_MONTHLY;
     if (rainResp?.topBets && spareCapacity > 0) {
       const qualifying = rainResp.topBets
         .filter(b => Number.isFinite(b.ev_net) && Number.isFinite(b.halfKelly))
-        .filter(b => b.kind === "daily-binary")
+        .filter(b => allowMonthly || b.kind === "daily-binary")
         .filter(b => b.ev_net >= MIN_EDGE && b.halfKelly >= MIN_HALF_KELLY
                   && b.price >= MIN_PRICE
                   && (b.volume == null || b.volume >= MIN_VOLUME))
@@ -554,6 +571,9 @@ export default async () => {
       mode: isLive ? "LIVE" : "DRYRUN",
       ranAtUTC,
       cashDollars,
+      equityDollars,
+      allowMonthly,
+      minEquityForMonthly: MIN_EQUITY_FOR_MONTHLY,
       botOpenCount,
       spareCapacity,
       stake_floor: STAKE_FLOOR,
