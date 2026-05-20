@@ -2,11 +2,11 @@
 // rollups (peak equity, current drawdown, daily Δ, days running).
 
 import { getStore } from "@netlify/blobs";
-import { takeBalanceSnapshot } from "./balance_snapshot.js";
+import { takeBalanceSnapshot, backfillEquityHistory } from "./balance_snapshot.js";
 
 export default async (req) => {
-  // Manual seed entry point — Netlify scheduled functions can't have a custom
-  // HTTP path, so seeding before the first 00:00 UTC tick goes through here.
+  // Manual seed / backfill entry points — Netlify scheduled functions can't
+  // have a custom HTTP path, so admin operations go through here.
   if (req?.url) {
     try {
       const u = new URL(req.url);
@@ -15,8 +15,13 @@ export default async (req) => {
         return new Response(JSON.stringify({ ok: true, seeded: true, ...result }, null, 2),
           { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
       }
+      if (u.searchParams.get("backfill") === "1") {
+        const result = await backfillEquityHistory();
+        return new Response(JSON.stringify(result, null, 2),
+          { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+      }
     } catch (e) {
-      return new Response(JSON.stringify({ ok: false, seeded: true, error: String(e?.message || e) }),
+      return new Response(JSON.stringify({ ok: false, error: String(e?.message || e) }),
         { status: 500, headers: { "content-type": "application/json" } });
     }
   }
