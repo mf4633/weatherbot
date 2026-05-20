@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /.netlify/
+
+Sitemap: https://weatherbot-mf.netlify.app/sitemap.xml
