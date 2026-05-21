@@ -99,6 +99,15 @@ const AUTO_CLOSE_AT_PRICE = 0.99;
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
 const STAKE_CEIL_FRAC = 0.10;
+// Earn-back boost: below STAKE_BOOST_EQUITY_THRESHOLD equity, the per-bet ceiling
+// becomes min(STAKE_BOOST_FRAC * cash, STAKE_BOOST_DOLLAR_CAP) instead of the
+// normal STAKE_CEIL_FRAC * cash. At/above the threshold, normal sizing resumes
+// automatically. Set 2026-05-21 over the standing "don't raise stake during
+// drawdown" guidance — user override, intent is to escape the $1-floor fee-drag
+// trap that compounding alone can't escape from $13 in any reasonable window.
+const STAKE_BOOST_EQUITY_THRESHOLD = 200.0;
+const STAKE_BOOST_FRAC = 0.40;
+const STAKE_BOOST_DOLLAR_CAP = 5.0;
 // Hard-pause LOW bets where settled-bet evidence is decisive AND a passive
 // observable defines the unpause condition (not a bet count the pause itself
 // suppresses; see feedback_hard_pause_exit_criteria memory).
@@ -748,6 +757,16 @@ export default async () => {
 
     const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
     const cashDollars = cashCents / 100;
+    // Equity = free cash + portfolio_value (open positions). Mirrors rain trader's
+    // line-457 formula. Used to decide stake-boost regime: below the threshold,
+    // we treat the bot as "earn-back mode" and let per-bet size be the lesser of
+    // STAKE_BOOST_FRAC * cash and STAKE_BOOST_DOLLAR_CAP. At/above the threshold,
+    // revert to normal STAKE_CEIL_FRAC * cash sizing.
+    const equityDollars = cashDollars + ((balance.portfolio_value ?? 0) / 100);
+    const stakeBoosted = equityDollars < STAKE_BOOST_EQUITY_THRESHOLD;
+    const stakeCeilDollars = stakeBoosted
+      ? Math.min(STAKE_BOOST_FRAC * cashDollars, STAKE_BOOST_DOLLAR_CAP)
+      : STAKE_CEIL_FRAC * cashDollars;
     // Normalize Kalshi position fields. Real fields: position_fp (string of float;
     // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
     const positions = (positionsResp.market_positions || []).map(p => ({
@@ -1515,7 +1534,7 @@ export default async () => {
         const effectiveHalfKelly = b.halfKelly * coverageDeRate * softReopen;
         const remaining = cashDollars - committed;
         const stake_dollars = Math.max(STAKE_FLOOR,
-          Math.min(cashDollars * STAKE_CEIL_FRAC, effectiveHalfKelly * cashDollars, remaining));
+          Math.min(stakeCeilDollars, effectiveHalfKelly * cashDollars, remaining));
         if (stake_dollars < STAKE_FLOOR) break;
         const contracts = Math.max(1, Math.floor(stake_dollars / b.price));
         const priceCents = Math.max(1, Math.min(99, Math.round(b.price * 100)));
@@ -1588,11 +1607,13 @@ export default async () => {
       .catch(err => errors.push({ where: "cooldown-write", err: String(err) }));
 
     const ranAtUTC = new Date().toISOString();
-    const stakeCeil = Math.round(cashDollars * STAKE_CEIL_FRAC * 100) / 100;
+    const stakeCeil = Math.round(stakeCeilDollars * 100) / 100;
     const responseBody = {
       ok: true,
       ranAtUTC,
       cashDollars,
+      equityDollars: Math.round(equityDollars * 100) / 100,
+      stake_mode: stakeBoosted ? "boost" : "normal",
       botOpenCount, allOpenCount,
       spareCapacity,
       stake_floor: STAKE_FLOOR,
@@ -1605,7 +1626,10 @@ export default async () => {
     try {
       const logStore = getStore("trader_logs");
       await logStore.setJSON(`${ranAtUTC}.json`, {
-        ranAtUTC, cashDollars, spareCapacity, stake_ceil: stakeCeil,
+        ranAtUTC, cashDollars,
+        equityDollars: Math.round(equityDollars * 100) / 100,
+        stake_mode: stakeBoosted ? "boost" : "normal",
+        spareCapacity, stake_ceil: stakeCeil,
         placements: placements.map(p => ({
           ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
           city: p.city, variable: p.variable, bucket: p.bucket, bucketCode: p.bucketCode,
