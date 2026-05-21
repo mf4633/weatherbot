@@ -228,6 +228,14 @@ const BUCKET_MARGIN_MIN_F = 0.6;       // NO-side threshold
 // 2026-05-14: 1.0 → 1.3, see kalshi.js comment for full calibration history.
 const SIGMA_IRREDUCIBLE_F      = 1.3;
 const SIGMA_BUCKET_MARGIN_Z    = 0.5;
+// Earn-back boost (paired with STAKE_BOOST_* above): while equity < threshold,
+// loosen the σ-margin gate from 0.5z to 0.3z. Post-5/18 settled-bet evidence
+// (n=16, B-bucket NO win-rate 56%, +$1.77) shows residual edge in B-buckets,
+// but the 0.5z gate at σ_eff = 2.6–5.9°F is structurally unsatisfiable inside
+// a 1°F bucket — gate is blocking the wrong slice. Auto-reverts to 0.5z above
+// the equity threshold so the original calibration kicks back in once we're
+// out of the fee-drag trap. 2026-05-21.
+const SIGMA_BUCKET_MARGIN_Z_BOOST = 0.3;
 const BUCKET_YES_MARGIN_MIN_F = 1.5;   // YES-side threshold (stricter; see header)
 // Tail-bucket (T-prefix) YES gate: for cold-tail LOW YES or hot-tail HIGH YES, the
 // daily extremum must move past the tail boundary for the bet to settle. If the
@@ -767,6 +775,9 @@ export default async () => {
     const stakeCeilDollars = stakeBoosted
       ? Math.min(STAKE_BOOST_FRAC * cashDollars, STAKE_BOOST_DOLLAR_CAP)
       : STAKE_CEIL_FRAC * cashDollars;
+    // Single boost flag drives BOTH (a) the per-bet ceiling and (b) the σ-margin
+    // gate threshold. Both revert in lockstep at equity ≥ STAKE_BOOST_EQUITY_THRESHOLD.
+    const sigmaBucketMarginZ = stakeBoosted ? SIGMA_BUCKET_MARGIN_Z_BOOST : SIGMA_BUCKET_MARGIN_Z;
     // Normalize Kalshi position fields. Real fields: position_fp (string of float;
     // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
     const positions = (positionsResp.market_positions || []).map(p => ({
@@ -1402,10 +1413,10 @@ export default async () => {
             Math.abs(b.modelMean - contLo) / sigmaEff,
             Math.abs(b.modelMean - contHi) / sigmaEff
           );
-          if (sigmaMargin < SIGMA_BUCKET_MARGIN_Z) {
+          if (sigmaMargin < sigmaBucketMarginZ) {
             skipped.push({ ...briefBet(b), reason: "sigma-margin-thin",
                            sigmaMargin: Math.round(sigmaMargin * 1000) / 1000,
-                           thresholdZ: SIGMA_BUCKET_MARGIN_Z,
+                           thresholdZ: sigmaBucketMarginZ,
                            sigmaEff: Math.round(sigmaEff * 100) / 100 });
             continue;
           }
@@ -1614,6 +1625,7 @@ export default async () => {
       cashDollars,
       equityDollars: Math.round(equityDollars * 100) / 100,
       stake_mode: stakeBoosted ? "boost" : "normal",
+      sigma_margin_z: sigmaBucketMarginZ,
       botOpenCount, allOpenCount,
       spareCapacity,
       stake_floor: STAKE_FLOOR,
@@ -1629,6 +1641,7 @@ export default async () => {
         ranAtUTC, cashDollars,
         equityDollars: Math.round(equityDollars * 100) / 100,
         stake_mode: stakeBoosted ? "boost" : "normal",
+        sigma_margin_z: sigmaBucketMarginZ,
         spareCapacity, stake_ceil: stakeCeil,
         placements: placements.map(p => ({
           ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
