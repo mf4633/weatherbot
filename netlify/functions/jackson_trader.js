@@ -1538,10 +1538,22 @@ export default async () => {
         // affect CLI settlement. KNYC 2026-05-07 incident: station ran on hourly-only
         // Synoptic for hours; trader had no signal that its monitor was offline.
         // Coverage classes are produced by weather.js → computePrediction.
+        //
+        // 2026-05-21: pair with boost regime (paired with stakeBoosted flag). While
+        // equity < STAKE_BOOST_EQUITY_THRESHOLD, treat 'none' coverage as 0.5 de-rate
+        // (same as 'hourly-only') instead of hard-skip. Rationale: 'none' means the
+        // Synoptic API responded but the station has no 1-min data right now —
+        // monitoring is degraded but we're not flying blind on bad data. 'stalled'
+        // (timestamps frozen, looks fresh but isn't) and undefined (pipeline failure)
+        // remain hard-skip in all regimes because those are dangerous states, not
+        // merely degraded ones. Auto-reverts to hard-skip on 'none' at equity ≥ $200.
         const cov = cityWeather?.synopticCoverage;
-        const coverageDeRate = (cov === "1min" || cov === "5min") ? 1.0
-                             : (cov === "hourly-only") ? 0.5
-                             : 0.0;  // "stalled" / "none" / undefined → skip the bet
+        let coverageDeRate = (cov === "1min" || cov === "5min") ? 1.0
+                           : (cov === "hourly-only") ? 0.5
+                           : 0.0;  // "stalled" / "none" / undefined → skip the bet
+        if (coverageDeRate === 0.0 && stakeBoosted && cov === "none") {
+          coverageDeRate = 0.5;
+        }
         if (coverageDeRate === 0.0) {
           skipped.push({ ...briefBet(b), reason: "synoptic-coverage-degraded",
                          coverage: cov ?? "unknown" });
