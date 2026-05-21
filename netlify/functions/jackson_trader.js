@@ -1397,14 +1397,26 @@ export default async () => {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
         }
-        // Sigma-aware bucket-margin gate. Independent of obs (the absolute-°F
-        // gate above is obs-based: maxSoFar/minSoFar vs bucket edge). This gate
-        // is model-based: how many σ_eff away is the model μ from the bucket
-        // boundaries? Skips B-bucket bets where the model's prediction sits
-        // closer than 0.5σ_eff to either edge — those are coin-flips in posterior
-        // terms regardless of how confident the EV calc looks. T-tail bets bypass
-        // (boundary semantics differ; tail-posterior gate already handles them).
-        if (b.ticker?.startsWith("B") && Number.isFinite(b.loInt) && Number.isFinite(b.hiInt)
+        // Sigma-aware bucket-margin gate. YES-side only (2026-05-21: was symmetric;
+        // see asymmetry argument below). Skips B-bucket YES bets where the model's
+        // μ sits closer than `sigmaBucketMarginZ` to either bucket edge — those are
+        // coin-flips in posterior terms because YES requires the max to land in
+        // *this specific* 1°F window.
+        //
+        // Why NO-side bypasses (2026-05-21): for a NO bet, you win whenever the max
+        // lands anywhere *outside* this 1°F window. The model's uncertainty about
+        // which specific window the max hits doesn't reduce NO's win probability —
+        // the prior probability of landing in any one 1°F window is small (~10-12%
+        // at σ_eff=3.4°F) regardless of which window. Post-5/18 settled-bet sample
+        // (n=16) had B-bucket NO at 56% win-rate / +$1.77 P&L. The symmetric gate
+        // was over-blocking exactly the bucket type with residual edge — observed
+        // empirically as 60/cycle B-bucket NO skips on 2026-05-21 with σ-margin
+        // values 0.05-0.18 (e.g., PHX NO 95-96 at $0.18 vs model 0.73, +$0.49 EV).
+        //
+        // T-tail bets bypass entirely (boundary semantics differ; tail-posterior
+        // gate already handles them).
+        if (b.ticker?.startsWith("B") && b.side?.toLowerCase() === "yes"
+            && Number.isFinite(b.loInt) && Number.isFinite(b.hiInt)
             && b.modelMean != null && b.modelStd != null) {
           const sigmaEff = Math.sqrt(b.modelStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
           const contLo = b.loInt - 0.5;
