@@ -52,6 +52,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/logger"
+  to = "/.netlify/functions/logger"
+  status = 200
+
+[[redirects]]
   from = "/api/paper"
   to = "/.netlify/functions/paper"
   status = 200

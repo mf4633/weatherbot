@@ -341,7 +341,12 @@ async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
     .filter(k => {
       const parts = k.split("/");
       return parts.length === 3 && parts[1] >= cutoffDate;
-    });
+    })
+    // Cap GETs to bound runtime (2026-05-26): the store holds ~600+/day, so the 14d window
+    // is thousands of blobs and Promise.all of all those GETs was timing the logger out
+    // (>36s, 500). Most-recent ~1200 (date desc) is far more pairs than a stable α-fit needs.
+    .sort((a, b) => (a.split("/")[1] < b.split("/")[1] ? 1 : -1))
+    .slice(0, 1200);
   const records = (await Promise.all(
     recentKeys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))
   )).filter(r => r && r.capturedAtUTC && new Date(r.capturedAtUTC).getTime() >= cutoffUTC);
@@ -547,7 +552,8 @@ function fitBetaBins(rows, hrKey, fcKey, actKey, maxHr) {
 async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
   const { blobs } = await snapshotsStore.list();
   const cutoff = new Date(now - BETA_FIT_LOOKBACK_DAYS * 86400e3).toISOString().slice(0, 10);
-  const keys = (blobs || []).map(b => b.key).filter(k => { const d = k.split("/")[1]; return d && d >= cutoff; });
+  const keys = (blobs || []).map(b => b.key).filter(k => { const d = k.split("/")[1]; return d && d >= cutoff; })
+    .sort((a, b) => (a.split("/")[1] < b.split("/")[1] ? 1 : -1)).slice(0, 1200);  // cap GETs (timeout guard, 2026-05-26)
   const snaps = (await Promise.all(keys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))))
     .filter(s => s && s.settled);
   if (snaps.length < BETA_FIT_MIN_PER_BIN) return { fit: false, reason: "insufficient-settled", n: snaps.length };
