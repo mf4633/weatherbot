@@ -42,6 +42,11 @@ const COOLDOWN_MIN = 60;
 // Sell hysteresis: sell when forward EV falls below market bid by this fraction.
 // Matches temp trader's 0.20 — clears round-trip Kalshi fees comfortably.
 const SELL_HYSTERESIS = 0.20;
+// 99¢ auto-close — parity with jackson_trader.js AUTO_CLOSE_AT_PRICE (2026-05-26).
+// Sell a near-certain winner at its bid to recycle capital now rather than wait for
+// month-end settlement; bypasses EV/hysteresis. Velocity-of-money optimization, same
+// as the high/low trader. Gives up ~1¢ + sell fee vs $1 settlement to free the cash.
+const RAIN_AUTO_CLOSE_AT_PRICE = 0.99;
 // Stake = halfKelly × bankroll, floored at $1, capped at 5% of bankroll. Half of
 // the temp trader's 10% cap because rain has no validated track record yet.
 // At ~$80 bankroll: per-bet stake $1–$4. Raise STAKE_CEIL_FRAC once we see results.
@@ -419,6 +424,24 @@ export default async () => {
       const isYes = side === "YES";
       const contracts = Math.abs(p.qty);
       if (contracts <= 0) continue;
+      // 99¢ auto-close (parity with jackson_trader.js AUTO_CLOSE_AT_PRICE): if our
+      // side's bid has reached RAIN_AUTO_CLOSE_AT_PRICE, sell now to recycle capital
+      // instead of waiting for settlement. Applies to monthly AND daily; bypasses
+      // EV/hysteresis. Checked before force-sell-monthly so a near-won position closes
+      // at its (high) bid even when monthly-dump mode is inactive.
+      {
+        const acBid = m ? (isYes ? m.yes_bid : m.no_bid) : null;
+        if (acBid != null && acBid >= RAIN_AUTO_CLOSE_AT_PRICE) {
+          const acCents = Math.max(1, Math.round(acBid * 100));
+          const acRes = isDryRun ? { ok: true, body: { dryRun: true } }
+                                 : await placeSellOrder(ticker, side, contracts, acCents);
+          sales.push({ ticker, side, count: contracts, sellPriceCents: acCents,
+                       dryRun: isDryRun, ok: acRes.ok, reason: "auto-close-99c" });
+          if (!acRes.ok) errors.push({ where: "rain-auto-close", ticker, response: acRes.body });
+          else if (!isDryRun) cooldownMap[botKey(ticker, side)] = new Date().toISOString();
+          continue;
+        }
+      }
       const isMonthly = isMonthlyRainTicker(ticker);
       // Force-sell monthly: dump at the bid regardless of EV.
       if (isMonthly) {
