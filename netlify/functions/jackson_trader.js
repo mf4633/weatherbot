@@ -1397,25 +1397,28 @@ export default async () => {
           // Attach debug to placement record so we can trace why the filter passed.
           b._marginDebug = marginDebug;
         }
-        // Sigma-aware bucket-margin gate. YES-side only (2026-05-21: was symmetric;
-        // see asymmetry argument below). Skips B-bucket YES bets where the model's
-        // μ sits closer than `sigmaBucketMarginZ` to either bucket edge — those are
-        // coin-flips in posterior terms because YES requires the max to land in
-        // *this specific* 1°F window.
+        // Sigma-aware bucket-margin gate. SYMMETRIC across YES and NO (2026-05-26:
+        // reverted the 2026-05-21 YES-only carve-out — history below). Skips B-bucket
+        // bets where the model's μ sits closer than `sigmaBucketMarginZ` to either
+        // bucket edge: μ that close to a boundary makes the outcome a posterior
+        // coin-flip, and the apparent edge is an artifact of the wide unconditional
+        // σ_eff used in the bucket-prob calc.
         //
-        // Why NO-side bypasses (2026-05-21): for a NO bet, you win whenever the max
-        // lands anywhere *outside* this 1°F window. The model's uncertainty about
-        // which specific window the max hits doesn't reduce NO's win probability —
-        // the prior probability of landing in any one 1°F window is small (~10-12%
-        // at σ_eff=3.4°F) regardless of which window. Post-5/18 settled-bet sample
-        // (n=16) had B-bucket NO at 56% win-rate / +$1.77 P&L. The symmetric gate
-        // was over-blocking exactly the bucket type with residual edge — observed
-        // empirically as 60/cycle B-bucket NO skips on 2026-05-21 with σ-margin
-        // values 0.05-0.18 (e.g., PHX NO 95-96 at $0.18 vs model 0.73, +$0.49 EV).
+        // Why NO is back in (2026-05-26): the 2026-05-21 carve-out assumed a NO bet
+        // wins "anywhere else," so any one 1°F window is a uniform ~10-12% regardless
+        // of which — i.e. μ-uncertainty shouldn't lower NO's win prob. That is FALSE
+        // on accurate-forecast days: windows are NOT uniform; the modal window on μ
+        // carries most of the mass, and conditional on a good forecast (MAE ~0.85°F)
+        // the high reliably lands there — exactly the window a near-μ NO bet bets
+        // against. The n=16 "B-bucket NO 56% / +$1.77" sample was noise. Full ledger
+        // (n=124) shows B-bucket NO at 31% win / −$198, and re-applying this gate to
+        // NO nets +$115 @ Z=0.5 / +$86 @ Z=0.3 (2026-05-26 sweep on the live jackson
+        // ledger). 2026-05-25's four losses (PHX/BOS/LAX/DEN, all NO/high) had
+        // σ-margin 0.07–0.14z and were placed only because of the YES-only gap.
         //
-        // T-tail bets bypass entirely (boundary semantics differ; tail-posterior
-        // gate already handles them).
-        if (b.ticker?.startsWith("B") && b.side?.toLowerCase() === "yes"
+        // T-tail bets still bypass (boundary semantics differ; tail-posterior gate
+        // already handles them).
+        if (b.ticker?.startsWith("B")
             && Number.isFinite(b.loInt) && Number.isFinite(b.hiInt)
             && b.modelMean != null && b.modelStd != null) {
           const sigmaEff = Math.sqrt(b.modelStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2);
