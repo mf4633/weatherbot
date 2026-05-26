@@ -592,13 +592,20 @@ export default async () => {
     // the :05 cycle — so no single run does both. Each is capped to 600 snapshots, keeping
     // every run well under the function limit (no 502 → cron-job.org won't auto-disable the
     // job). The other ~10 cycles/hour do only the light data writes. 2026-05-26.
+    // INLINE refit gated OFF (2026-05-26): the σ/β refit takes ~18s (snapshot-store
+    // list/fetch), which 502s over an HTTP cron ping (Netlify's ~10s sync limit) — the
+    // refit never completes AND it spams cron-job.org failure notifications + risks
+    // auto-disable. So /api/logger stays LIGHT (<10s, always 200) and only does data
+    // collection. Re-enable INLINE_REFIT after the refit-speed/snapshot-pruning fix (or
+    // move it to a dedicated tolerant job). Data keeps accumulating either way.
+    const INLINE_REFIT = false;
     const _m = new Date(now).getUTCMinutes();
-    let sigmaRevisionFit = { fit: false, reason: "off-cycle" };
-    let intradayBetaFit  = { fit: false, reason: "off-cycle" };
-    if (_m < 5) {
+    let sigmaRevisionFit = { fit: false, reason: INLINE_REFIT ? "off-cycle" : "inline-refit-disabled" };
+    let intradayBetaFit  = { fit: false, reason: INLINE_REFIT ? "off-cycle" : "inline-refit-disabled" };
+    if (INLINE_REFIT && _m < 5) {
       try { sigmaRevisionFit = await runRefitSigmaRevision(snapshotsStore, regimeStore, now); }
       catch (e) { sigmaRevisionFit = { fit: false, error: String(e) }; }
-    } else if (_m < 10) {
+    } else if (INLINE_REFIT && _m < 10) {
       try { intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now); }
       catch (e) { intradayBetaFit = { fit: false, error: String(e) }; }
     }
