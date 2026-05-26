@@ -46,7 +46,13 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // nominal EV scale by ~15-20% across the candidate pool, so the floor needs to drop
 // by the same fraction to preserve placement volume without unwinding the May-13 risk
 // envelope. halfKelly ≥ 15% remains the hard conviction backstop.
-const MIN_EDGE_HIGH = 0.17;
+// 2026-05-26 (data-pure): MIN_EDGE_HIGH 0.17 → 0.25. EV-threshold sweep under the corrected
+// β (gate-2 cache, σ=2.5, price≥0.10): ROI climbs monotonically with the floor —
+// 0.17:+3%/$7.35, 0.20:+5%, 0.25:+12%/$14.68 (max total P&L), 0.30:+13% — so 0.17 was
+// admitting marginal 17-25¢ bets that dragged ROI to ~breakeven. 0.25 ~4× the ROI and maxes
+// total P&L. (In-sample, σ=2.5, pre-σ-margin; the threshold ORDERING is robust to those.)
+// LOW kept at 0.25 — that's its peak stable ROI (+43%); lower thresholds only dilute it.
+const MIN_EDGE_HIGH = 0.25;
 const MIN_EDGE_LOW  = 0.25;
 function minEdgeFor(b) { return b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH; }
 // 2026-05-13: MIN_HALF_KELLY raised from 0.10 → 0.15. n=138 sweep: tightening to 0.15
