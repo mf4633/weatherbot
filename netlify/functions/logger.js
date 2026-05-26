@@ -583,26 +583,18 @@ export default async () => {
     // σ_revision auto-fit runs once per logger cycle (5 min cron) — cheap given
     // the bounded lookback (14 days) and pairwise compute. Falls back silently
     // when n_pairs < MIN_PAIRS; weather.js reads from regimeBlob.sigma_revision_state.
-    let sigmaRevisionFit = null;
-    try {
-      sigmaRevisionFit = await runRefitSigmaRevision(snapshotsStore, regimeStore, now);
-    } catch (e) {
-      sigmaRevisionFit = { fit: false, error: String(e) };
-    }
-    // Rolling β refit runs AFTER σ_revision so it read-modify-writes the σ-updated blob.
-    // GATED TO ~HOURLY (2026-05-26): it does a second full snapshot list+GET, and the
-    // logger is timeout-sensitive (sibling crons have 502'd). β is a slow 21-day fit, so
-    // refitting once/hour (top-of-hour cycle) is plenty and avoids doubling per-cycle blob
-    // I/O. Falls through to the seed/last-fit on the other 11 cycles.
-    let intradayBetaFit = null;
+    // BOTH heavy refits gated to ~hourly (top-of-hour cycle) — 2026-05-26. Each scans ~1200
+    // snapshots; running them every 5-min cycle kept the logger at 502 (18-36s / memory). The
+    // every-5-min cycle now does ONLY the light, critical work (runCapture/runSettle/runSnapshot/
+    // runSnapshotSettle → prediction_snapshots + per_city_residual flow); the slow-moving σ/β
+    // refits run once/hour and read-modify-write the regime blob (σ first, then β).
+    let sigmaRevisionFit = { fit: false, reason: "skipped-not-top-of-hour" };
+    let intradayBetaFit  = { fit: false, reason: "skipped-not-top-of-hour" };
     if (new Date(now).getUTCMinutes() < 5) {
-      try {
-        intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now);
-      } catch (e) {
-        intradayBetaFit = { fit: false, error: String(e) };
-      }
-    } else {
-      intradayBetaFit = { fit: false, reason: "skipped-not-top-of-hour" };
+      try { sigmaRevisionFit = await runRefitSigmaRevision(snapshotsStore, regimeStore, now); }
+      catch (e) { sigmaRevisionFit = { fit: false, error: String(e) }; }
+      try { intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now); }
+      catch (e) { intradayBetaFit = { fit: false, error: String(e) }; }
     }
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
