@@ -1426,7 +1426,11 @@ export default async (req) => {
   });
 
   CACHE = { ts: now, data: cities };
-  return new Response(JSON.stringify({ cached: false, ts: new Date(now).toISOString(), cities }), {
+  return new Response(JSON.stringify({
+    cached: false, ts: new Date(now).toISOString(),
+    logger_heartbeat_utc: regimeBlob?.logger_heartbeat_utc ?? null,
+    cities
+  }), {
     headers: { "content-type": "application/json", "cache-control": "public, max-age=60" }
   });
 };
