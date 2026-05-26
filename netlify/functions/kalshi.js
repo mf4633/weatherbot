@@ -326,7 +326,7 @@ export default async () => {
         const k = kelly(b.p_model, b.yes_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "YES", price: b.yes_ask, p_model: b.p_model, ev: b.evYes,
+          side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: b.p_model, ev: b.evYes,
           evPerDay: b.evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
@@ -337,7 +337,7 @@ export default async () => {
         const k = kelly(pNo, b.no_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "NO", price: b.no_ask, p_model: pNo, ev: b.evNo,
+          side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: b.evNo,
           evPerDay: b.evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std

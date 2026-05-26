@@ -122,6 +122,18 @@ const STAKE_CEIL_FRAC = 0.10;
 const STAKE_BOOST_EQUITY_THRESHOLD = 200.0;
 const STAKE_BOOST_FRAC = 0.40;
 const STAKE_BOOST_DOLLAR_CAP = 5.0;
+// ── Variable-limit (maker) pricing, 2026-05-26 ──────────────────────────────
+// Instead of crossing to the ask, post a liquidity-scaled limit BELOW the ask to capture
+// the bid-ask spread (the 15-min expiration on placeBuyOrder lets it rest). Backtest
+// (backtest_variable_limit.mjs): captures ~3-4¢; beats taker only if adverse selection is
+// mild. LOW stays +EV through MODERATE AS -> ARMED. HIGH flips NEGATIVE under moderate AS
+// (+7.7% taker -> -20.5%) -> HELD as taker; we log its would-be limits to measure live AS,
+// then flip VLIM_ARM_HIGH=true once mild. Qualification stays at the ask (unchanged gate),
+// so a posted limit only ever improves an already-+EV entry.
+const VLIM_ARM_LOW    = true;
+const VLIM_ARM_HIGH   = false;   // flip true ONLY after live AS measurement says mild
+const VLIM_REF_SPREAD = 0.05;    // spread (fraction) at/below which we post at the bid
+const VLIM_EV_FLOOR   = 0.10;    // never post so high that net-of-fee EV drops below this
 // Hard-pause LOW bets where settled-bet evidence is decisive AND a passive
 // observable defines the unpause condition (not a bet count the pause itself
 // suppresses; see feedback_hard_pause_exit_criteria memory).
@@ -693,6 +705,22 @@ async function fetchInternal(path) {
   const r = await fetch(`${SITE_BASE}${path}`, { headers: { authorization: auth } });
   if (!r.ok) throw new Error(`${path} ${r.status}`);
   return await r.json();
+}
+
+// Liquidity-scaled maker limit price for a buy on our side. `ask`/`bid` are our-side best
+// quotes (for NO bets: no_ask/no_bid); `pWin` is the model win-prob for the side. Tight
+// spread -> post at the bid (full capture, trustworthy two-sided book); wide spread -> step
+// toward the ask (don't reach across a lonely/stale quote). Never exceeds the price that
+// keeps net-of-fee EV >= VLIM_EV_FLOOR. Falls back to the ask (taker) if there's no real
+// bid. Validated in backtest_variable_limit.mjs (2026-05-26).
+function variableLimitPrice(ask, bid, pWin) {
+  if (!(ask > 0) || !(bid > 0) || bid >= ask) return ask;   // no two-sided market -> taker
+  const spread = ask - bid;
+  const frac = Math.min(1, Math.max(0, VLIM_REF_SPREAD / spread));   // tight->1 (bid), wide->small
+  let px = ask - spread * frac;
+  const healthCap = (pWin - 0.07 - VLIM_EV_FLOOR) / 0.93;   // invert net-of-fee EV = p - 0.07 - 0.93*L
+  if (Number.isFinite(healthCap)) px = Math.min(px, healthCap);
+  return Math.min(ask, Math.max(bid, px));
 }
 
 // Place a buy order via Kalshi. Returns the order response.
@@ -1598,8 +1626,19 @@ export default async () => {
         const stake_dollars = Math.max(STAKE_FLOOR,
           Math.min(stakeCeilDollars, effectiveHalfKelly * cashDollars, remaining));
         if (stake_dollars < STAKE_FLOOR) break;
-        const contracts = Math.max(1, Math.floor(stake_dollars / b.price));
-        const priceCents = Math.max(1, Math.min(99, Math.round(b.price * 100)));
+        // Variable-limit (maker) pricing — see VLIM_* config. LOW is armed (post a
+        // liquidity-scaled limit BELOW the ask to capture spread); HIGH is held as taker
+        // (crosses to the ask) until live data measures its adverse selection. b.price is
+        // our-side ask; b.bid (from kalshi topBets) is our-side bid; b.p_model is win-prob
+        // for this side. The would-be limit is computed for BOTH legs so the ledger can
+        // later measure HIGH's AS — only the armed leg actually posts at it.
+        const variable_ = b.variable || "high";
+        const vlimArmed = (variable_ === "low") ? VLIM_ARM_LOW : VLIM_ARM_HIGH;
+        const vlimPrice = (b.bid != null && b.bid > 0)
+          ? variableLimitPrice(b.price, b.bid, b.p_model) : b.price;
+        const orderPrice = vlimArmed ? vlimPrice : b.price;
+        const contracts = Math.max(1, Math.floor(stake_dollars / orderPrice));
+        const priceCents = Math.max(1, Math.min(99, Math.round(orderPrice * 100)));
         // Dry-run mode: skip Kalshi order submission, fake an "ok" response so the
         // placement is logged for instrumentation purposes.
         const res = isDryRun ? { ok: true, body: { order: { client_order_id: `dryrun-${Date.now()}` }, dryRun: true } }
@@ -1608,8 +1647,10 @@ export default async () => {
         const pWin = b.p_model;  // p_model is set to pNo for NO side, p_yes for YES side
         const expectedPayout = contracts * (Number.isFinite(pWin) ? pWin : 0);
         placements.push({ ticker: fullTicker, side: b.side, count: contracts, priceCents,
-                          city: b.city, variable: b.variable || "high",
+                          city: b.city, variable: variable_,
                           bucket: b.bucket, bucketCode: b.ticker,
+                          askPrice: b.price, bidPrice: (b.bid != null) ? b.bid : null,
+                          vlimPrice: Math.round(vlimPrice * 1000) / 1000, vlimArmed,
                           stake_dollars: Math.round(stake_dollars * 100) / 100,
                           ev: b.ev, halfKelly: b.halfKelly,
                           softReopen: softReopen < 1.0 ? softReopen : null,
@@ -1646,8 +1687,10 @@ export default async () => {
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
           await ledgerStore.setJSON(`${betId}.json`, {
             betId, ticker: fullTicker, side: b.side, contracts,
-            price: b.price, stake_dollars,
-            city: b.city, variable: b.variable || "high",
+            price: orderPrice, stake_dollars,
+            askPrice: b.price, bidPrice: (b.bid != null) ? b.bid : null,
+            vlimPrice: Math.round(vlimPrice * 1000) / 1000, vlimArmed,
+            city: b.city, variable: variable_,
             bucket: b.bucket, ev: b.ev, halfKelly: b.halfKelly,
             modelMean: b.modelMean, modelStd: b.modelStd,
             placedAtUTC: new Date().toISOString(),
