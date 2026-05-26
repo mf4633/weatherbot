@@ -584,11 +584,19 @@ export default async () => {
       sigmaRevisionFit = { fit: false, error: String(e) };
     }
     // Rolling β refit runs AFTER σ_revision so it read-modify-writes the σ-updated blob.
+    // GATED TO ~HOURLY (2026-05-26): it does a second full snapshot list+GET, and the
+    // logger is timeout-sensitive (sibling crons have 502'd). β is a slow 21-day fit, so
+    // refitting once/hour (top-of-hour cycle) is plenty and avoids doubling per-cycle blob
+    // I/O. Falls through to the seed/last-fit on the other 11 cycles.
     let intradayBetaFit = null;
-    try {
-      intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now);
-    } catch (e) {
-      intradayBetaFit = { fit: false, error: String(e) };
+    if (new Date(now).getUTCMinutes() < 5) {
+      try {
+        intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now);
+      } catch (e) {
+        intradayBetaFit = { fit: false, error: String(e) };
+      }
+    } else {
+      intradayBetaFit = { fit: false, reason: "skipped-not-top-of-hour" };
     }
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
