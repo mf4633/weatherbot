@@ -11,3 +11,6 @@ _kseries.json
 
 # Node
 node_modules/
+
+# edge-backtest caches (regenerable from Kalshi candlesticks)
+_edge_raw*.json
