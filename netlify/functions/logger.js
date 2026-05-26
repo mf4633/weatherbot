@@ -602,6 +602,15 @@ export default async () => {
       try { intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now); }
       catch (e) { intradayBetaFit = { fit: false, error: String(e) }; }
     }
+    // Per-cycle heartbeat (2026-05-26): write a timestamp EVERY cycle so cron health is
+    // observable in real time — fitAtUTC only updates hourly now that refits are gated.
+    // weather.js surfaces regimeBlob.logger_heartbeat_utc. Done last so it preserves any
+    // refit write from this cycle. Best-effort.
+    try {
+      const _rb = (await regimeStore.get("global", { type: "json" })) || {};
+      _rb.logger_heartbeat_utc = new Date(now).toISOString();
+      await regimeStore.setJSON("global", _rb);
+    } catch (e) { /* heartbeat is best-effort, never block the cycle */ }
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
       captureCount: captures.length, captures,
