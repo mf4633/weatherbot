@@ -60,6 +60,15 @@ const MIN_HALF_KELLY = 0.15;
 // accurately at sub-10¢ resolution — the EV calc bakes in pWin estimates that
 // settled-bet history shows are systematically too high in this band.
 const MIN_PRICE = 0.10;
+// Price-band restriction (2026-05-26). Calibration audit on n=216 settled bets:
+// realized win rate sits 15–40 pts BELOW the price (implied prob) in 7 of 8 price
+// bands — systemic overconfidence — and the ONLY consistently +EV band was
+// 0.30–0.40 (full +$2.44; last-14d +$24.87 / +54% ROI). σ-widening was tested and
+// does NOT close the gap (and is counterproductive on this NO-heavy book), so until
+// the signal-level miscalibration is fixed we hard-restrict live placements to the
+// one empirically-profitable band. Narrow + in-sample — set LO=0/HI=1 to disable.
+const PRICE_BAND_LO = 0.30;
+const PRICE_BAND_HI = 0.40;
 // Volume floor: skip orders on markets with paper-thin orderbook depth. Daily
 // volume is a proxy for liquidity (true book-depth isn't in our snapshot).
 // 20 contracts traded today = at least minimal interest; below that, partial
@@ -1263,6 +1272,7 @@ export default async () => {
       // halfKelly desc upstream, so iterating fills highest-conviction first.
       const qualifying = (kalshiData.topBets || []).filter(b =>
         b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
+        && b.price >= PRICE_BAND_LO && b.price < PRICE_BAND_HI
         && (b.volume == null || b.volume >= MIN_VOLUME));
       // Skip-reason log so we can see exactly how high vs low were weighed each run.
       // Listed in priority order matching the iteration below.
