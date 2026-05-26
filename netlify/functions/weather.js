@@ -658,13 +658,14 @@ function resolveRegimeDamping(city, regimeBlob, residual7d) {
 // points. NOTE: calibrated on GFS_seamless historical fc; the live ensemble (NWS+GFS+
 // ECMWF+ICON) is more accurate, so refit on logged ensemble residuals when available —
 // the shape (rising toward peak) is robust, the magnitude may shift slightly.
-const HIGH_BIAS_BETA = [[1,0.73],[2,0.73],[3,0.68],[4,0.61],[5,0.51],[6,0.36],[7,0.16],[8,0.10],[9,0.09]];
-// LOW mirror — regression of (low_obs − low_fc) on (obs_now − fc_now) at overnight hours
-// by hrsToTrough, same 5y×20-city set (n=36,520/hr). β rises toward the dawn trough
-// (0.52 at 6h out → 0.69 at 1h); old code used 0.5·(1−e^(−h/5)) which decayed toward the
-// trough — same backwards bug as HIGH. No near-zero region: the overnight gap is already
-// predictive (corr 0.56→0.76), unlike the noisy early-morning HIGH gap.
-const LOW_BIAS_BETA  = [[1,0.69],[2,0.67],[3,0.64],[4,0.61],[5,0.57],[6,0.52]];
+// SEED curves (the 5y×20-city fit). These are the fallback / cold-start values; the live
+// β is refit on a rolling window by logger.runRefitIntradayBeta (regression of
+// (actual−forecast) on biasF, binned by hrsToPeak/Trough, written to
+// regimeBlob.intraday_beta_state) and resolved per-bin below — same self-updating pattern
+// as σ_revision. LOW seed: β rises toward the dawn trough (0.52 at 6h → 0.69 at 1h);
+// no near-zero region (overnight gap already predictive, corr 0.56→0.76).
+const HIGH_BIAS_BETA_SEED = [[1,0.73],[2,0.73],[3,0.68],[4,0.61],[5,0.51],[6,0.36],[7,0.16],[8,0.10],[9,0.09]];
+const LOW_BIAS_BETA_SEED  = [[1,0.69],[2,0.67],[3,0.64],[4,0.61],[5,0.57],[6,0.52]];
 function interpBeta(T, x) {
   if (x <= T[0][0]) return T[0][1];
   if (x >= T[T.length - 1][0]) return T[T.length - 1][1];
@@ -674,8 +675,17 @@ function interpBeta(T, x) {
   }
   return T[T.length - 1][1];
 }
-function intradayBiasBeta(hrsToPeak)    { return interpBeta(HIGH_BIAS_BETA, hrsToPeak); }
-function intradayBiasBetaLow(hrsToTrough) { return interpBeta(LOW_BIAS_BETA, hrsToTrough); }
+// Merge rolling-fit β (per integer-hr bin, where it had enough samples) over the seed.
+// Until enough settled snapshots accumulate, this == the seed curve exactly.
+function resolveIntradayBeta(regimeBlob) {
+  const st = regimeBlob?.intraday_beta_state;
+  const merge = (seed, fitted) => {
+    if (!Array.isArray(fitted) || !fitted.length) return seed;
+    const fmap = new Map(fitted.map(p => [p[0], p[1]]));
+    return seed.map(([h, b]) => [h, fmap.has(h) ? fmap.get(h) : b]);
+  };
+  return { high: merge(HIGH_BIAS_BETA_SEED, st?.high), low: merge(LOW_BIAS_BETA_SEED, st?.low) };
+}
 
 function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm) {
   const now = new Date();
@@ -858,6 +868,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     ? Math.round((Date.now() - new Date(forecast.updateTime).getTime()) / 60000)
     : null;
   const sigmaRevisionAlphas = resolveSigmaRevisionAlphas(regimeBlob);
+  const { high: highBetaTbl, low: lowBetaTbl } = resolveIntradayBeta(regimeBlob);
 
   // Bias correction uses ensembleAt (or ensemble-of-NWS-only if no Open-Meteo response).
   let biasF = null;
@@ -914,7 +925,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // Intraday-residual weight: empirical β(hrsToPeak) — see intradayBiasBeta() header.
     // Replaces the old `0.4·(1−e^(−hrsToPeak/5))` decay, which under-weighted the midday
     // signal 3-10× and sloped the wrong way (weakening β toward peak when it should grow).
-    const biasWeight = intradayBiasBeta(hrsToPeak);
+    const biasWeight = interpBeta(highBetaTbl, hrsToPeak);
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
@@ -1130,7 +1141,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // Replaces the old `0.5·(1−e^(−hrsToTrough/5))` decay, which (like HIGH) under-
     // weighted the signal and sloped the wrong way (weakening β toward the trough when
     // it should grow). β rises 0.52→0.69 from 6h out to 1h before the dawn trough.
-    const biasWeight = intradayBiasBetaLow(hrsToTrough_);
+    const biasWeight = interpBeta(lowBetaTbl, hrsToTrough_);
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];

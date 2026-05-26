@@ -187,6 +187,7 @@ async function runSnapshot(snapshotsStore, predData, now, impliedByName = {}) {
         : null,
       hrsToPeak: c.hrsToPeak ?? null,
       hrsToTrough: c.hrsToTrough ?? null,
+      biasF: c.biasF ?? null,   // obs−forecast gap at capture; x-var for rolling β refit
       // Edge-measurement baselines (2026-05-26): the corrected model (predHigh/predLow)
       // must beat ALL of these to have edge. nws* = NWS-only forecast; forecast* =
       // raw ensemble (pre bias-correction); implied* = market-implied μ from Kalshi
@@ -515,6 +516,51 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
   return settledNow;
 }
 
+// Rolling intraday-β refit (2026-05-26) — same self-updating pattern as σ_revision.
+// Regress (actual − raw ensemble forecast) on biasF over recent SETTLED snapshots, binned
+// by integer hrsToPeak (HIGH) / hrsToTrough (LOW). Through-origin slope per bin is β (the
+// model is μ = forecast + β·biasF, no intercept). Writes regimeBlob.intraday_beta_state;
+// weather.js resolveIntradayBeta merges per-bin over the seed — bins below the sample floor
+// keep the seed, so this is a no-op until enough settled snapshots (carrying biasF +
+// forecast* + actual*, all present post-2026-05-26) accumulate.
+const BETA_FIT_LOOKBACK_DAYS = 21;
+const BETA_FIT_MIN_PER_BIN = 20;
+const BETA_CLAMP = [-0.2, 1.2];
+function fitBetaBins(rows, hrKey, fcKey, actKey, maxHr) {
+  const acc = {};
+  for (const s of rows) {
+    const x = s.biasF, fc = s[fcKey], act = s[actKey], hr = s[hrKey];
+    if (x == null || fc == null || act == null || hr == null) continue;
+    const b = Math.max(1, Math.min(maxHr, Math.round(hr)));
+    (acc[b] ??= { sxy: 0, sxx: 0, n: 0 });
+    acc[b].sxy += x * (act - fc); acc[b].sxx += x * x; acc[b].n++;
+  }
+  const out = [];
+  for (let b = 1; b <= maxHr; b++) {
+    const a = acc[b];
+    if (!a || a.n < BETA_FIT_MIN_PER_BIN || a.sxx <= 0) continue;
+    const beta = Math.max(BETA_CLAMP[0], Math.min(BETA_CLAMP[1], a.sxy / a.sxx));
+    out.push([b, Math.round(beta * 1000) / 1000]);
+  }
+  return out;
+}
+async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
+  const { blobs } = await snapshotsStore.list();
+  const cutoff = new Date(now - BETA_FIT_LOOKBACK_DAYS * 86400e3).toISOString().slice(0, 10);
+  const keys = (blobs || []).map(b => b.key).filter(k => { const d = k.split("/")[1]; return d && d >= cutoff; });
+  const snaps = (await Promise.all(keys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))))
+    .filter(s => s && s.settled);
+  if (snaps.length < BETA_FIT_MIN_PER_BIN) return { fit: false, reason: "insufficient-settled", n: snaps.length };
+  const high = fitBetaBins(snaps, "hrsToPeak", "forecastHigh", "actualHigh", 9);
+  const low  = fitBetaBins(snaps, "hrsToTrough", "forecastLow", "actualLow", 6);
+  if (!high.length && !low.length) return { fit: false, reason: "no-bin-met-min", n: snaps.length };
+  const regimeBlob = (await regimeStore.get("global", { type: "json" }).catch(() => null)) || {};
+  regimeBlob.intraday_beta_state = { high, low, nSnaps: snaps.length,
+    lookbackDays: BETA_FIT_LOOKBACK_DAYS, fitAtUTC: new Date(now).toISOString() };
+  await regimeStore.setJSON("global", regimeBlob);
+  return { fit: true, n: snaps.length, highBins: high.length, lowBins: low.length, high, low };
+}
+
 export default async () => {
   const now = Date.now();
   try {
@@ -537,13 +583,20 @@ export default async () => {
     } catch (e) {
       sigmaRevisionFit = { fit: false, error: String(e) };
     }
+    // Rolling β refit runs AFTER σ_revision so it read-modify-writes the σ-updated blob.
+    let intradayBetaFit = null;
+    try {
+      intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now);
+    } catch (e) {
+      intradayBetaFit = { fit: false, error: String(e) };
+    }
     return new Response(JSON.stringify({
       ok: true, ranAtUTC: new Date(now).toISOString(),
       captureCount: captures.length, captures,
       settleCount: settled.length, settled,
       snapshotCount: snapshots.length, snapshots,
       snapshotsSettledCount: snapshotsSettled.length, snapshotsSettled,
-      sigmaRevisionFit
+      sigmaRevisionFit, intradayBetaFit
     }, null, 2), { status: 200, headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({
