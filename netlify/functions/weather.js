@@ -643,6 +643,40 @@ function resolveRegimeDamping(city, regimeBlob, residual7d) {
   return REGIME_DAMPING;
 }
 
+// Intraday-residual weight β(hrsToPeak) for the HIGH bias-correction term. EMPIRICAL,
+// replaces the old exponential "bias burns off" decay (2026-05-26). Regression of the
+// end-of-day high residual (high_obs − high_fc) on the live obs-vs-forecast gap
+// (obs_now − fc_now) at fixed local hours over 5y × 20 cities (n=36,520/hr) found β
+// RISES toward peak — the OPPOSITE of the old decay:
+//   hrsToPeak:  9    8    7    6    5    4    3    2    1
+//   β_opt:     .09  .10  .16  .36  .51  .61  .68  .73  .73   (corr .09→.80)
+//   β_old:     .33  .32  .30  .28  .25  .22  .18  .13  .07   (= 0.4·(1−e^(−h/5)))
+// The old curve under-weighted the strong midday/afternoon signal by 3-10× and decayed
+// it toward peak; optimal-β cuts the bias-branch RMSE 2.29→1.84 at hrsToPeak=3 (−20%)
+// and 2.41→1.50 at hrsToPeak=1 (−38%). Early-morning β is genuinely tiny (morning gap
+// is noise), so the curve correctly down-weights there. Piecewise-linear over measured
+// points. NOTE: calibrated on GFS_seamless historical fc; the live ensemble (NWS+GFS+
+// ECMWF+ICON) is more accurate, so refit on logged ensemble residuals when available —
+// the shape (rising toward peak) is robust, the magnitude may shift slightly.
+const HIGH_BIAS_BETA = [[1,0.73],[2,0.73],[3,0.68],[4,0.61],[5,0.51],[6,0.36],[7,0.16],[8,0.10],[9,0.09]];
+// LOW mirror — regression of (low_obs − low_fc) on (obs_now − fc_now) at overnight hours
+// by hrsToTrough, same 5y×20-city set (n=36,520/hr). β rises toward the dawn trough
+// (0.52 at 6h out → 0.69 at 1h); old code used 0.5·(1−e^(−h/5)) which decayed toward the
+// trough — same backwards bug as HIGH. No near-zero region: the overnight gap is already
+// predictive (corr 0.56→0.76), unlike the noisy early-morning HIGH gap.
+const LOW_BIAS_BETA  = [[1,0.69],[2,0.67],[3,0.64],[4,0.61],[5,0.57],[6,0.52]];
+function interpBeta(T, x) {
+  if (x <= T[0][0]) return T[0][1];
+  if (x >= T[T.length - 1][0]) return T[T.length - 1][1];
+  for (let i = 1; i < T.length; i++) {
+    const [h0, b0] = T[i - 1], [h1, b1] = T[i];
+    if (x <= h1) return b0 + (b1 - b0) * (x - h0) / (h1 - h0);
+  }
+  return T[T.length - 1][1];
+}
+function intradayBiasBeta(hrsToPeak)    { return interpBeta(HIGH_BIAS_BETA, hrsToPeak); }
+function intradayBiasBetaLow(hrsToTrough) { return interpBeta(LOW_BIAS_BETA, hrsToTrough); }
+
 function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
@@ -877,10 +911,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // signal we have) and with diminishing weight as we approach peak (when maxSoFar
     // becomes the dominant evidence). Exponential decay with τ=5h: at hrsToPeak=12,
     // weight ≈ 0.91; at 5h ≈ 0.63; at 1h ≈ 0.18; at 0 = 0. Pre-decay base 0.4 retained.
-    const BIAS_BASE = 0.4;
-    const BIAS_TAU_HR = 5;
-    const biasDecay = 1 - Math.exp(-Math.max(0, hrsToPeak) / BIAS_TAU_HR);
-    const biasWeight = BIAS_BASE * biasDecay;
+    // Intraday-residual weight: empirical β(hrsToPeak) — see intradayBiasBeta() header.
+    // Replaces the old `0.4·(1−e^(−hrsToPeak/5))` decay, which under-weighted the midday
+    // signal 3-10× and sloped the wrong way (weakening β toward peak when it should grow).
+    const biasWeight = intradayBiasBeta(hrsToPeak);
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
@@ -1092,12 +1126,11 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     lowStd = Math.sqrt(0.7 * 0.7 + Math.max(0, 0.3 * hrsToTrough_) ** 2);
     lowMethod = "trough-realized";
   } else if (forecastLowF != null && minSoFar != null) {
-    // Bias decay symmetric to HIGH: weight diminishes as we approach trough since
-    // late-night/early-morning bias often shifts as boundary layer settles.
-    const BIAS_BASE_LOW = 0.5;
-    const BIAS_TAU_HR_LOW = 5;
-    const biasDecayLow = 1 - Math.exp(-Math.max(0, hrsToTrough_) / BIAS_TAU_HR_LOW);
-    const biasWeight = BIAS_BASE_LOW * biasDecayLow;
+    // Intraday-residual weight: empirical β(hrsToTrough) — see intradayBiasBetaLow().
+    // Replaces the old `0.5·(1−e^(−hrsToTrough/5))` decay, which (like HIGH) under-
+    // weighted the signal and sloped the wrong way (weakening β toward the trough when
+    // it should grow). β rises 0.52→0.69 from 6h out to 1h before the dawn trough.
+    const biasWeight = intradayBiasBetaLow(hrsToTrough_);
     const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
