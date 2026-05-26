@@ -346,7 +346,7 @@ async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
     // is thousands of blobs and Promise.all of all those GETs was timing the logger out
     // (>36s, 500). Most-recent ~1200 (date desc) is far more pairs than a stable α-fit needs.
     .sort((a, b) => (a.split("/")[1] < b.split("/")[1] ? 1 : -1))
-    .slice(0, 1200);
+    .slice(0, 600);
   const records = (await Promise.all(
     recentKeys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))
   )).filter(r => r && r.capturedAtUTC && new Date(r.capturedAtUTC).getTime() >= cutoffUTC);
@@ -553,7 +553,7 @@ async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
   const { blobs } = await snapshotsStore.list();
   const cutoff = new Date(now - BETA_FIT_LOOKBACK_DAYS * 86400e3).toISOString().slice(0, 10);
   const keys = (blobs || []).map(b => b.key).filter(k => { const d = k.split("/")[1]; return d && d >= cutoff; })
-    .sort((a, b) => (a.split("/")[1] < b.split("/")[1] ? 1 : -1)).slice(0, 1200);  // cap GETs (timeout guard, 2026-05-26)
+    .sort((a, b) => (a.split("/")[1] < b.split("/")[1] ? 1 : -1)).slice(0, 600);  // cap GETs (timeout guard, 2026-05-26)
   const snaps = (await Promise.all(keys.map(k => snapshotsStore.get(k, { type: "json" }).catch(() => null))))
     .filter(s => s && s.settled);
   if (snaps.length < BETA_FIT_MIN_PER_BIN) return { fit: false, reason: "insufficient-settled", n: snaps.length };
@@ -588,11 +588,17 @@ export default async () => {
     // every-5-min cycle now does ONLY the light, critical work (runCapture/runSettle/runSnapshot/
     // runSnapshotSettle → prediction_snapshots + per_city_residual flow); the slow-moving σ/β
     // refits run once/hour and read-modify-write the regime blob (σ first, then β).
-    let sigmaRevisionFit = { fit: false, reason: "skipped-not-top-of-hour" };
-    let intradayBetaFit  = { fit: false, reason: "skipped-not-top-of-hour" };
-    if (new Date(now).getUTCMinutes() < 5) {
+    // STAGGER the two heavy refits onto different cycles — σ_revision on the :00 cycle, β on
+    // the :05 cycle — so no single run does both. Each is capped to 600 snapshots, keeping
+    // every run well under the function limit (no 502 → cron-job.org won't auto-disable the
+    // job). The other ~10 cycles/hour do only the light data writes. 2026-05-26.
+    const _m = new Date(now).getUTCMinutes();
+    let sigmaRevisionFit = { fit: false, reason: "off-cycle" };
+    let intradayBetaFit  = { fit: false, reason: "off-cycle" };
+    if (_m < 5) {
       try { sigmaRevisionFit = await runRefitSigmaRevision(snapshotsStore, regimeStore, now); }
       catch (e) { sigmaRevisionFit = { fit: false, error: String(e) }; }
+    } else if (_m < 10) {
       try { intradayBetaFit = await runRefitIntradayBeta(snapshotsStore, regimeStore, now); }
       catch (e) { intradayBetaFit = { fit: false, error: String(e) }; }
     }
