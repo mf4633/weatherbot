@@ -176,6 +176,40 @@ function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = nul
   return Math.max(0, pHi - pLo);
 }
 
+// Market-implied μ/σ from the live Kalshi bucket prices (2026-05-26). Treats each
+// bucket's mid-price as P(outcome ∈ bucket), normalizes across the event, and takes
+// the probability-weighted center / spread. This is what the MARKET thinks the high/
+// low will be — the benchmark our model must beat to have edge (the thesis: predict
+// NWS deviations the market UNDER-prices). Logged per snapshot so model-vs-market
+// skill becomes measurable. Tail buckets (≤N / ≥N) use an approximate ±1°F center.
+function bucketCenter(b) {
+  const lo = b.loInt, hi = b.hiInt;
+  const loFin = lo != null && lo !== -Infinity, hiFin = hi != null && hi !== Infinity;
+  if (loFin && hiFin) return (lo + hi) / 2;
+  if (!loFin && hiFin) return hi - 1.0;   // "≤ hi" tail
+  if (loFin && !hiFin) return lo + 1.0;   // "≥ lo" tail
+  return null;
+}
+function marketImplied(buckets) {
+  const pts = [];
+  let sum = 0;
+  for (const b of buckets || []) {
+    const c = bucketCenter(b);
+    const p = b.midPx;
+    if (c == null || p == null || p <= 0) continue;
+    pts.push({ c, p }); sum += p;
+  }
+  if (pts.length < 2 || sum <= 0) return null;
+  const mean = pts.reduce((a, x) => a + (x.p / sum) * x.c, 0);
+  const variance = pts.reduce((a, x) => a + (x.p / sum) * (x.c - mean) ** 2, 0);
+  return {
+    mean: Math.round(mean * 100) / 100,
+    std: Math.round(Math.sqrt(Math.max(0, variance)) * 100) / 100,
+    nBuckets: pts.length,
+    probSum: Math.round(sum * 1000) / 1000   // ≈1 if the book is coherent; flags wide spreads
+  };
+}
+
 // Lazy-import @netlify/blobs at handler time so local-only callers (tests, CLI
 // invocations) still work without the runtime. Cached across calls.
 let _blobGetStore = null;
@@ -354,6 +388,7 @@ export default async () => {
       if (r) {
         cityRecord.highEvent = r.eventTicker;
         cityRecord.highBuckets = r.buckets;
+        cityRecord.impliedHigh = marketImplied(r.buckets);  // market μ/σ vs model μ=city.mean
         allBets.push(...r.eventBets);
       } else {
         cityRecord.highEvent = "not found";
@@ -368,6 +403,7 @@ export default async () => {
       if (r) {
         cityRecord.lowEvent = r.eventTicker;
         cityRecord.lowBuckets = r.buckets;
+        cityRecord.impliedLow = marketImplied(r.buckets);
         allBets.push(...r.eventBets);
       } else {
         cityRecord.lowEvent = "not found";

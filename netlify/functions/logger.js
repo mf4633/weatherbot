@@ -128,14 +128,34 @@ async function fetchPredictions() {
   return await r.json();
 }
 
+// Market-implied μ/σ per city (name → {impliedHigh, impliedLow}) from /api/kalshi.
+// Best-effort: any failure returns {} so snapshot capture still proceeds with the
+// model/NWS/forecast baselines (market-implied just stays null those slots).
+async function fetchKalshiImplied() {
+  try {
+    const r = await fetch(`${SITE_BASE}/api/kalshi`, {
+      headers: { authorization: INTERNAL_AUTH, "User-Agent": UA }
+    });
+    if (!r.ok) return {};
+    const j = await r.json();
+    const map = {};
+    for (const c of j.cities || []) {
+      if (!c || typeof c.kalshi === "string") continue;
+      map[c.name] = { impliedHigh: c.impliedHigh ?? null, impliedLow: c.impliedLow ?? null };
+    }
+    return map;
+  } catch (e) { return {}; }
+}
+
 // σ_revision snapshot capture. Separate from runCapture above — writes to the
 // `prediction_snapshots` blob, one snapshot per 30-min slot per city, all hours.
 // Each snapshot carries forecastAgeMin so analyze_sigma_revision.js can fit α
 // from pairwise (Δprediction, Δage) AND from (modelMean - actual) residuals.
-async function runSnapshot(snapshotsStore, predData, now) {
+async function runSnapshot(snapshotsStore, predData, now, impliedByName = {}) {
   const writes = [];
   for (const c of predData.cities || []) {
     if (c.error || c.mean == null || !c.cli || !c.tz || !c.name) continue;
+    const imp = impliedByName[c.name] || {};
     // Slot = local hour + minute floored to SNAPSHOT_SLOT_MIN. Logger ticks every
     // 5 min so each 30-min slot gets 6 attempts; first wins via if-exists guard.
     const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -167,6 +187,19 @@ async function runSnapshot(snapshotsStore, predData, now) {
         : null,
       hrsToPeak: c.hrsToPeak ?? null,
       hrsToTrough: c.hrsToTrough ?? null,
+      // Edge-measurement baselines (2026-05-26): the corrected model (predHigh/predLow)
+      // must beat ALL of these to have edge. nws* = NWS-only forecast; forecast* =
+      // raw ensemble (pre bias-correction); implied* = market-implied μ from Kalshi
+      // bucket prices (what we must beat to be "underpriced on Kalshi"). Backfilled
+      // with residuals vs actual at settle.
+      nwsHigh: c.nwsHighF ?? null,
+      nwsLow: c.nwsLowF ?? null,
+      forecastHigh: c.forecastHighF ?? null,
+      forecastLow: c.forecastLowF ?? null,
+      impliedHigh: imp.impliedHigh?.mean ?? null,
+      impliedStdHigh: imp.impliedHigh?.std ?? null,
+      impliedLow: imp.impliedLow?.mean ?? null,
+      impliedStdLow: imp.impliedLow?.std ?? null,
       capturedAtUTC: new Date(now).toISOString()
     };
     await snapshotsStore.setJSON(key, record);
@@ -200,6 +233,17 @@ async function runSnapshotSettle(snapshotsStore, predData, now) {
         ? snap.predHigh - cliData.maxF : null;
       snap.residualLow = (cliData.minF != null && snap.predLow != null)
         ? snap.predLow - cliData.minF : null;
+      // Baseline residuals (2026-05-26) — same sign convention (prediction − actual).
+      // Lets /api analysis compare model vs NWS vs raw-forecast vs market: which has
+      // lower |residual|, and is (model − market) predictive of (actual − market)?
+      const rH = v => (cliData.maxF != null && v != null) ? v - cliData.maxF : null;
+      const rL = v => (cliData.minF != null && v != null) ? v - cliData.minF : null;
+      snap.residualNwsHigh = rH(snap.nwsHigh);
+      snap.residualForecastHigh = rH(snap.forecastHigh);
+      snap.residualImpliedHigh = rH(snap.impliedHigh);
+      snap.residualNwsLow = rL(snap.nwsLow);
+      snap.residualForecastLow = rL(snap.forecastLow);
+      snap.residualImpliedLow = rL(snap.impliedLow);
       snap.settled = true;
       snap.settledAtUTC = new Date(now).toISOString();
       await snapshotsStore.setJSON(key, snap);
@@ -480,7 +524,9 @@ export default async () => {
     const snapshotsStore = getStore("prediction_snapshots");
     const captures = await runCapture(predictionsStore, predData, now);
     const settled  = await runSettle(predictionsStore, regimeStore, predData, now);
-    const snapshots = await runSnapshot(snapshotsStore, predData, now);
+    // Market-implied μ/σ for edge measurement — best-effort, never blocks snapshotting.
+    const impliedByName = await fetchKalshiImplied();
+    const snapshots = await runSnapshot(snapshotsStore, predData, now, impliedByName);
     const snapshotsSettled = await runSnapshotSettle(snapshotsStore, predData, now);
     // σ_revision auto-fit runs once per logger cycle (5 min cron) — cheap given
     // the bounded lookback (14 days) and pairwise compute. Falls back silently
