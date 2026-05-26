@@ -137,7 +137,15 @@ const STAKE_BOOST_DOLLAR_CAP = 5.0;
 // per_city_residual_mean_7d_low value in the regime blob (written by
 // logger.js from passive prediction settlement, no betting required) must
 // satisfy |residual| < 1.0°F. Read manually until automation lands.
-const LOW_PAUSED_CITIES = new Set(["San Antonio", "Phoenix"]);
+// 2026-05-26 DATA-DRIVEN FLIP: the corrected intraday-β (commit db722d8) removed the
+// cold-low bias that caused the SATX/PHX pause. Per-city residual (model−actual) over the
+// last ~31 days is now PHX +0.84°F and SATX −0.10°F — both inside the |<1°F| unpause
+// criterion — and both backtest strongly +EV (PHX +62%, SATX +51% at EV≥0.10). So they
+// move OFF the hard-pause to a 0.5× soft-reopen (below). Meanwhile HOU LOW is now the worst
+// LOW city (−40% ROI, 31% win) despite being soft-reopened, so it moves ONTO the hard pause.
+// Reopen at half size because per-city samples are small (n≈12-16) and the live
+// per_city_residual_mean_7d_low can't confirm forward until the logger cron is restored.
+const LOW_PAUSED_CITIES = new Set(["Houston"]);
 
 // HIGH pauses. Currently empty — LA moved to SOFT_REOPEN_DERATE on 2026-05-14 PM
 // because the "≥5 fresh HIGH bets back to mean" criterion was unreachable while
@@ -157,11 +165,13 @@ const HIGH_PAUSED_CITIES = new Set();
 // 1.0°F (manually verified — no automation yet).
 const SOFT_REOPEN_DERATE = new Map([
   ["Los Angeles|high", 0.5],
-  // 2026-05-14 PM: Houston LOW. Lifetime 1W/3L is too thin to justify a hard
-  // pause; half size lets the sample grow toward unpause-decision power.
-  // Promote to 1.0 once 6+ fresh LOW settled bets at non-negative cumulative
-  // P&L, OR per_city_residual_mean_7d_low |<1.0°F|.
-  ["Houston|low", 0.5]
+  // 2026-05-26: SATX/PHX LOW soft-reopened at 0.5× after the β fix removed their cold-low
+  // bias (residuals now |<1°F|) and they backtest +EV (PHX +62%, SATX +51% at EV≥0.10).
+  // Half size until the live per_city_residual_mean_7d_low confirms forward (needs the
+  // logger cron up); promote to 1.0 once 6+ fresh LOW bets at non-negative cumulative P&L.
+  // (HOU LOW moved to the hard-pause list — now the worst LOW city at −40% / 31% win.)
+  ["San Antonio|low", 0.5],
+  ["Phoenix|low", 0.5]
 ]);
 
 // Parse a B-bucket ticker code into integer outcome range. Only B-prefix is
