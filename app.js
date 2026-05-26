@@ -763,6 +763,7 @@ async function loadJackson() {
   const stateEl = document.getElementById("jackson-state");
   const openEl = document.getElementById("jackson-open-wrap");
   const fillsEl = document.getElementById("jackson-fills-wrap");
+  const ordersEl = document.getElementById("jackson-orders-wrap");
   if (!statusEl || !stateEl) return;
   try {
     const r = await fetch("/api/jackson", { cache: "no-store" });
@@ -774,6 +775,7 @@ async function loadJackson() {
       stateEl.innerHTML = "";
       openEl.innerHTML = "";
       fillsEl.innerHTML = "";
+      if (ordersEl) ordersEl.innerHTML = "";
       return;
     }
     if (j.error) {
@@ -794,6 +796,16 @@ async function loadJackson() {
       .filter(p => p._qty !== 0);
     const fills = j.fills?.fills || [];
     const orders = j.orders?.orders || [];
+    // Cash committed to resting BUY limit orders. Kalshi reserves this out of `balance`
+    // until the order fills or cancels, and it isn't in `portfolio_value` yet (no contracts
+    // held), so we add it back below to keep account value stable while orders rest. Sells
+    // reserve contracts, not cash, so they don't count here.
+    const committedResting = orders.reduce((a, o) => {
+      if (o.action && o.action !== "buy") return a;
+      const px = (o.side === "yes" ? o.yes_price : o.no_price) || 0;  // cents
+      const rem = o.remaining_count ?? o.count ?? 0;
+      return a + (px / 100) * rem;
+    }, 0);
     const totalExposure = heldPositions.reduce((a, p) => a + p._exposure, 0);
     const mtmByTicker = j.markToMarket || {};
     const totalUnrealized = j.totalUnrealizedPnl ?? 0;
@@ -813,9 +825,12 @@ async function loadJackson() {
     const totalRealized = j.totalRealizedPnl ?? 0;
     const totalFees = j.totalFeesPaid ?? 0;
     const totalPnl = j.totalPnl ?? (totalRealized + totalUnrealized);
-    const accountValue = balDollars + totalExposure + totalUnrealized;  // cash + at-risk + unrealized
+    // cash + reserved-for-resting-buys + at-risk + unrealized. Including committedResting
+    // keeps account value stable as cash moves into a resting limit and back on fill/cancel.
+    const accountValue = balDollars + committedResting + totalExposure + totalUnrealized;
     stateEl.innerHTML = `
-      <div class="stat"><div class="stat-label">cash balance</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">free cash</div><div class="stat-val warm">$${balDollars.toFixed(2)}</div></div>
+      <div class="stat"><div class="stat-label">in resting orders</div><div class="stat-val ${committedResting > 0 ? '' : 'muted'}">$${committedResting.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">capital at risk</div><div class="stat-val">$${totalExposure.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">account value</div><div class="stat-val ${accountValue >= 20 ? 'warm' : 'cool'}">$${accountValue.toFixed(2)}</div></div>
       <div class="stat"><div class="stat-label">unrealized P&L</div><div class="stat-val ${totalUnrealized >= 0 ? 'warm' : 'cool'}">${fmtSignedDollars(totalUnrealized)}</div></div>
@@ -825,6 +840,38 @@ async function loadJackson() {
       <div class="stat"><div class="stat-label">positions</div><div class="stat-val">${heldPositions.length}</div></div>
       <div class="stat"><div class="stat-label">resting orders</div><div class="stat-val">${orders.length}</div></div>
       <div class="stat"><div class="stat-label">recent fills</div><div class="stat-val">${fills.length}</div></div>`;
+    // Resting limit orders — NOT positions (0 contracts owned until filled). Shown so the
+    // passive LOW limits (which rest up to 15 min) and their committed cash are visible.
+    if (ordersEl) {
+      if (orders.length === 0) {
+        ordersEl.innerHTML = `<p class="muted small">No resting orders.</p>`;
+      } else {
+        const nowMs = Date.now();
+        ordersEl.innerHTML = `<table class="paper-table"><thead><tr>
+          <th>Bucket</th><th>Side</th><th>Action</th><th>Limit</th><th>Contracts</th><th>Committed</th><th>Age</th>
+        </tr></thead><tbody>${orders.map(o => {
+          const side = (o.side || "").toUpperCase();
+          const action = (o.action || "buy").toUpperCase();
+          const px = (o.side === "yes" ? o.yes_price : o.no_price) || 0;  // cents
+          const rem = o.remaining_count ?? o.count ?? 0;
+          const isBuy = (o.action || "buy") === "buy";
+          const committed = isBuy ? (px / 100) * rem : null;
+          const created = o.created_time ? Date.parse(o.created_time)
+                        : (o.created_ts ? o.created_ts * 1000 : null);
+          const ageMin = created ? Math.max(0, Math.round((nowMs - created) / 60000)) : null;
+          const bucket = (o.ticker || "").split("-").pop();
+          return `<tr>
+            <td title="${o.ticker || ''}">${bucket}</td>
+            <td>${side}</td>
+            <td>${action}</td>
+            <td>${px}¢</td>
+            <td>${rem}</td>
+            <td>${committed == null ? '—' : '$' + committed.toFixed(2)}</td>
+            <td>${ageMin == null ? '—' : ageMin + 'm'}</td>
+          </tr>`;
+        }).join("")}</tbody></table>`;
+      }
+    }
     if (heldPositions.length === 0) {
       openEl.innerHTML = `<p class="muted small">No open positions.</p>`;
     } else {
