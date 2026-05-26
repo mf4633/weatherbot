@@ -140,11 +140,12 @@ const STAKE_BOOST_DOLLAR_CAP = 5.0;
 // 2026-05-26 DATA-DRIVEN FLIP: the corrected intraday-β (commit db722d8) removed the
 // cold-low bias that caused the SATX/PHX pause. Per-city residual (model−actual) over the
 // last ~31 days is now PHX +0.84°F and SATX −0.10°F — both inside the |<1°F| unpause
-// criterion — and both backtest strongly +EV (PHX +62%, SATX +51% at EV≥0.10). So they
-// move OFF the hard-pause to a 0.5× soft-reopen (below). Meanwhile HOU LOW is now the worst
-// LOW city (−40% ROI, 31% win) despite being soft-reopened, so it moves ONTO the hard pause.
-// Reopen at half size because per-city samples are small (n≈12-16) and the live
-// per_city_residual_mean_7d_low can't confirm forward until the logger cron is restored.
+// criterion — and both backtest strongly +EV (PHX +62%, SATX +51% at EV≥0.10), BEATING
+// full-size DFW (+45%). So they FULL-reopen (no derate) — data-pure: a 0.5× hedge would
+// single them out for caution the data doesn't support. Meanwhile HOU LOW is now the worst
+// LOW city (−40% ROI, 31% win), so it moves ONTO the hard pause. All per-city LOW edges here
+// are small-n/in-sample; the live per_city_residual_mean_7d_low confirms them forward once
+// the logger cron is restored.
 const LOW_PAUSED_CITIES = new Set(["Houston"]);
 
 // HIGH pauses. Currently empty — LA moved to SOFT_REOPEN_DERATE on 2026-05-14 PM
@@ -164,14 +165,13 @@ const HIGH_PAUSED_CITIES = new Set();
 // to 1.0 once LA's per_city_residual_mean_7d in the regime blob crosses |biasF| <
 // 1.0°F (manually verified — no automation yet).
 const SOFT_REOPEN_DERATE = new Map([
-  ["Los Angeles|high", 0.5],
-  // 2026-05-26: SATX/PHX LOW soft-reopened at 0.5× after the β fix removed their cold-low
-  // bias (residuals now |<1°F|) and they backtest +EV (PHX +62%, SATX +51% at EV≥0.10).
-  // Half size until the live per_city_residual_mean_7d_low confirms forward (needs the
-  // logger cron up); promote to 1.0 once 6+ fresh LOW bets at non-negative cumulative P&L.
-  // (HOU LOW moved to the hard-pause list — now the worst LOW city at −40% / 31% win.)
-  ["San Antonio|low", 0.5],
-  ["Phoenix|low", 0.5]
+  // 2026-05-26 (data-pure): SATX/PHX LOW run FULL — not derated. Their corrected-β residuals
+  // are inside the |<1°F| unpause criterion (PHX +0.84, SATX −0.10) and they backtest
+  // +62%/+51% ROI, BEATING full-size DFW (+45%). A 0.5× hedge would single them out for
+  // caution the data doesn't support (every per-city LOW edge here is equally small-n /
+  // in-sample). HOU LOW is hard-paused (−40% / 31% win, the one decisively-negative city).
+  // LA|high stays derated (separate 2026-05-14 HIGH reopen — unchanged, no new data).
+  ["Los Angeles|high", 0.5]
 ]);
 
 // Parse a B-bucket ticker code into integer outcome range. Only B-prefix is
