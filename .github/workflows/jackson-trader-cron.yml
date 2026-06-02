@@ -1,14 +1,13 @@
 name: Jackson trader cron
 
-# Netlify's scheduled-function cron was firing this only every few HOURS instead of
-# every 5 min (observed 2026-06-02: trader_logs/prediction_snapshots both starved),
-# which left the bot effectively offline and stalled the calibration loop the trader
-# gate depends on. GitHub Actions is the sole scheduler for jackson_trader now — the
-# Netlify schedule was removed from netlify.toml to avoid double-fire (two concurrent
-# runs could both place the same bet before either records it to the ledger).
+# MANUAL BACKSTOP ONLY (workflow_dispatch). Do NOT add a `schedule:` here — GitHub
+# Actions cannot hold a */5 cadence (its scheduled runs are coalesced/delayed by hours;
+# the daily snapshot crons in this repo fire 4-5h late, proving the point). jackson_trader
+# is scheduled by Netlify (netlify.toml, */5); this workflow exists only to fire a cycle
+# on demand (e.g. after a deploy, or to verify the gate). A clean git deploy re-registers
+# Netlify's scheduled functions — that, not GH Actions, is the fix for the every-few-hours
+# starvation that came from CLI-deploy drift.
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 # Never let two trader runs overlap (a slow run + the next tick = double placement risk).

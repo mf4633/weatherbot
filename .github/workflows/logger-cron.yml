@@ -1,12 +1,10 @@
 name: Logger cron
 
-# Settles predictions + writes actuals (incl. the new pred.actualLow that revives the
-# LOW calibration loop). GitHub Actions backstop because Netlify's scheduler was firing
-# this only every few hours. Idempotent (settle is a no-op once settled), so the Netlify
-# schedule is kept too — double-fire here is harmless, redundancy buys reliability.
+# MANUAL BACKSTOP ONLY (workflow_dispatch). Settles predictions + writes actuals (incl.
+# the new pred.actualLow that revives the LOW calibration loop). Scheduling is Netlify's
+# job (netlify.toml, */5); GitHub Actions can't hold a sub-hourly cadence, so no `schedule:`
+# here. Fire on demand to force a settle pass (e.g. to seed actualLow after deploy).
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 concurrency:

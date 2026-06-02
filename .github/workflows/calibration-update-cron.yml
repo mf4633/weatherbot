@@ -1,14 +1,12 @@
 name: Calibration update cron
 
-# Recomputes calibration_state (per-side σ scale + Student-t predictive params + the
-# eligible/n liveness counters the trader gate reads). CRITICAL for the gate: if this
-# blob goes older than CAL_MAX_AGE_MIN (180), jackson_trader abstains on BOTH sides.
-# Netlify was firing it only every few hours → blob went 13h stale → gate would pause
-# everything. GitHub Actions backstop at the same */30 cadence; idempotent, so the
-# Netlify schedule is kept too.
+# MANUAL BACKSTOP ONLY (workflow_dispatch). Recomputes calibration_state (per-side σ scale
+# + Student-t predictive params + the eligible/n liveness counters the trader gate reads).
+# CRITICAL for the gate: if this blob goes older than CAL_MAX_AGE_MIN (180), jackson_trader
+# abstains on BOTH sides. Scheduling is Netlify's job (netlify.toml, */30) — GitHub Actions
+# can't hold */30, so no `schedule:` here. Fire on demand to refresh the blob immediately
+# (e.g. right after a deploy, to un-pause the gate without waiting for the Netlify tick).
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch: {}
 
 concurrency:
