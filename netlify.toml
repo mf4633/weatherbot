@@ -8,8 +8,14 @@
 [functions."jackson_trader"]
   schedule = "*/5 * * * *"
 
+# 2026-06-02: cut scheduled-function load to test whether Netlify's cron throttling
+# (firing */5 fns only every few hours) is invocation-budget driven. jackson_react was
+# */1 (~1440/day, ~65% of all scheduled fires) — by far the biggest hog. At */5 it's a
+# redundant backstop to jackson_trader's own */5 sell loop (its fast-sell value was
+# already dead under the throttle anyway). Drop to */3 instead of */5 if fast-sell needs
+# restoring once the scheduler is healthy.
 [functions."jackson_react"]
-  schedule = "*/1 * * * *"
+  schedule = "*/5 * * * *"
 
 [functions."jackson_rain_trader"]
   schedule = "7,37 * * * *"
@@ -17,20 +23,20 @@
 [functions."logger"]
   schedule = "*/5 * * * *"
 
+# combo is a paper-only meta-strategy — hourly is plenty (was */30).
 [functions."combo_trader"]
-  schedule = "*/30 * * * *"
+  schedule = "0 * * * *"
 
-[functions."balance_snapshot"]
-  schedule = "0 0 * * *"
-
-[functions."combo_balance_snapshot"]
-  schedule = "0 0 * * *"
+# balance_snapshot + combo_balance_snapshot run daily via GitHub Actions
+# (.github/workflows/{balance,combo}-snapshot-cron.yml), so their Netlify schedules
+# were redundant and are removed here. The functions stay HTTP-invocable.
 
 [functions."calibration_update"]
   schedule = "*/30 * * * *"
 
+# pWin calibration drifts slowly — hourly is enough (was */30).
 [functions."pwin_calibration_fit"]
-  schedule = "*/30 * * * *"
+  schedule = "0 * * * *"
 
 [[edge_functions]]
   path = "/*"
