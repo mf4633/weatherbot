@@ -149,6 +149,10 @@ const CITY_TZ_FOR_PEAK = new Map([
   ["Denver","America/Denver"], ["Washington DC","America/New_York"],
   ["Boston","America/New_York"], ["Asheville","America/New_York"],
 ]);
+// HIGH near-peak window lower bound (local hour). Peak ≈ 15:00 local, so localHour 11
+// ≈ hrsToPeak 4 — the early edge of the backtest-validated noon cell (β≥0.61). Combined
+// with the existing localHour>=14 post-peak cut, HIGH trades only in [11,14) local.
+const HIGH_NEAR_PEAK_LOCAL_MIN = 11;
 const PER_CITY_FRESHNESS_MAX_MIN = 180;
 // Bayesian humility cap on pWin. Anything > 0.95 implies our σ_post collapsed
 // below ~σ_resolution (=1.0°F HIGH, 0.7°F LOW), which physically only happens
@@ -1600,16 +1604,26 @@ export default async () => {
         if (liveLedger.some(e => e.ticker === fullTicker && e.side === b.side && e.concentration_capped)) {
           skipped.push({ ...briefBet(b), reason: "concentration-capped" }); continue;
         }
-        // Time gate (HIGH only): skip post-peak bets — backtested -3.5% ROI at hp<=1
-        // vs +10.9% at noon (full 585-event sample). The Bayesian reason: by 2pm the
-        // market's posterior has converged (Brier 0.072) and beats our overconfident
-        // posterior at any σ. Abstain late instead of recalibrating σ (that path was
-        // backtested and refuted: +9.0% -> +4.0% when σ tightened to residual SD).
+        // Time gate (HIGH only): trade only in the validated NEAR-PEAK window.
+        // Two-sided:
+        //  - LATE cut (localHour >= 14, hp<=1): backtested -3.5% ROI vs +10.9% at noon
+        //    (585-event sample) — by 2pm the market's posterior has converged (Brier
+        //    0.072) and beats our overconfident-σ posterior at any σ. Abstain late
+        //    instead of recalibrating σ (σ-tighten path refuted: +9.0% -> +4.0%).
+        //  - EARLY cut (localHour < 11, hp>~4): 2026-06-02 — far-pre-peak bets are OFF
+        //    the validated cell. The intraday-β correction decays toward morning
+        //    (β 0.73 near peak -> 0.10 at hp8), so morning μ is inaccurate and σ_climb
+        //    is wide; the pooled global calibration scale (~2.78) over-widens these into
+        //    spurious 90%+ NO edges that lost live (project_weatherbot_backtest_vs_live_gap:
+        //    49% backtest vs 18% live). backtest_tpred validates the NOON cell (hp~3-4,
+        //    σ_eff~2.0) at +9-11% ROI — confine live to it. Window = localHour [11,14).
+        //    Follow-up: hour-conditional calibration to re-admit far hours with honest σ.
         if ((b.variable || "high") === "high") {
           const _tz = CITY_TZ_FOR_PEAK.get(b.city);
           if (_tz) {
             const _h = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: _tz, hour: "numeric", hour12: false }).format(new Date()), 10) % 24;
             if (_h >= 14) { skipped.push({ ...briefBet(b), reason: "post-peak-window", localHour: _h, tz: _tz }); continue; }
+            if (_h < HIGH_NEAR_PEAK_LOCAL_MIN) { skipped.push({ ...briefBet(b), reason: "pre-peak-window", localHour: _h, tz: _tz }); continue; }
           }
         }
         // Same-event-same-side stack cap: see heldEventSide construction above.
