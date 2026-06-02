@@ -1,0 +1,37 @@
+name: Jackson trader cron
+
+# Netlify's scheduled-function cron was firing this only every few HOURS instead of
+# every 5 min (observed 2026-06-02: trader_logs/prediction_snapshots both starved),
+# which left the bot effectively offline and stalled the calibration loop the trader
+# gate depends on. GitHub Actions is the sole scheduler for jackson_trader now — the
+# Netlify schedule was removed from netlify.toml to avoid double-fire (two concurrent
+# runs could both place the same bet before either records it to the ledger).
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# Never let two trader runs overlap (a slow run + the next tick = double placement risk).
+concurrency:
+  group: jackson-trader
+  cancel-in-progress: false
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit jackson_trader
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          # --max-time 290 < the 5-min job timeout. A truncated run self-heals:
+          # each buy writes its ledger entry immediately after placement, and the
+          # phantom-reconcile loop runs every cycle, so a cut run just defers work.
+          curl --max-time 290 -sS -u "$BASIC_AUTH" -X POST \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/jackson_trader" \
+            -o /tmp/trader.json -w "HTTP %{http_code}\n" || true
+          jq '{ok, ranAtUTC, cashDollars, equityDollars, cal_blocked, cal_age_min,
+                placed: (.placements | length), sold: (.sales | length),
+                skipped: (.skipped | length)}' /tmp/trader.json 2>/dev/null \
+            || echo "(non-JSON response — likely a Netlify timeout; next cycle retries)"

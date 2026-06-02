@@ -5,8 +5,9 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-[functions."jackson_trader"]
-  schedule = "*/5 * * * *"
+# jackson_trader is scheduled by GitHub Actions (.github/workflows/jackson-trader-cron.yml),
+# NOT here. Netlify's scheduled-function cron was firing it only every few hours (2026-06-02),
+# and a single scheduler avoids double-fire (two concurrent runs double-placing a bet).
 
 [functions."jackson_react"]
   schedule = "*/1 * * * *"

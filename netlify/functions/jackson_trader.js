@@ -80,6 +80,75 @@ const MIN_PRICE = 0.10;
 // fills become probable. SATX bet on 2026-05-06 hit this exact pattern: 7-contract
 // intent at 63¢, 1-share fill, 6 contracts canceled at expiration.
 const MIN_VOLUME = 20;
+// 2026-06-01: CALIBRATION-HEALTH PAUSE GATE. The σ-inflation loop
+// (calibration_update.js → calibration_state blob → kalshi.js σ_eff) is what
+// makes the backtested edge survive live: it's only +EV at σ≈2.5, and the loop
+// widens σ to keep realized stdev(z)≈1. But the loop can silently die — exactly
+// what happened to LOW (predictions blob never carried actualLow → 0 matched
+// bets → inflation_factor stuck at 1.0 → σ≈1.21 → bleed). kalshi.js can't tell a
+// dead loop (factor 1.0 by default) from a genuinely-calibrated one (factor 1.0
+// by computation). So we gate HERE, data-pure: do NOT place new buys on a
+// variable whose calibration we cannot currently CERTIFY. A side is certifiable
+// only if its loop has enough matched bets AND the empirical residual spread is
+// not runaway. Otherwise abstain on that side until the loop recovers — this is
+// the "pause" arm of the gate; the "widen σ" arm lives in calibration_update.
+// 2026-06-01 (Bayesian rework): the n<N and stdev_z>X cliffs were removed.
+// Calibration *uncertainty* now flows into σ via the Student-t posterior
+// predictive (calibration_update emits ν/scale; kalshi.js builds bucket probs
+// from t_ν). A thin or noisy side gets low ν → fat tails → shrunk edges →
+// it self-abstains through the existing EV gate, with no discontinuity. What
+// remains here is pure LIVENESS — broken-pipe detection, not a statistical test:
+const CAL_MAX_AGE_MIN  = 180;  // calibration_state older than this = cron dark → abstain (can't trust σ)
+const CAL_BROKEN_JOIN_MIN_ELIGIBLE = 8;  // if >= this many settled bets were join-eligible but 0 matched,
+                                         // the actuals join is broken for that side (the LOW failure mode) → abstain
+// 2026-05-28: CONCENTRATION CAP — no single (ticker,side) position may exceed
+// CONCENTRATION_CAP of equity. Enforced two ways: (1) new-entry stake sizing capped
+// at the limit; (2) sell-loop trim pass sells the excess on any over-concentrated
+// position and marks its ledger entry `concentration_capped:true` so the buy and
+// pyramid loops won't re-grow it ("not repurchased"). Flag clears on settlement.
+const CONCENTRATION_CAP = 0.20;
+// 2026-05-28 AFTER OVERNIGHT BLEED (~$190 lost): two more protections, both added
+// because per-position concentration alone didn't catch the failure mode. The bleed
+// was AGGREGATE — many small (~$5-10) LOW NO positions correlated by the dawn regime,
+// all losing at the trough simultaneously.
+//
+// (a) LOW_HARD_OFF: pending the LOW intraday backtest. HIGH was rigorously validated
+// (intraday-price + Bayesian σ work) and time-gated; LOW has had NO equivalent backtest
+// and was the source of last night's drain. Hard-off until the same analysis is done.
+// To re-enable: complete the LOW intraday backtest + set time gate, then flip false.
+//
+// 2026-05-28 (later): RE-ENABLED. LOW backtest done (_intraday_collect_low.py / 229
+// events / 1,374 pulls / _intraday_analyze_low.py): +65.7% ROI on 257 bets at σ=2.5,
+// edge UNIFORMLY +EV across all decision hours 0-5 (no time gate helps; gating hurts).
+// The live-vs-backtest paradox (live bled, backtest +EV) was diagnosed in `_sigma_audit.py`:
+// production σ for LOW averaged 1.21 with |z|/exp=5.91 — catastrophically overconfident.
+// SIGMA_FLOOR_LOW=2.0 in kalshi.js now floors that. Combined with AGGREGATE_EXPOSURE_CAP=0.50
+// (would have prevented last night's correlated pile-on) and CONCENTRATION_CAP=0.20, the
+// failure mode is structurally blocked. Re-enable accepted with eyes open. Re-flip true
+// if (a) live LOW bleeds again, or (b) σ-audit on new settled LOW bets shows |z|/exp > 2.
+const LOW_HARD_OFF = false;
+// (b) AGGREGATE_EXPOSURE_CAP: total open exposure / equity ceiling. Per-position
+// concentration (above) doesn't help when N small positions all sink together. 50%
+// keeps half of equity in cash reserve. Heuristic — needs its own backtest. Skips new
+// buys (doesn't trim existing) when adding them would push aggregate over the cap.
+const AGGREGATE_EXPOSURE_CAP = 0.50;
+// City -> IANA tz for the HIGH time gate. Backtested in _intraday_analyze_bayes.py
+// (full 585-event sample, 1,679 +EV bets, fixed σ=2.5): post-peak HIGH bets (local
+// hour >= 14, hp <= 1) returned -3.5% ROI vs +10.9% at noon; cutting them lifts
+// overall ROI +9.0%->+11.8% AND total P&L +$60->+$64 (Pareto-improving). The deeper
+// reason is Bayesian: by 2pm the market's posterior has converged to truth (Brier
+// 0.072) and our overconfident-σ posterior loses to it; tightening σ to residuals
+// REFUTED in the same backtest (made it +4.0%, worse). Solution = abstain late, not
+// recalibrate σ. LOW left ungated pending its own intraday backtest.
+const CITY_TZ_FOR_PEAK = new Map([
+  ["New York","America/New_York"], ["Los Angeles","America/Los_Angeles"],
+  ["Chicago","America/Chicago"], ["Houston","America/Chicago"],
+  ["Phoenix","America/Phoenix"], ["Philadelphia","America/New_York"],
+  ["San Antonio","America/Chicago"], ["Dallas-Fort Worth","America/Chicago"],
+  ["Austin","America/Chicago"], ["Seattle","America/Los_Angeles"],
+  ["Denver","America/Denver"], ["Washington DC","America/New_York"],
+  ["Boston","America/New_York"], ["Asheville","America/New_York"],
+]);
 const PER_CITY_FRESHNESS_MAX_MIN = 180;
 // Bayesian humility cap on pWin. Anything > 0.95 implies our σ_post collapsed
 // below ~σ_resolution (=1.0°F HIGH, 0.7°F LOW), which physically only happens
@@ -130,8 +199,18 @@ const STAKE_BOOST_DOLLAR_CAP = 5.0;
 // (+7.7% taker -> -20.5%) -> HELD as taker; we log its would-be limits to measure live AS,
 // then flip VLIM_ARM_HIGH=true once mild. Qualification stays at the ask (unchanged gate),
 // so a posted limit only ever improves an already-+EV entry.
+//
+// 2026-05-27: HIGH ARMED. The "-20.5% under moderate AS" was a MODELED assumption (single
+// price snapshot, no intra-window path). Re-measured with REAL minute candlesticks over the
+// 15-min order window across 349 historical HIGH +EV bets (_high_as_study.mjs): adverse
+// selection is BENIGN, not toxic — maker-filled win% 43 vs taker 42 (no degradation), fill
+// rate 57%, ROI taker +8.1% -> maker-filled +22.0% -> maker→taker-fallback +13.0%. Downside
+// is bounded (unfilled orders expire/fall back to taker = the +8.1% we already get). Caveats:
+// one season, modeled fills (ask-touched-L proxy, so fill rate is optimistic) — but the
+// no-AS-degradation finding is robust to fill-rate optimism. Revert to false if live HIGH
+// maker fills start under-performing taker.
 const VLIM_ARM_LOW    = true;
-const VLIM_ARM_HIGH   = false;   // flip true ONLY after live AS measurement says mild
+const VLIM_ARM_HIGH   = true;    // ARMED 2026-05-27 — real-minute AS study shows benign AS (see above)
 const VLIM_REF_SPREAD = 0.05;    // spread (fraction) at/below which we post at the bid
 const VLIM_EV_FLOOR   = 0.10;    // never post so high that net-of-fee EV drops below this
 // Hard-pause LOW bets where settled-bet evidence is decisive AND a passive
@@ -500,6 +579,14 @@ const PYRAMID_MAX_PRICE     = 0.70;
 const PYRAMID_MARGIN_F      = 1.0;
 const PYRAMID_MAX_CONTRACTS = 5;
 const PYRAMID_MAX_DOLLARS   = 2.0;
+// Max obs-pyramid ADDS per (ticker, side) across the position's life. Each add is
+// already bounded in size (MAX_CONTRACTS/MAX_DOLLARS), but nothing capped the COUNT
+// of adds — so a persistently-qualifying (and, as it turned out, overconfident)
+// posterior could re-add every cycle. On 2026-05-28 it stacked 23 adds into one
+// Chicago LOW-NO as the ask climbed 0.15→0.43; a late-night low then flipped it
+// inside the bucket → a 24× correlated loss pile. Cap the count so a wrong obs
+// anchor can't compound into a concentrated bet.
+const PYRAMID_MAX_ADDS      = 3;
 
 // LOW-NO-near-strike gate (2026-05-11). T-tail NO bets in southern cities lost
 // 8 of last 10 at strikes within 1°F of model μ — pattern: μ=70.9 σ=1.8, strike
@@ -792,16 +879,39 @@ export default async () => {
   const ledgerStore = getStore("jackson_open_bets");
   const settledStore = getStore("jackson_settled_bets");
   const cooldownStore = getStore("jackson_cooldown");
+  const calibrationStore = getStore("calibration_state");
   try {
     // 1. Read live state from Kalshi + bot ledger + cooldown map.
-    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }, cooldownRaw] = await Promise.all([
+    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }, cooldownRaw, calState] = await Promise.all([
       getBalance(),
       getPositions(),
       fetchInternal("/api/kalshi"),
       fetchInternal("/api/weather"),
       ledgerStore.list().catch(() => ({ blobs: [] })),
-      cooldownStore.get("map.json", { type: "json" }).catch(() => ({}))
+      cooldownStore.get("map.json", { type: "json" }).catch(() => ({})),
+      calibrationStore.get("current.json", { type: "json" }).catch(() => null)
     ]);
+    // Calibration-health gate: certify each side's σ-inflation loop is alive and
+    // sane before allowing new buys on it. See CAL_* constants. A side fails if
+    // its loop has too few matched bets, runaway residual spread, or the
+    // calibration_state blob is stale (cron dark). Returns {ok, reason} per side.
+    const calAgeMin = calState?.updated_at
+      ? Math.round((Date.now() - new Date(calState.updated_at).getTime()) / 60000) : null;
+    const calHealthFor = (variable) => {
+      const v = variable === "low" ? "low" : "high";
+      const s = calState?.[v];
+      // Liveness ONLY. Uncertainty is handled upstream by the Student-t predictive;
+      // here we hard-skip a side only when its calibration loop is DEAD:
+      if (!calState || !s) return { ok: false, reason: "cal-blob-missing" };
+      if (calAgeMin != null && calAgeMin > CAL_MAX_AGE_MIN)
+        return { ok: false, reason: `cal-stale-${calAgeMin}min` };  // cron dark
+      if ((s.eligible ?? 0) >= CAL_BROKEN_JOIN_MIN_ELIGIBLE && (s.n ?? 0) === 0)
+        return { ok: false, reason: `cal-join-broken-elig${s.eligible}-n0` };  // LOW failure mode
+      return { ok: true, reason: null };
+    };
+    // Surfaced in the run summary (responseBody + trader_logs) so a dead/paused
+    // side is visible at a glance, not buried in per-bet skip reasons.
+    let calBlocked = {};  // variable -> reason; populated in the buy loop below
     // Prune expired cooldown entries. Two key shapes:
     //   "<ticker>-<SIDE>"      → after-sell ticker+side cooldown (TTL = COOLDOWN_MIN)
     //   "cv:<city>:<variable>" → after-buy city+variable cooldown (TTL = BUY_CITYVAR_COOLDOWN_MIN)
@@ -979,6 +1089,8 @@ export default async () => {
       }
     }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
+    // Total open exposure for the aggregate-exposure cap (set near top of file).
+    const currentExposureDollars = positions.reduce((s, p) => s + (p.exposure || 0), 0);
     const botOpenCount = liveLedger.length;
     // Replaces the old "MAX_CONCURRENT - botOpenCount" definition. Reports how many
     // additional bets fit at STAKE_FLOOR with remaining cash — the real binding
@@ -1024,6 +1136,62 @@ export default async () => {
     // winners). ONLY among bot-placed positions.
     if (kalshiData?.cities) {
       const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
+      // 2026-05-28: CONCENTRATION TRIM PASS — cap any held position whose Kalshi
+      // exposure exceeds CONCENTRATION_CAP * equityDollars. Sells the excess at the
+      // current bid and marks the ledger entry `concentration_capped:true` so the
+      // buy/pyramid loops won't re-grow it. Runs BEFORE the main sell loop and
+      // updates cached p.qty/p.exposure so downstream logic sees the reduced pos.
+      // cooldownMap check prevents double-trim within COOLDOWN_MIN of a prior trim.
+      if (equityDollars > 0) {
+        const concCap = CONCENTRATION_CAP * equityDollars;
+        for (const p of positions) {
+          if (p.qty === 0) continue;
+          const side = p.qty > 0 ? "YES" : "NO";
+          if (!botPlacedKeys.has(botKey(p.ticker, side))) continue;
+          if (cooldownMap[botKey(p.ticker, side)]) continue;
+          if (p.exposure <= concCap) continue;
+          const qty = Math.abs(p.qty);
+          const excess = p.exposure - concCap;
+          const contractsToSell = Math.min(qty, Math.ceil(qty * excess / p.exposure));
+          if (contractsToSell < 1) continue;
+          // Find current bid for our side from kalshi snapshot.
+          let bid = null;
+          for (const c of kalshiData.cities) {
+            for (const variant of [c.highBuckets, c.lowBuckets]) {
+              if (!variant) continue;
+              const found = variant.find(b => b.ticker === p.ticker);
+              if (found) { bid = side === "YES" ? found.yes_bid : found.no_bid; break; }
+            }
+            if (bid != null) break;
+          }
+          if (bid == null || bid <= 0) continue;
+          const sellCents = Math.max(1, Math.round(bid * 100));
+          const res = isDryRun
+            ? { ok: true, body: { dryRun: true } }
+            : await placeSellOrder(p.ticker, side, contractsToSell, sellCents);
+          sales.push({ ticker: p.ticker, side, count: contractsToSell, sellPriceCents: sellCents,
+                       dryRun: isDryRun, ok: res.ok, reason: "concentration-trim",
+                       exposureBefore: Math.round(p.exposure * 100) / 100,
+                       equityNow: Math.round(equityDollars * 100) / 100,
+                       capPct: CONCENTRATION_CAP });
+          if (!res.ok) { errors.push({ where: "concentration-trim", ticker: p.ticker, response: res.body }); continue; }
+          if (!isDryRun) {
+            cooldownMap[botKey(p.ticker, side)] = new Date().toISOString();
+            // Flag matching live ledger entries so buy/pyramid skip them until settle.
+            for (const entry of liveLedger) {
+              if (entry.ticker === p.ticker && entry.side === side && !entry.concentration_capped) {
+                entry.concentration_capped = true;
+                await ledgerStore.setJSON(`${entry.betId}.json`, entry)
+                  .catch(err => errors.push({ where: "concentration-flag", betId: entry.betId, err: String(err) }));
+              }
+            }
+            // Update cached qty/exposure so downstream loops don't double-act.
+            const newQty = side === "YES" ? p.qty - contractsToSell : p.qty + contractsToSell;
+            p.exposure = Math.max(0, p.exposure * (1 - contractsToSell / qty));
+            p.qty = newQty;
+          }
+        }
+      }
       for (const p of positions) {
         if (p.qty === 0) continue;
         const ticker = p.ticker;
@@ -1156,6 +1324,16 @@ export default async () => {
         // Don't pyramid what we just sold this cycle — Kalshi eventual-consistency
         // could re-open the same flip the sell loop was trying to close.
         if (cycleSellKeys.has(botKey(ticker, side))) continue;
+        // Concentration-cap: don't pyramid into a position that's been trimmed for
+        // over-concentration ("not repurchased" — flag clears at settlement).
+        if (liveLedger.some(e => e.ticker === ticker && e.side === side && e.concentration_capped)) continue;
+        // Per-position pyramid-add cap (2026-05-29). Prior adds are persisted as
+        // pyramidAdd ledger entries; count them and stop once we've added
+        // PYRAMID_MAX_ADDS times to this (ticker, side). Prevents the unbounded
+        // same-ticker stacking that produced the 2026-05-28 Chicago loss pile.
+        const priorPyramidAdds = liveLedger.filter(
+          e => e.ticker === ticker && e.side === side && e.pyramidAdd).length;
+        if (priorPyramidAdds >= PYRAMID_MAX_ADDS) continue;
 
         // Find the bucket in kalshi snapshot for current ask + numeric bounds.
         let bucket = null, citySide = null, variable = null;
@@ -1313,9 +1491,6 @@ export default async () => {
       }
       // Threshold gate: high-conviction floor on net edge AND halfKelly. Sorted by
       // halfKelly desc upstream, so iterating fills highest-conviction first.
-      const qualifying = (kalshiData.topBets || []).filter(b =>
-        b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
-        && (b.volume == null || b.volume >= MIN_VOLUME));
       // Skip-reason log so we can see exactly how high vs low were weighed each run.
       // Listed in priority order matching the iteration below.
       const briefBet = b => ({ city: b.city, variable: b.variable || "high", bucket: b.bucket,
@@ -1324,6 +1499,18 @@ export default async () => {
                                halfKelly: Math.round(b.halfKelly*1000)/1000,
                                pWin: b.p_model != null ? Math.round(b.p_model*1000)/1000 : null,
                                price: b.price });
+      // Calibration-health pause: drop candidates on any side we can't certify as
+      // calibrated, and surface exactly why in the skip log (so a dead loop is
+      // visible immediately, not diagnosed weeks later from realized PnL).
+      for (const v of ["high", "low"]) { const h = calHealthFor(v); if (!h.ok) calBlocked[v] = h.reason; }
+      for (const b of (kalshiData.topBets || [])) {
+        const h = calHealthFor(b.variable || "high");
+        if (!h.ok) skipped.push({ ...briefBet(b), reason: h.reason });
+      }
+      const qualifying = (kalshiData.topBets || []).filter(b =>
+        b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
+        && (b.volume == null || b.volume >= MIN_VOLUME)
+        && calHealthFor(b.variable || "high").ok);
       let placed = 0;
       // `committed` is declared outside the buy loop (see line ~736) so the
       // pyramid loop (2b) can share the cash-budget accounting.
@@ -1375,6 +1562,10 @@ export default async () => {
       for (const b of qualifying) {
         // 20-bet cap removed 2026-05-13 — cash budget is the real constraint.
         if (cashDollars - committed < STAKE_FLOOR) { skipped.push({ ...briefBet(b), reason: "out-of-cash" }); continue; }
+        if (b.variable === "low" && LOW_HARD_OFF) {
+          skipped.push({ ...briefBet(b), reason: "low-hard-off-pending-backtest" });
+          continue;
+        }
         if (b.variable === "low" && LOW_PAUSED_CITIES.has(b.city)) {
           skipped.push({ ...briefBet(b), reason: "low-city-paused" });
           continue;
@@ -1405,6 +1596,22 @@ export default async () => {
         const dedupKey = botKey(fullTicker, b.side);
         if (heldKey.has(dedupKey)) { skipped.push({ ...briefBet(b), reason: "already-held" }); continue; }
         if (cooldownMap[dedupKey]) { skipped.push({ ...briefBet(b), reason: "in-cooldown" }); continue; }
+        // Concentration-cap: don't re-buy a position that was trimmed for over-concentration.
+        if (liveLedger.some(e => e.ticker === fullTicker && e.side === b.side && e.concentration_capped)) {
+          skipped.push({ ...briefBet(b), reason: "concentration-capped" }); continue;
+        }
+        // Time gate (HIGH only): skip post-peak bets — backtested -3.5% ROI at hp<=1
+        // vs +10.9% at noon (full 585-event sample). The Bayesian reason: by 2pm the
+        // market's posterior has converged (Brier 0.072) and beats our overconfident
+        // posterior at any σ. Abstain late instead of recalibrating σ (that path was
+        // backtested and refuted: +9.0% -> +4.0% when σ tightened to residual SD).
+        if ((b.variable || "high") === "high") {
+          const _tz = CITY_TZ_FOR_PEAK.get(b.city);
+          if (_tz) {
+            const _h = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: _tz, hour: "numeric", hour12: false }).format(new Date()), 10) % 24;
+            if (_h >= 14) { skipped.push({ ...briefBet(b), reason: "post-peak-window", localHour: _h, tz: _tz }); continue; }
+          }
+        }
         // Same-event-same-side stack cap: see heldEventSide construction above.
         const eventSideKey = `${eventTicker}:${b.side?.toLowerCase()}`;
         if (heldEventSide.has(eventSideKey)) {
@@ -1624,8 +1831,19 @@ export default async () => {
         const effectiveHalfKelly = b.halfKelly * coverageDeRate * softReopen;
         const remaining = cashDollars - committed;
         const stake_dollars = Math.max(STAKE_FLOOR,
-          Math.min(stakeCeilDollars, effectiveHalfKelly * cashDollars, remaining));
+          Math.min(stakeCeilDollars, effectiveHalfKelly * cashDollars, remaining,
+                   CONCENTRATION_CAP * equityDollars));   // belt for concentration cap
         if (stake_dollars < STAKE_FLOOR) break;
+        // Aggregate exposure cap: skip if adding this bet would push TOTAL open
+        // exposure (already-held + this cycle's commits + new stake) over the cap.
+        // Continue (not break) so subsequent smaller bets get a chance.
+        if (currentExposureDollars + committed + stake_dollars > AGGREGATE_EXPOSURE_CAP * equityDollars) {
+          skipped.push({ ...briefBet(b), reason: "aggregate-cap",
+                         currentExposure: Math.round(currentExposureDollars * 100) / 100,
+                         committed: Math.round(committed * 100) / 100,
+                         capDollars: Math.round(AGGREGATE_EXPOSURE_CAP * equityDollars * 100) / 100 });
+          continue;
+        }
         // Variable-limit (maker) pricing — see VLIM_* config. LOW is armed (post a
         // liquidity-scaled limit BELOW the ask to capture spread); HIGH is held as taker
         // (crosses to the ask) until live data measures its adverse selection. b.price is
@@ -1724,6 +1942,7 @@ export default async () => {
       spareCapacity,
       stake_floor: STAKE_FLOOR,
       stake_ceil_dollars: stakeCeil,
+      cal_blocked: calBlocked, cal_age_min: calAgeMin,
       sales, placements, pyramids, skipped, errors
     };
 
@@ -1737,6 +1956,7 @@ export default async () => {
         stake_mode: stakeBoosted ? "boost" : "normal",
         sigma_margin_z: sigmaBucketMarginZ,
         spareCapacity, stake_ceil: stakeCeil,
+        cal_blocked: calBlocked, cal_age_min: calAgeMin,
         placements: placements.map(p => ({
           ticker: p.ticker, side: p.side, count: p.count, priceCents: p.priceCents,
           city: p.city, variable: p.variable, bucket: p.bucket, bucketCode: p.bucketCode,

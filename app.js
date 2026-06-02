@@ -181,7 +181,7 @@ function renderFreshness(f) {
 // didn't log it in `skipped` (the trader pre-filters by EV/Kelly/price/volume
 // before the skip-loop). Update both files when these change.
 const TEMP_GATES = {
-  MIN_EDGE_HIGH: 0.17,
+  MIN_EDGE_HIGH: 0.25,              // 2026-05-27: re-sync to trader MIN_EDGE_HIGH (bumped 0.17→0.25 on 2026-05-26). Stale 0.17 here was showing 17-25¢ HIGH candidates as "pending next cycle" forever, since the trader's qualifying filter dropped them below the skip-log.
   MIN_EDGE_LOW: 0.25,
   MIN_HALF_KELLY: 0.15,
   MIN_PRICE: 0.10,
@@ -237,6 +237,18 @@ const REASON_LABEL = {
 let TEMP_DECISIONS = { map: {}, stamp: null, error: null };
 let RAIN_DECISIONS = { map: {}, stamp: null, error: null };
 
+// Live Kalshi account index, populated by loadJackson(). Lets renderDecisionCell
+// tell a CONFIRMED fill apart from an accepted-but-unfilled limit order. Keys are
+// `${fullTicker}__${SIDE}` (side uppercase). `loaded` stays false until /api/jackson
+// has returned successfully — while false, decision cells fall back to the raw
+// "purchased" label rather than mislabeling everything as unfilled.
+let JACKSON_LIVE = { held: new Set(), filled: new Set(), resting: new Set(), loaded: false };
+const liveKey = (ticker, side) => `${ticker}__${String(side || "").toUpperCase()}`;
+// Last candidate bets rendered by loadKalshi, so loadJackson can re-render the
+// decision cells once the live account index lands (the two loaders are async and
+// uncoordinated; loadKalshi often finishes first on a cold page load).
+let LAST_TEMP_BETS = { high: [], low: [] };
+
 function pickLatestActiveCycle(entries) {
   // Just take the newest cycle. Empty placements+skipped is itself informative —
   // means every candidate failed the pre-filter (which we'll classify locally
@@ -278,6 +290,13 @@ async function loadTraderDecisions() {
           softReopen: p.softReopen ?? null,
           reason: p.ok ? null : "kalshi-rejected",
           detail: p.ok ? null : "order not accepted",
+          // Full Kalshi ticker + side so renderDecisionCell can reconcile the
+          // "bought" status (= order ACCEPTED, res.ok) against the live account.
+          // A limit order can be accepted yet rest unfilled and expire (15-min TTL),
+          // which the reconcile loop later deletes as a phantom — but this frozen
+          // cycle-log row would otherwise keep claiming "purchased $X" forever.
+          ticker: p.ticker || null,
+          side,
           cycleAtUTC: cycleAt
         };
         if (p.city) TEMP_DECISIONS.map[`${p.city}|${variable}|${code}|${side}`] = entry;
@@ -430,14 +449,38 @@ function ageTagFromCycle(cycleAtUTC) {
 
 // Compose the inline <span class="decision …"> cell. Decision = matched cycle log
 // entry if present, else local pre-filter classification.
-function renderDecisionCell(matched, preFilter) {
+function renderDecisionCell(matched, preFilter, traderStamp) {
   if (matched) {
     if (matched.status === "bought") {
       const softTag = matched.softReopen != null && matched.softReopen < 1.0
         ? ` (½ soft-reopen)` : "";
-      const text = `purchased $${(matched.stake ?? 0).toFixed(2)}${softTag}`;
-      const title = `${matched.count} contracts @ ${matched.priceCents}¢ · pWin ${(matched.pWin*100||0).toFixed(1)}% · half-Kelly ${(matched.halfKelly*100||0).toFixed(1)}% · ev +$${(matched.ev||0).toFixed(2)}${matched.softReopen != null ? " · soft-reopen × " + matched.softReopen : ""}`;
-      return `<span class="decision bought" title="${escapeAttr(title)}">${text}</span>`;
+      const stakeStr = `$${(matched.stake ?? 0).toFixed(2)}`;
+      const baseTitle = `${matched.count} contracts @ ${matched.priceCents}¢ · pWin ${(matched.pWin*100||0).toFixed(1)}% · half-Kelly ${(matched.halfKelly*100||0).toFixed(1)}% · ev +$${(matched.ev||0).toFixed(2)}${matched.softReopen != null ? " · soft-reopen × " + matched.softReopen : ""}`;
+      // "bought" means Kalshi ACCEPTED the limit order (res.ok), NOT that it filled.
+      // Reconcile against the live account: only call it "purchased" if we actually
+      // hold the position or have a buy fill on it. An accepted order can rest unfilled
+      // and expire (15-min TTL), leaving a phantom that shows no position in the account.
+      const key = matched.ticker ? liveKey(matched.ticker, matched.side) : null;
+      const confirmed = key && (JACKSON_LIVE.held.has(key) || JACKSON_LIVE.filled.has(key));
+      const resting = key && JACKSON_LIVE.resting.has(key);
+      // Only downgrade the label when we have live data AND the ticker is identifiable.
+      // Without that, fall back to the original "purchased" text to avoid false negatives.
+      if (JACKSON_LIVE.loaded && key && !confirmed) {
+        const ageMin = matched.cycleAtUTC
+          ? (Date.now() - new Date(matched.cycleAtUTC).getTime()) / 60000 : Infinity;
+        let label, sub;
+        if (resting) {
+          label = `ordered ${stakeStr}`; sub = "resting · unfilled";
+        } else if (ageMin > 15) {           // past the 15-min limit-order expiration
+          label = `ordered ${stakeStr}`; sub = "expired · unfilled";
+        } else {
+          label = `ordered ${stakeStr}`; sub = "awaiting fill";
+        }
+        const title = `Order accepted but no position/fill found in the live account — ${sub}. ${baseTitle}`;
+        return `<span class="decision unfilled" title="${escapeAttr(title)}">${label} <span class="muted small">(${sub})</span></span>`;
+      }
+      const text = `purchased ${stakeStr}${softTag}`;
+      return `<span class="decision bought" title="${escapeAttr(baseTitle)}">${text}</span>`;
     }
     if (matched.status === "rejected") {
       const text = "Kalshi rejected";
@@ -469,10 +512,25 @@ function renderDecisionCell(matched, preFilter) {
     const title = detailParts.length ? `${fullLabel} — ${detailParts.join(" · ")}` : fullLabel;
     return `<span class="decision skipped" title="${escapeAttr(title)}">${fullLabel}</span>`;
   }
-  const text = preFilter.status === "below" ? preFilter.reason : "pending next cycle";
-  const cls = preFilter.status === "below" ? "below" : "pending";
-  const title = preFilter.reason;
-  // Truncate long below-floor reasons for inline display; full text in tooltip.
+  // 2026-05-28: distinguish genuine "pending next cycle" from "trader is paused / dead /
+  // out of cash so no cycle is coming". If the latest trader cycle stamp is > 10 min old
+  // (cron is 5min, so 10min = at least one missed cycle), label as paused, not pending.
+  // This stops the dashboard from claiming a queued decision when in fact no cycles are
+  // running. Caller passes the relevant store's .stamp (TEMP_DECISIONS or RAIN_DECISIONS).
+  let text, cls, title;
+  if (preFilter.status === "below") {
+    text = preFilter.reason; cls = "below"; title = preFilter.reason;
+  } else {
+    const stampAge = traderStamp ? (Date.now() - new Date(traderStamp).getTime()) / 60000 : Infinity;
+    if (stampAge > 10) {
+      text = Number.isFinite(stampAge) ? `trader paused (${Math.round(stampAge)}m stale)` : "trader paused (no recent cycle)";
+      cls = "below";   // visually de-emphasize — this is NOT a queued decision
+      title = `Last trader cycle ${Number.isFinite(stampAge) ? Math.round(stampAge)+' min ago' : 'unknown'}. Disarmed (KALSHI_TRADING_LIVE), out of cash, or cron stalled.`;
+    } else {
+      text = "pending next cycle"; cls = "pending"; title = preFilter.reason;
+    }
+  }
+  // Truncate long reasons for inline display; full text in tooltip.
   const displayText = text.length > 36 ? text.slice(0, 33) + "…" : text;
   return `<span class="decision ${cls}" title="${escapeAttr(title)}">${displayText}</span>`;
 }
@@ -502,7 +560,7 @@ function renderKalshiRows(bets, tbodyId, colspan) {
       // SOFT_REOPEN cities (e.g. LA HIGH) fall through and stay "pending — ½ soft-reopen"
       // as set by classifyTempPreFilter above.
     }
-    const decisionCell = renderDecisionCell(matched, pre);
+    const decisionCell = renderDecisionCell(matched, pre, TEMP_DECISIONS.stamp);
     return `
       <tr>
         <td>${i + 1}</td>
@@ -535,6 +593,7 @@ async function loadKalshi() {
     const top = j.topBets || [];
     const highBets = top.filter(b => b.variable === "high" || !b.variable).slice(0, 15);
     const lowBets = top.filter(b => b.variable === "low").slice(0, 15);
+    LAST_TEMP_BETS = { high: highBets, low: lowBets };  // cache for loadJackson re-render
     renderKalshiRows(highBets, "kalshi-rows-high", 12);
     renderKalshiRows(lowBets, "kalshi-rows-low", 12);
   } catch (e) {
@@ -628,7 +687,7 @@ function renderKalshiRainRows(bets) {
     const evPerDay = b.evPerDay != null ? b.evPerDay : (b.ev_net / Math.max(1, b.holdingDays || 1));
     const matched = lookupRainDecision(b);
     const pre = classifyRainPreFilter(b);
-    const decisionCell = renderDecisionCell(matched, pre);
+    const decisionCell = renderDecisionCell(matched, pre, RAIN_DECISIONS.stamp);
     return `
       <tr>
         <td>${i + 1}</td>
@@ -796,6 +855,31 @@ async function loadJackson() {
       .filter(p => p._qty !== 0);
     const fills = j.fills?.fills || [];
     const orders = j.orders?.orders || [];
+
+    // Build the live-account index so the candidate decision cells can tell a
+    // confirmed fill apart from an accepted-but-unfilled limit order. Side mapping:
+    //   position_fp > 0 → long YES, < 0 → long NO (Kalshi convention).
+    //   fills carry explicit side ("yes"/"no") and action ("buy"/"sell").
+    {
+      const held = new Set(), filled = new Set(), resting = new Set();
+      for (const p of heldPositions) {
+        held.add(liveKey(p.ticker, p._qty > 0 ? "YES" : "NO"));
+      }
+      for (const f of fills) {
+        if ((f.action || "buy") === "buy") filled.add(liveKey(f.ticker, f.side));
+      }
+      for (const o of orders) {
+        if (o.action && o.action !== "buy") continue;
+        const rem = o.remaining_count ?? o.count ?? 0;
+        if (rem > 0) resting.add(liveKey(o.ticker, o.side));
+      }
+      JACKSON_LIVE = { held, filled, resting, loaded: true };
+      // Re-render the candidate tables now that the live index is fresh, so the
+      // reconciled labels appear without waiting for loadKalshi's next 120-s tick.
+      if (LAST_TEMP_BETS.high.length) renderKalshiRows(LAST_TEMP_BETS.high, "kalshi-rows-high", 12);
+      if (LAST_TEMP_BETS.low.length)  renderKalshiRows(LAST_TEMP_BETS.low, "kalshi-rows-low", 12);
+    }
+
     // Cash committed to resting BUY limit orders. Kalshi reserves this out of `balance`
     // until the order fills or cancels, and it isn't in `portfolio_value` yet (no contracts
     // held), so we add it back below to keep account value stable while orders rest. Sells

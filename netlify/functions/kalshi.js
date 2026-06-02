@@ -36,6 +36,58 @@ function normCdf(x) {
   return x > 0 ? 1 - p : p;
 }
 
+// --- Student-t CDF, for the Bayesian posterior-predictive bucket probabilities.
+// The calibration loop (calibration_update.js) emits (ν, scale); the outcome's
+// posterior predictive is Student-t_ν, so bucket probabilities integrate
+// parameter (σ) uncertainty: small ν → fat tails → humble probabilities.
+// lgamma (Lanczos), regularized incomplete beta I_x(a,b) (Lentz continued
+// fraction, NR §6.4), then the t-CDF. ν=Infinity falls back to normCdf exactly.
+function lgamma(z) {
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
+  z -= 1; let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+function betacf(a, b, x) {
+  const FPMIN = 1e-30, EPS = 1e-12;
+  const qab = a + b, qap = a + 1, qam = a - 1;
+  let c = 1, d = 1 - qab * x / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d; let h = d;
+  for (let m = 1; m <= 300; m++) {
+    const m2 = 2 * m;
+    let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; h *= d * c;
+    aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; const del = d * c; h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return h;
+}
+function betai(a, b, x) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b)
+                      + a * Math.log(x) + b * Math.log(1 - x));
+  return x < (a + 1) / (a + b + 2)
+    ? bt * betacf(a, b, x) / a
+    : 1 - bt * betacf(b, a, 1 - x) / b;
+}
+function studentTCdf(t, nu) {
+  if (!Number.isFinite(nu) || nu > 1e6) return normCdf(t);
+  const x = nu / (nu + t * t);
+  const ib = 0.5 * betai(nu / 2, 0.5, x);
+  return t > 0 ? 1 - ib : ib;
+}
+
 // Format today's local date in MMMddyy → kalshi event suffix "26APR30".
 // We use the city's local date because the Kalshi event closes at midnight local.
 function kalshiDateSuffix(date, tz) {
@@ -107,6 +159,23 @@ async function fetchKalshiMarkets(eventTicker) {
 // Retention 40% (59/148 bets) — well above "never play, never lose" floor.
 const SIGMA_IRREDUCIBLE_F = 1.3;
 
+// 2026-05-28 σ-AUDIT FLOORS. Audit of 204 live settled bets vs ACIS ground truth
+// (_sigma_audit.py): production σ is overconfident — HIGH |z|/exp = 1.64 (mean σ
+// used 2.44, range 0.40-7.05); LOW |z|/exp = 5.91 (mean σ used 1.21, range
+// 0.40-2.53), cov68 only 32%. The σ_revision (5/15) did NOT fix LOW (post-5/15
+// ratio still 3.4×). The hierarchical formula produces sigmaEff = √(σ_ens² + 1.3²)
+// × per-city calibration; the per-city Kalman calibration multiplier can scale
+// the result BELOW physically-defensible widths (some bets used σ=0.40). Apply a
+// hard FLOOR per variable so calibration can refine UP but never below the
+// residual SD the data justifies.
+//   HIGH 2.5 = the σ that gave +9.0% backtest ROI (_intraday_analyze_bayes.py); also
+//   ≈ mean of σ_h fit (2.44 → 1.54 by hour-to-peak from 5yr data).
+//   LOW  2.0 = ≈ calibrated σ_h max (2.00 → 1.54 by hour-to-trough); LOW backtest
+//   at σ=2.5 gave +65.7% ROI, so floor of 2.0 stays inside the validated regime.
+// Strictly conservative: floors only WIDEN σ; never tighten.
+const SIGMA_FLOOR_HIGH = 2.5;
+const SIGMA_FLOOR_LOW  = 2.0;
+
 // Kalshi fee per $1 staked at a given binary contract price.
 // Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
 // Per $1 staked at price P: fee ≈ 0.07 × (1−P) dollars (continuous approximation).
@@ -160,7 +229,9 @@ function bucketBounds(market) {
 // Truncation:
 //  - lowerFloor: temp >= lowerFloor (e.g., today's HIGH can't be < maxSoFar already observed)
 //  - upperFloor: temp <= upperFloor (e.g., today's LOW can't be > minSoFar already observed)
-function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = null) {
+// `nu` = Student-t degrees of freedom for the posterior predictive (parameter-
+// uncertainty-aware). Omit / Infinity → standard normal (legacy behavior).
+function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = null, nu = Infinity) {
   let effLo = loInt === -Infinity ? -Infinity : loInt - 0.5;
   let effHi = hiInt === Infinity ? Infinity : hiInt + 0.5;
   if (lowerFloor != null) {
@@ -171,8 +242,8 @@ function bucketProb(mean, std, loInt, hiInt, lowerFloor = null, upperFloor = nul
     if (effLo > upperFloor) return 0;
     if (effHi > upperFloor) effHi = upperFloor;
   }
-  const pHi = effHi === Infinity ? 1 : normCdf((effHi - mean) / std);
-  const pLo = effLo === -Infinity ? 0 : normCdf((effLo - mean) / std);
+  const pHi = effHi === Infinity ? 1 : studentTCdf((effHi - mean) / std, nu);
+  const pLo = effLo === -Infinity ? 0 : studentTCdf((effLo - mean) / std, nu);
   return Math.max(0, pHi - pLo);
 }
 
@@ -226,16 +297,22 @@ async function getBlobStore(name) {
 // the blob is missing or undeflfined for a side. See calibration_update.js for
 // the residual-z-stdev computation.
 async function readCalibration() {
+  // Posterior-predictive params per side: scale (σ multiplier) + nu (Student-t dof).
+  // Fallback when the blob/side is absent: scale 1.0, nu Infinity (= legacy Normal,
+  // no inflation). A missing/stale blob is treated as a dead loop by jackson_trader's
+  // liveness gate, which abstains — so this fallback is only a numeric default.
+  const DFLT = { scale: 1.0, nu: Infinity };
   try {
     const store = await getBlobStore("calibration_state");
-    if (!store) return { high: 1.0, low: 1.0 };
+    if (!store) return { high: { ...DFLT }, low: { ...DFLT } };
     const blob = await store.get("current.json", { type: "json" });
-    return {
-      high: blob?.high?.inflation_factor ?? 1.0,
-      low:  blob?.low?.inflation_factor  ?? 1.0,
-    };
+    const side = (s) => ({
+      scale: blob?.[s]?.predictive_scale ?? 1.0,
+      nu:    blob?.[s]?.predictive_nu    ?? Infinity,
+    });
+    return { high: side("high"), low: side("low") };
   } catch (e) {
-    return { high: 1.0, low: 1.0 };
+    return { high: { ...DFLT }, low: { ...DFLT } };
   }
 }
 
@@ -279,7 +356,7 @@ export default async () => {
   // Helper: process one event (HIGH or LOW) for a city.
   // variable = "high" | "low"; mean / std come from our model for that variable;
   // lowerFloor / upperFloor are the truncation bounds from already-realized observations.
-  async function processEvent(city, series, variable, mean, std, lowerFloor, upperFloor) {
+  async function processEvent(city, series, variable, mean, std, lowerFloor, upperFloor, nu = Infinity) {
     const eventTicker = `${series}-${kalshiDateSuffix(now, city.tz)}`;
     const m = await fetchKalshiMarkets(eventTicker);
     if (!m || !m.markets || !m.markets.length) return null;
@@ -298,9 +375,9 @@ export default async () => {
                volume: mkt.volume_fp || 0 };
     });
     const probSum = bucketsRaw.reduce((a, b) =>
-      a + bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor), 0);
+      a + bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor, nu), 0);
     const buckets = bucketsRaw.map(b => {
-      const rawP = bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor);
+      const rawP = bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor, nu);
       const p_model = probSum > 0 ? rawP / probSum : 0;
       // Gross EV = p_model - price. Net EV = gross - kalshi_fee_per_$_staked.
       // The trader's qualifying threshold checks NET EV (post-fee), so 5¢ "edge" means
@@ -381,10 +458,11 @@ export default async () => {
     // σ_eff = √(σ_ensemble² + σ_irreducible²): hierarchical-prior formulation that
     // never collapses below the prior. See SIGMA_IRREDUCIBLE_F header.
     if (tickers.high) {
-      const sigmaEff = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
-                       * calibration.high;
+      const sigmaEffRaw = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
+                          * calibration.high.scale;
+      const sigmaEff = Math.max(sigmaEffRaw, SIGMA_FLOOR_HIGH);   // σ-audit floor
       const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
-                                    city.maxSoFarCli ?? city.maxSoFar, null);
+                                    city.maxSoFarCli ?? city.maxSoFar, null, calibration.high.nu);
       if (r) {
         cityRecord.highEvent = r.eventTicker;
         cityRecord.highBuckets = r.buckets;
@@ -396,10 +474,11 @@ export default async () => {
     }
     // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
-      const sigmaEff = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
-                       * calibration.low;
+      const sigmaEffRaw = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
+                          * calibration.low.scale;
+      const sigmaEff = Math.max(sigmaEffRaw, SIGMA_FLOOR_LOW);   // σ-audit floor
       const r = await processEvent(city, tickers.low, "low", city.lowMean, sigmaEff,
-                                    null, city.minSoFarCli ?? city.minSoFar);
+                                    null, city.minSoFarCli ?? city.minSoFar, calibration.low.nu);
       if (r) {
         cityRecord.lowEvent = r.eventTicker;
         cityRecord.lowBuckets = r.buckets;

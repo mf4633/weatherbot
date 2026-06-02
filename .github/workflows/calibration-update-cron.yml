@@ -1,0 +1,34 @@
+name: Calibration update cron
+
+# Recomputes calibration_state (per-side σ scale + Student-t predictive params + the
+# eligible/n liveness counters the trader gate reads). CRITICAL for the gate: if this
+# blob goes older than CAL_MAX_AGE_MIN (180), jackson_trader abstains on BOTH sides.
+# Netlify was firing it only every few hours → blob went 13h stale → gate would pause
+# everything. GitHub Actions backstop at the same */30 cadence; idempotent, so the
+# Netlify schedule is kept too.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: calibration-update
+  cancel-in-progress: false
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit calibration_update
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 290 -sS -u "$BASIC_AUTH" -X POST \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/calibration_update" \
+            -o /tmp/cal.json -w "HTTP %{http_code}\n" || true
+          jq '{updated_at,
+               high: {n: .high.n, eligible: .high.eligible, nu: .high.predictive_nu, scale: .high.predictive_scale},
+               low:  {n: .low.n,  eligible: .low.eligible,  nu: .low.predictive_nu,  scale: .low.predictive_scale}}' \
+            /tmp/cal.json 2>/dev/null \
+            || echo "(non-JSON response — likely a Netlify timeout; next cycle retries)"

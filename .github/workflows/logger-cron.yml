@@ -1,0 +1,29 @@
+name: Logger cron
+
+# Settles predictions + writes actuals (incl. the new pred.actualLow that revives the
+# LOW calibration loop). GitHub Actions backstop because Netlify's scheduler was firing
+# this only every few hours. Idempotent (settle is a no-op once settled), so the Netlify
+# schedule is kept too — double-fire here is harmless, redundancy buys reliability.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: logger
+  cancel-in-progress: false
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit logger
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 290 -sS -u "$BASIC_AUTH" -X POST \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/logger" \
+            -o /tmp/logger.json -w "HTTP %{http_code}\n" || true
+          jq '{ok, settled, updated}' /tmp/logger.json 2>/dev/null \
+            || echo "(non-JSON response — likely a Netlify timeout; next cycle retries)"

@@ -481,6 +481,12 @@ async function runSettle(predictionsStore, regimeStore, predData, now) {
 
     pred.settled = true;
     pred.actualHigh = cliData.maxF;
+    // 2026-06-01: actualLow was never persisted to the predictions blob, so
+    // calibration_update.js's LOW join matched 0 of ~40 settled LOW bets →
+    // LOW inflation_factor frozen at 1.0 → LOW σ never widened above the floor
+    // → σ≈1.21 live (|z|/exp=5.9, 32%/52% coverage) = the documented LOW bleed.
+    // HIGH worked because actualHigh was written. One line revives the LOW loop.
+    pred.actualLow = cliData.minF;
     pred.residual = residual;
     await predictionsStore.setJSON(key, pred);
 

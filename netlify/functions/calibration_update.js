@@ -28,6 +28,23 @@ const PRIOR_FACTOR      = 1.0;
 // conservative, just not allowed to be more confident than it claimed.
 const FLOOR_FACTOR      = 1.0;
 
+// 2026-06-01: BAYESIAN POSTERIOR-PREDICTIVE params (replaces the point
+// inflation_factor as kalshi.js's σ source). Model: z = (actual−μ)/σ_model ~
+// N(0, k²) with k² the unknown calibration factor. Conjugate scaled-inverse-χ²
+// prior on k²: ν₀ pseudo-observations asserting k²=σ₀²=1 (model is calibrated).
+// Posterior over k² is scaled-inv-χ²(ν_n, σ_n²) with
+//     ν_n   = ν₀ + n
+//     σ_n²  = (ν₀·1 + Σz²) / (ν₀ + n)
+// Marginalizing k² out of the outcome's N(μ, σ_model²·k²) gives a Student-t
+// posterior predictive: actual ~ μ + (σ_model·σ_n)·t_{ν_n}. kalshi.js builds
+// bucket probabilities from this t (not Normal·point-factor), so small n → low
+// ν_n → fat tails → extreme bucket probs pulled toward 0.5 → EV shrinks →
+// the bot abstains *organically* (no hard n-threshold). We use Σz² (2nd moment
+// about 0, not about the mean) so that uncorrected μ-bias widens the predictive
+// honestly — and once a μ-offset is added, z̄→0 and Σz²→variance automatically.
+// ν₀ small ⇒ humble with little data; sweep validated in backtest_tpred.mjs.
+const PRIOR_DOF = 4;
+
 // City name → CLI code, mirrored from weather.js CITIES to keep this file
 // self-contained (no cross-import side effects).
 const CITY_TO_CLI = {
@@ -104,6 +121,12 @@ async function computeCalibration() {
 
   const zHigh = [], zLow = [];
   let matched = 0, unmatched = 0;
+  // Per-side "eligible" = join was attempted (valid variable/σ/city/date) regardless
+  // of whether an actual was found. eligible≫matched on a side ⇒ the actuals join is
+  // broken for that side (the exact failure that killed LOW: actualLow never written).
+  // This is the only hard liveness check the trader keeps — it's a broken-pipe
+  // detector, not a statistical threshold.
+  let eligibleHigh = 0, eligibleLow = 0;
 
   for (const b of settled) {
     if (b.variable !== "high" && b.variable !== "low") continue;
@@ -113,6 +136,7 @@ async function computeCalibration() {
     if (!cli || !tz) continue;
     const date = targetLocalDate(b, tz);
     if (!date) continue;
+    if (b.variable === "high") eligibleHigh++; else eligibleLow++;
     const a = actuals[`${cli}/${date}`];
     const actual = b.variable === "high" ? a?.actualHigh : a?.actualLow;
     if (actual == null) { unmatched++; continue; }
@@ -128,6 +152,15 @@ async function computeCalibration() {
   //          require a higher cap to keep coverage honest; with few obs the
   //          cap is loose so well-calibrated data can express itself)
   //   - factor = max(FLOOR, min(shrunk, cap))
+  // Bayesian posterior-predictive (ν_n, σ_n) from the conjugate scaled-inv-χ²
+  // prior. Defined for ALL n including 0 (prior-only): ν_n=ν₀, σ_n=1 → t_{ν₀}.
+  const predictive = (zs) => {
+    const n = zs.length;
+    const sumZ2 = zs.reduce((a, z) => a + z * z, 0);
+    const nu = PRIOR_DOF + n;
+    const scale = Math.sqrt((PRIOR_DOF * 1 + sumZ2) / (PRIOR_DOF + n));
+    return { nu, scale: Math.round(scale * 1000) / 1000 };
+  };
   const calibrate = (zs) => {
     if (zs.length === 0) {
       return { factor: PRIOR_FACTOR, shrunk: PRIOR_FACTOR, cap: null, p95_abs_z: null };
@@ -160,15 +193,22 @@ async function computeCalibration() {
 
   const cHigh = calibrate(zHigh);
   const cLow  = calibrate(zLow);
+  const pHigh = predictive(zHigh);
+  const pLow  = predictive(zLow);
   return {
     updated_at: new Date().toISOString(),
+    prior_dof: PRIOR_DOF,
     high: {
       n: zHigh.length,
+      eligible: eligibleHigh,
       mean_z: zHigh.length ? Math.round(mean(zHigh) * 1000) / 1000 : null,
       stdev_z: zHigh.length ? Math.round(stdev(zHigh) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zHigh, 1.0),
       coverage_95: coverageFraction(zHigh, 1.96),
-      inflation_factor: cHigh.factor,
+      // Posterior-predictive params consumed by kalshi.js (Student-t bucket probs).
+      predictive_nu: pHigh.nu,
+      predictive_scale: pHigh.scale,
+      inflation_factor: cHigh.factor,    // retained for dashboard continuity
       shrunk_estimate: cHigh.shrunk,
       adaptive_cap: cHigh.cap,
       p95_abs_z: cHigh.p95_abs_z,
@@ -176,10 +216,13 @@ async function computeCalibration() {
     },
     low: {
       n: zLow.length,
+      eligible: eligibleLow,
       mean_z: zLow.length ? Math.round(mean(zLow) * 1000) / 1000 : null,
       stdev_z: zLow.length ? Math.round(stdev(zLow) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zLow, 1.0),
       coverage_95: coverageFraction(zLow, 1.96),
+      predictive_nu: pLow.nu,
+      predictive_scale: pLow.scale,
       inflation_factor: cLow.factor,
       shrunk_estimate: cLow.shrunk,
       adaptive_cap: cLow.cap,

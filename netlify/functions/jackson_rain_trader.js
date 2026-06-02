@@ -73,7 +73,27 @@ const CAPITAL_DAYS_PER_BANKROLL = 30;
 // us positive-EV exposure. Lowered to $10 so today's $15.72 cash passes; the
 // cap-days budget still throttles concentration even when monthly is allowed.
 // Raise this back to $50 if monthly positions start dominating cap-days.
-const MIN_EQUITY_FOR_MONTHLY = 10;
+//
+// 2026-05-27: HARD-OFF (set to 1e9). rainbot's observedSoFar is sourced from
+// open-meteo GRIDDED reanalysis precip at city lat/lon (archive-api.open-meteo.com),
+// NOT the official station gauge Kalshi settles on. Verified vs NOAA ACIS through
+// 5/26: every city's MTD is inflated — Dallas +4.67" (7.61 displayed vs 2.94 gauge),
+// Houston +3.05", Miami +1.36". This made monthly-tier p_model fabricated-confident
+// (e.g. MIA >5" YES p=0.986 at gauge 3.98"), and the armed live trader was about to
+// buy them.
+//
+// 2026-05-27 (later, same day): briefly RE-ENABLED at $50 after the gauge fix, then
+// HARD-OFF again (1e9) after the edge research came back NEGATIVE. Ran the weatherbot-style
+// gates on 134 settled monthly tier-records (10 cities × Mar/Apr, real Kalshi candlestick
+// trajectories + ACIS observed + settlement): divergence regression slope 0.056 / corr 0.066
+// (≈ no predictive power), Brier model 0.136 vs MARKET 0.059 (market 2.3× sharper). The
+// "crossed-tier lag" that looked like edge was an artifact — 5.4% of tiers my observed had
+// "crossed" still settled NO (ACIS daily-sum ≠ Kalshi's official monthly total at boundaries),
+// i.e. the market was correctly pricing settlement-boundary risk we ignore. No validated edge
+// (consistent with daily-NYC: market Brier 0.074 vs model 0.106). The gauge fix made monthly
+// SAFE (no more inflation bets) but not +EV. Monthly stays OFF until a real edge is found.
+// See project_weatherbot_edge_research. Daily-binary rain is ALSO no-edge — see flag there.
+const MIN_EQUITY_FOR_MONTHLY = 1e9;
 
 // Monthly rain tickers carry a 2-segment date (e.g. KXRAINNYCM-26MAY-3); daily
 // tickers carry a 3-segment date with day (e.g. KXRAINNYC-26MAY08). Used to
@@ -238,6 +258,13 @@ export default async () => {
 
     const cashCents = balance.balance ?? 0;
     const cashDollars = cashCents / 100;
+    // Monthly tiers unlock above this equity (bankroll protection). Computed HERE — before
+    // the sell loop — because the force-sell-monthly dump must key off it too: dump monthly
+    // ONLY while monthly buys are disabled. Once monthly is allowed, monthly positions must
+    // fall through to normal EV-based sell logic (hold to settlement), else the re-enabled
+    // buys would churn against an unconditional dump and bleed fees. (2026-05-27)
+    const equityDollars = cashDollars + ((balance.portfolio_value ?? 0) / 100);
+    const allowMonthly = equityDollars >= MIN_EQUITY_FOR_MONTHLY;
     const positions = (positionsResp.market_positions || []).map(p => ({
       ...p,
       qty: parseFloat(p.position_fp || "0"),
@@ -443,8 +470,10 @@ export default async () => {
         }
       }
       const isMonthly = isMonthlyRainTicker(ticker);
-      // Force-sell monthly: dump at the bid regardless of EV.
-      if (isMonthly) {
+      // Force-sell monthly ONLY while in bankroll-protection mode (monthly buys disabled).
+      // When monthly is allowed, fall through to the normal EV-based sell logic below so
+      // positions are held to settlement instead of churned against the re-enabled buys.
+      if (isMonthly && !allowMonthly) {
         const sellPrice = m ? (isYes ? m.yes_bid : m.no_bid) : null;
         if (sellPrice == null || sellPrice <= 0) continue;
         const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
@@ -477,8 +506,7 @@ export default async () => {
     // When monthly is allowed, the capital-days budget still caps concentration —
     // a $1 / 15-day hold costs 15 cap-days, so a $15.72 bankroll's 472-cap-day
     // budget tolerates ~30 monthly positions before throttling kicks in.
-    const equityDollars = cashDollars + ((balance.portfolio_value ?? 0) / 100);
-    const allowMonthly = equityDollars >= MIN_EQUITY_FOR_MONTHLY;
+    // equityDollars + allowMonthly computed near top (shared with sell loop's force-sell gate).
     if (rainResp?.topBets && spareCapacity > 0) {
       const qualifying = rainResp.topBets
         .filter(b => Number.isFinite(b.ev_net) && Number.isFinite(b.halfKelly))
