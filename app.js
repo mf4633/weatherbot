@@ -164,16 +164,31 @@ function renderFreshness(f) {
   const el = document.getElementById("kalshi-freshness");
   if (!el || !f) return;
   const cacheStr = `cache ${f.cacheAgeSec}s old`;
-  const fcStr = f.newestForecastAgeMin != null
-    ? `forecast ${f.newestForecastAgeMin}–${f.oldestForecastAgeMin} min old`
-    : "no forecast data";
-  const stale = f.cacheStale || f.forecastStale;
-  const cls = stale ? "stale" : "fresh";
-  const note = stale
-    ? "⚠ Stale data — apparent edges may be artifacts of forecast revisions the model hasn't seen yet."
-    : "Data fresh; edges reflect current forecast.";
+  // Per-city observation staleness is what the trader actually gates on. The old
+  // "oldest forecast issuance" badge fired ~constantly off one western city's overnight
+  // NWS lull (a longitude artifact, not a tradeable-staleness signal), so it's demoted to
+  // a parenthetical and no longer drives the badge.
+  const tradeable = f.tradeableCityCount, total = f.cityCount;
+  const cityStr = (total != null)
+    ? `${tradeable}/${total} cities fresh`
+    : (f.newestForecastAgeMin != null ? `forecast ${f.newestForecastAgeMin}–${f.oldestForecastAgeMin} min old` : "no forecast data");
+  // Cache death or EVERY city stale = a real problem. A few stale cities is normal
+  // (they're auto-skipped by the trader) so it's a soft warning, not the hard "stale" class.
+  const hardStale = f.cacheStale || f.allStale;
+  const cls = hardStale ? "stale" : "fresh";
+  let note;
+  if (hardStale) {
+    note = "⚠ Stale data — cache dead or all cities past the freshness gate; edges may be artifacts.";
+  } else if (f.staleCount > 0) {
+    note = `Fresh; ${f.staleCount} stale (auto-skipped): ${(f.staleCities || []).join(", ")}.`;
+  } else {
+    note = "Data fresh; edges reflect current forecast.";
+  }
+  const issuanceStr = f.newestForecastAgeMin != null
+    ? ` · NWS issuance ${f.newestForecastAgeMin}–${f.oldestForecastAgeMin} min`
+    : "";
   el.className = cls;
-  el.textContent = `${cacheStr} · ${fcStr} · ${note}`;
+  el.textContent = `${cacheStr} · ${cityStr} · ${note}${issuanceStr}`;
 }
 
 // Trader gates — kept in lockstep with netlify/functions/jackson_trader.js so the

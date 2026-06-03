@@ -176,6 +176,11 @@ const SIGMA_IRREDUCIBLE_F = 1.3;
 const SIGMA_FLOOR_HIGH = 2.5;
 const SIGMA_FLOOR_LOW  = 2.0;
 
+// Per-city staleness gate. MUST mirror jackson_trader's PER_CITY_FRESHNESS_MAX_MIN so the
+// `stale` flags this endpoint exposes mean exactly what the live trader acts on. Gate is on
+// composite observation age (dataAgeMin preferred), not NWS grid issuance age.
+const TRADER_FRESHNESS_MAX_MIN = 180;
+
 // Kalshi fee per $1 staked at a given binary contract price.
 // Exact formula: fee_cents = ceil(7 × count × P × (1-P)) where P is yes_price ∈ [0,1].
 // Per $1 staked at price P: fee ≈ 0.07 × (1−P) dollars (continuous approximation).
@@ -335,7 +340,16 @@ export default async () => {
   const cities = [];
   const allBets = [];
 
-  // Freshness diagnostics: cache age + oldest forecast issuance among the matched cities.
+  // Freshness diagnostics. Two distinct notions of "stale" live here and they MUST NOT
+  // be conflated:
+  //   1. Per-city OBSERVATION staleness (the `stale` flag, `staleCities`) — composite
+  //      obs-age (dataAgeMin preferred) vs the 180-min gate. This mirrors exactly what
+  //      jackson_trader gates on, so it's the field downstream consumers should trust.
+  //   2. Forecast-ISSUANCE age (oldest/newestForecastAgeMin, forecastIssuanceStale) — when
+  //      NWS last re-issued a city's grid forecast. Western offices routinely sit 4-6h old
+  //      overnight while ensemble + METAR are minutes fresh, so this is a longitude/
+  //      time-of-day artifact, NOT a trading signal. `forecastStale` is retained only as a
+  //      back-compat alias of forecastIssuanceStale for the legacy dashboard.
   const cacheAgeMs = predData.ageMs ?? 0;
   const forecastUpdateTimes = (predData.cities || [])
     .map(c => c.forecastUpdateTime)
@@ -344,13 +358,37 @@ export default async () => {
     .filter(t => !isNaN(t));
   const oldestForecastMs = forecastUpdateTimes.length ? Math.min(...forecastUpdateTimes) : null;
   const newestForecastMs = forecastUpdateTimes.length ? Math.max(...forecastUpdateTimes) : null;
+  const issuanceStale = oldestForecastMs ? (Date.now() - oldestForecastMs) > 90 * 60 * 1000 : false;
+
+  // Per-city observation staleness — the trader-relevant view.
+  const perCity = (predData.cities || []).filter(c => !c.error).map(c => {
+    const nwsGridAgeMin = c.forecastUpdateTime
+      ? Math.round((Date.now() - new Date(c.forecastUpdateTime).getTime()) / 60000) : null;
+    const obsAgeMin = c.dataAgeMin ?? null;
+    const composite = obsAgeMin ?? nwsGridAgeMin;
+    return { name: c.name, obsAgeMin, nwsGridAgeMin,
+             stale: composite != null ? composite > TRADER_FRESHNESS_MAX_MIN : false };
+  });
+  const staleCities = perCity.filter(c => c.stale).map(c => c.name);
+
   const freshness = {
     cacheAgeSec: Math.round(cacheAgeMs / 1000),
     cacheStale: cacheAgeMs > 5 * 60 * 1000,
+    // Trader-relevant per-city staleness (observation-age basis, mirrors jackson_trader):
+    staleThresholdMin: TRADER_FRESHNESS_MAX_MIN,
+    cityCount: perCity.length,
+    staleCount: staleCities.length,
+    tradeableCityCount: perCity.length - staleCities.length,
+    staleCities,
+    anyStale: staleCities.length > 0,
+    allStale: perCity.length > 0 && staleCities.length === perCity.length,
+    perCity,
+    // Forecast-ISSUANCE diagnostics (longitude/overnight artifact — NOT a trading signal):
     oldestForecastIssuedAt: oldestForecastMs ? new Date(oldestForecastMs).toISOString() : null,
     oldestForecastAgeMin: oldestForecastMs ? Math.round((Date.now() - oldestForecastMs) / 60000) : null,
     newestForecastAgeMin: newestForecastMs ? Math.round((Date.now() - newestForecastMs) / 60000) : null,
-    forecastStale: oldestForecastMs ? (Date.now() - oldestForecastMs) > 90 * 60 * 1000 : false
+    forecastIssuanceStale: issuanceStale,
+    forecastStale: issuanceStale,  // back-compat alias (legacy dashboard reads this)
   };
 
   // Helper: process one event (HIGH or LOW) for a city.
@@ -360,6 +398,18 @@ export default async () => {
     const eventTicker = `${series}-${kalshiDateSuffix(now, city.tz)}`;
     const m = await fetchKalshiMarkets(eventTicker);
     if (!m || !m.markets || !m.markets.length) return null;
+
+    // Per-bet freshness, stamped so every topBet is self-describing AND matches the
+    // gate the live trader actually applies. jackson_trader gates on OBSERVATION age
+    // (dataAgeMin), not NWS grid issuance age — a western city's grid forecast often
+    // sits 4-6h old overnight while ensemble + METAR are minutes fresh. `stale` below
+    // uses the same composite (obs-age preferred, 180-min) the trader uses; nwsGridAgeMin
+    // is exposed for visibility only and is NOT what disqualifies a bet.
+    const nwsGridAgeMin = city.forecastUpdateTime
+      ? Math.round((Date.now() - new Date(city.forecastUpdateTime).getTime()) / 60000) : null;
+    const obsAgeMin = city.dataAgeMin ?? null;
+    const compositeAgeMin = obsAgeMin ?? nwsGridAgeMin;
+    const betStale = compositeAgeMin != null ? compositeAgeMin > TRADER_FRESHNESS_MAX_MIN : false;
 
     const bucketsRaw = m.markets.map(mkt => {
       const { loInt, hiInt } = bucketBounds(mkt);
@@ -406,7 +456,8 @@ export default async () => {
           side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: b.p_model, ev: b.evYes,
           evPerDay: b.evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
-          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
+          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
+          obsAgeMin, nwsGridAgeMin, stale: betStale
         });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
@@ -417,7 +468,8 @@ export default async () => {
           side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: b.evNo,
           evPerDay: b.evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
           kelly: k, halfKelly: k / 2, volume: b.volume,
-          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std
+          loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
+          obsAgeMin, nwsGridAgeMin, stale: betStale
         });
       }
     }
