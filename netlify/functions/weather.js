@@ -404,6 +404,49 @@ async function fetchOpenMeteoEnsemble(lat, lon) {
   } catch (e) { return null; }
 }
 
+// Batched multi-location variant. Open-Meteo accepts comma-separated lat/lon and
+// returns a JSON ARRAY (one element per location, in request order), so all cities'
+// ensembles come back in ONE ~57KB request. This replaces the previous 21-wide
+// concurrent burst (Promise.all over fetchOpenMeteoEnsemble), which routinely drew
+// 429s on a subset of cities → that city's ensemble null → sources.length<3 →
+// dataAgeMin degrades to NWS-grid age (hours old) → trader skips the city. One request
+// removes the burst entirely (~21x fewer Open-Meteo calls per cache-miss).
+// Returns an array aligned to `cities` order (each entry the same {model:[{ts,tempF}]}
+// shape as fetchOpenMeteoEnsemble, or null for an unusable element), or null for the
+// WHOLE batch on hard failure so the caller falls back to the per-city path.
+async function fetchOpenMeteoEnsembleBatch(cities) {
+  const lat = cities.map(c => c.lat).join(",");
+  const lon = cities.map(c => c.lon).join(",");
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+    + `&hourly=temperature_2m&models=${ENSEMBLE_MODELS.join(",")}`
+    + `&temperature_unit=fahrenheit&timezone=UTC&forecast_days=2`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(url, { headers: { "User-Agent": UA } });
+      if (!r.ok) { if (attempt === 0) continue; return null; }   // one retry, then bail to fallback
+      const j = await r.json();
+      const arr = Array.isArray(j) ? j : [j];
+      // Length guard: Open-Meteo preserves request order, but if the array doesn't line
+      // up 1:1 with cities we refuse to risk attributing one city's models to another.
+      if (arr.length !== cities.length) return null;
+      return arr.map(loc => {
+        const times = loc?.hourly?.time;
+        if (!times?.length) return null;
+        const out = {};
+        for (const m of ENSEMBLE_MODELS) {
+          const key = `temperature_2m_${m}`;
+          if (loc.hourly[key]) {
+            out[m] = times.map((t, i) => ({ ts: new Date(t + "Z"), tempF: loc.hourly[key][i] }))
+                          .filter(x => x.tempF != null && !isNaN(x.tempF));
+          }
+        }
+        return Object.keys(out).length ? out : null;
+      });
+    } catch (e) { if (attempt === 0) continue; return null; }
+  }
+  return null;
+}
+
 // Parse the latest CLI<station> product. CLI text has fixed-column rows; "MAXIMUM" sometimes is on its own
 // section header line ("TEMPERATURE (F)") and sometimes only appears in tabular form.
 async function fetchLatestCLI(cli) {
@@ -1410,7 +1453,10 @@ export default async (req) => {
 
   const [forecasts, ensembles, clis, oneMinByStation, iemByStation, dsmByStation] = await Promise.all([
     Promise.all(CITIES.map(c => fetchNWSForecast(c.lat, c.lon))),
-    Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon))),
+    // One batched multi-location call; only if it hard-fails do we fall back to the
+    // old per-city concurrent burst (degraded, but better than no ensemble at all).
+    fetchOpenMeteoEnsembleBatch(CITIES)
+      .then(batch => batch || Promise.all(CITIES.map(c => fetchOpenMeteoEnsemble(c.lat, c.lon)))),
     Promise.all(CITIES.map(c => fetchLatestCLI(c.cli))),
     fetch1MinObs(),
     fetchIemDailyExtremes(),
