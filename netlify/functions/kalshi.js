@@ -173,7 +173,19 @@ const SIGMA_IRREDUCIBLE_F = 1.3;
 //   LOW  2.0 = ≈ calibrated σ_h max (2.00 → 1.54 by hour-to-trough); LOW backtest
 //   at σ=2.5 gave +65.7% ROI, so floor of 2.0 stays inside the validated regime.
 // Strictly conservative: floors only WIDEN σ; never tighten.
-const SIGMA_FLOOR_HIGH = 2.5;
+const SIGMA_FLOOR_HIGH = 1.5;
+// 2026-06-03: σ CEILING. Root-cause finding — the calibration scale (live 2.775×) was
+// fit on BET-MATCHED residuals (selection-biased: the cases where the model disagreed
+// with the market and lost), inflating effective σ to ~6-8°F. On the UNSELECTED snapshot
+// population (n=371 city-days) RMS_z≈0.71 → true error σ≈2°F, with NO μ-bias and NO fat
+// tails. Price-level backtest (_edge_raw2.json, 585 events, real Kalshi prices + CLI
+// settlement) is monotonic in σ: σ≈6-8 → −9% ROI, σ≈2.0 → +3.7%, σ≈1.5 → +7.5%. So we
+// cap effective HIGH σ at the validated optimum; the broken calibration scale can no
+// longer over-inflate. Consistent with the HIGH near-peak time-gate (confines HIGH
+// trading to the decision-time regime the backtest covers). LOW left untouched — its
+// calibration is empty (low.n=0) and stays paused. v2 = refit calibration_update on the
+// snapshot population so scale lands ~1.0 honestly and this cap becomes a backstop.
+const SIGMA_CAP_HIGH = 2.2;
 const SIGMA_FLOOR_LOW  = 2.0;
 
 // Per-city staleness gate. MUST mirror jackson_trader's PER_CITY_FRESHNESS_MAX_MIN so the
@@ -512,7 +524,9 @@ export default async () => {
     if (tickers.high) {
       const sigmaEffRaw = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
                           * calibration.high.scale;
-      const sigmaEff = Math.max(sigmaEffRaw, SIGMA_FLOOR_HIGH);   // σ-audit floor
+      // Clamp into the backtest-validated band [FLOOR, CAP]. The CAP is the fix: it
+      // bounds the selection-biased over-inflation (see SIGMA_CAP_HIGH header).
+      const sigmaEff = Math.min(SIGMA_CAP_HIGH, Math.max(sigmaEffRaw, SIGMA_FLOOR_HIGH));
       const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
                                     city.maxSoFarCli ?? city.maxSoFar, null, calibration.high.nu);
       if (r) {
