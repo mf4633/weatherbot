@@ -173,24 +173,22 @@ const SIGMA_IRREDUCIBLE_F = 1.3;
 //   LOW  2.0 = ≈ calibrated σ_h max (2.00 → 1.54 by hour-to-trough); LOW backtest
 //   at σ=2.5 gave +65.7% ROI, so floor of 2.0 stays inside the validated regime.
 // Strictly conservative: floors only WIDEN σ; never tighten.
-const SIGMA_FLOOR_HIGH = 1.5;
-// 2026-06-03: σ CEILING. Root-cause finding — the calibration scale (live 2.775×) was
-// fit on BET-MATCHED residuals (selection-biased: the cases where the model disagreed
-// with the market and lost), inflating effective σ to ~6-8°F. On the UNSELECTED snapshot
-// population (n=371 city-days) RMS_z≈0.71 → true error σ≈2°F, with NO μ-bias and NO fat
-// tails. Price-level backtest (_edge_raw2.json, 585 events, real Kalshi prices + CLI
-// settlement) is monotonic in σ: σ≈6-8 → −9% ROI, σ≈2.0 → +3.7%, σ≈1.5 → +7.5%. So we
-// cap effective HIGH σ at the validated optimum; the broken calibration scale can no
-// longer over-inflate. Consistent with the HIGH near-peak time-gate (confines HIGH
-// trading to the decision-time regime the backtest covers). LOW left untouched — its
-// calibration is empty (low.n=0) and stays paused. v2 = refit calibration_update on the
-// snapshot population so scale lands ~1.0 honestly and this cap becomes a backstop.
-const SIGMA_CAP_HIGH = 2.0;  // 2026-06-04: tightened 2.2→2.0 = the robust backtest optimum
-// (and the population estimate: RMS_z 0.71 × typical raw). Backtest ROI@thr0.15: σ2.0 +3.7%,
-// σ2.2 ~+2.4%, σ2.5 +0.5%. Held at 2.0 not 1.5 (1.5 backtests higher, +7.5%, but is the
-// in-sample edge — 2.0 is the disciplined population-validated value). Full population refit
-// of calibration_update (publishes honest scale ~0.70 → this cap becomes a backstop) deferred:
-// marginal over the cap, and not worth churning the just-restored calibration fn.
+// ADAPTIVE (calibrated) HIGH predictive σ. This is the "learned parameter" form of the
+// former hardcoded cap: calibration_update fits the POSTERIOR from the unselected snapshot
+// population (prediction errors, NOT bet-matched — bet-matched is what inflated the old
+// scale to 2.775× and cost ~$415), and this code reads it, re-clamps to the guardrails, and
+// falls back to the PRIOR when the fit is absent.
+//   - SIGMA_HIGH_PRIOR = seed + fallback (the backtested optimum).
+//   - [FLOOR, CAP] = HARD guardrails: the whole envelope backtests profitable (1.5→+7.5%,
+//     2.0→+3.7%, 2.5→+0.5%; 3.0+ loses), so a runaway fit physically can't leave +EV.
+// Root cause it replaces: the old scale was fit on bet-matched residuals (selection bias),
+// inflating effective σ to ~6-8°F → model under-weighted the market's correct tight buckets
+// → bet NO against them at $0.02-0.04 → −45% ROI. Population RMS_z≈0.71 → true error σ≈2°F,
+// no μ-bias, no fat tails. Walk-forward backtest (585 events): the adaptive σ self-converges
+// to ~2.0, never nears a bound, matches fixed-σ=2.0 P&L (+3.5% vs +3.7%).
+const SIGMA_HIGH_PRIOR = 2.0;
+const SIGMA_HIGH_FLOOR = 1.5;
+const SIGMA_HIGH_CAP   = 2.5;
 const SIGMA_FLOOR_LOW  = 2.0;
 
 // Per-city staleness gate. MUST mirror jackson_trader's PER_CITY_FRESHNESS_MAX_MIN so the
@@ -332,9 +330,14 @@ async function readCalibration() {
       scale: blob?.[s]?.predictive_scale ?? 1.0,
       nu:    blob?.[s]?.predictive_nu    ?? Infinity,
     });
-    return { high: side("high"), low: side("low") };
+    // Adaptive (population-fit) HIGH predictive σ. The hardcoded SIGMA_HIGH_PRIOR is the
+    // PRIOR mean; calibration_update fits the posterior from the unselected snapshot
+    // population (errors, NOT bet-matched) and hard-clamps it to the backtested-profitable
+    // envelope. null here → caller falls back to the prior. See SIGMA_HIGH_* below.
+    const sigmaHigh = blob?.sigma_high?.posterior ?? null;
+    return { high: side("high"), low: side("low"), sigmaHigh };
   } catch (e) {
-    return { high: { ...DFLT }, low: { ...DFLT } };
+    return { high: { ...DFLT }, low: { ...DFLT }, sigmaHigh: null };
   }
 }
 
@@ -527,11 +530,13 @@ export default async () => {
     // σ_eff = √(σ_ensemble² + σ_irreducible²): hierarchical-prior formulation that
     // never collapses below the prior. See SIGMA_IRREDUCIBLE_F header.
     if (tickers.high) {
-      const sigmaEffRaw = Math.sqrt((city.std ?? 0) ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
-                          * calibration.high.scale;
-      // Clamp into the backtest-validated band [FLOOR, CAP]. The CAP is the fix: it
-      // bounds the selection-biased over-inflation (see SIGMA_CAP_HIGH header).
-      const sigmaEff = Math.min(SIGMA_CAP_HIGH, Math.max(sigmaEffRaw, SIGMA_FLOOR_HIGH));
+      // Adaptive σ: use the population-fit posterior (calibration.sigmaHigh), defensively
+      // re-clamped to the guardrails, falling back to the prior when the fit is absent.
+      // This replaces the old σ_ensemble×scale clamp — the bet-matched scale was the
+      // selection-biased value that caused the over-inflation. Flat σ is what the
+      // price-level + walk-forward backtests validated (per-city σ was never validated).
+      const sigmaEff = Math.min(SIGMA_HIGH_CAP, Math.max(SIGMA_HIGH_FLOOR,
+                                  calibration.sigmaHigh ?? SIGMA_HIGH_PRIOR));
       const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
                                     city.maxSoFarCli ?? city.maxSoFar, null, calibration.high.nu);
       if (r) {

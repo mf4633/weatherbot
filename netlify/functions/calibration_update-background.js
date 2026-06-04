@@ -202,9 +202,33 @@ async function computeCalibration() {
   const cLow  = calibrate(zLow);
   const pHigh = predictive(zHigh);
   const pLow  = predictive(zLow);
+
+  // ADAPTIVE sigma_high (calibrated parameter). Posterior predictive σ for HIGH, fit from
+  // the UNSELECTED prediction population (errors actual−pred, NOT bet-matched — that
+  // selection bias is what inflated the old scale). Scaled-inverse-χ² form seeded at the
+  // prior σ₀ with ν₀ pseudo-observations, then hard-clamped to the backtested-profitable
+  // guardrails. kalshi.js reads .posterior, re-clamps, and falls back to .prior. Walk-
+  // forward backtest (585 events): converges to ~2.0, stays inside the bounds, matches
+  // fixed-σ=2.0 P&L. The prior/bounds MUST mirror kalshi.js SIGMA_HIGH_{PRIOR,FLOOR,CAP}.
+  const SIGMA_HIGH_PRIOR = 2.0, SIGMA_HIGH_NU0 = 30, SIGMA_HIGH_FLOOR = 1.5, SIGMA_HIGH_CAP = 2.5;
+  const highErrs = predictions
+    .map(p => (p?.actualHigh != null && p?.predHigh != null) ? p.actualHigh - p.predHigh : null)
+    .filter(e => Number.isFinite(e) && Math.abs(e) < 25);  // drop absurd values / broken joins
+  const sumErr2 = highErrs.reduce((a, e) => a + e * e, 0);
+  const nErr = highErrs.length;
+  const sigmaHighRaw = Math.sqrt(
+    (SIGMA_HIGH_NU0 * SIGMA_HIGH_PRIOR ** 2 + sumErr2) / (SIGMA_HIGH_NU0 + nErr));
+  const sigmaHighPost = Math.min(SIGMA_HIGH_CAP, Math.max(SIGMA_HIGH_FLOOR, sigmaHighRaw));
+
   return {
     updated_at: new Date().toISOString(),
     prior_dof: PRIOR_DOF,
+    sigma_high: {
+      posterior: Math.round(sigmaHighPost * 1000) / 1000,
+      raw_posterior: Math.round(sigmaHighRaw * 1000) / 1000,
+      prior: SIGMA_HIGH_PRIOR, nu0: SIGMA_HIGH_NU0,
+      floor: SIGMA_HIGH_FLOOR, cap: SIGMA_HIGH_CAP, n: nErr
+    },
     high: {
       n: zHigh.length,
       eligible: eligibleHigh,
