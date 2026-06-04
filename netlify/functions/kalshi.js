@@ -185,7 +185,12 @@ const SIGMA_FLOOR_HIGH = 1.5;
 // trading to the decision-time regime the backtest covers). LOW left untouched — its
 // calibration is empty (low.n=0) and stays paused. v2 = refit calibration_update on the
 // snapshot population so scale lands ~1.0 honestly and this cap becomes a backstop.
-const SIGMA_CAP_HIGH = 2.2;
+const SIGMA_CAP_HIGH = 2.0;  // 2026-06-04: tightened 2.2→2.0 = the robust backtest optimum
+// (and the population estimate: RMS_z 0.71 × typical raw). Backtest ROI@thr0.15: σ2.0 +3.7%,
+// σ2.2 ~+2.4%, σ2.5 +0.5%. Held at 2.0 not 1.5 (1.5 backtests higher, +7.5%, but is the
+// in-sample edge — 2.0 is the disciplined population-validated value). Full population refit
+// of calibration_update (publishes honest scale ~0.70 → this cap becomes a backstop) deferred:
+// marginal over the cap, and not worth churning the just-restored calibration fn.
 const SIGMA_FLOOR_LOW  = 2.0;
 
 // Per-city staleness gate. MUST mirror jackson_trader's PER_CITY_FRESHNESS_MAX_MIN so the
