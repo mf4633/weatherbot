@@ -256,4 +256,7 @@ export default async () => {
   }
 };
 
-export const config = { schedule: "*/30 * * * *" };
+// Background function (filename -background suffix): 15-min limit, returns 202.
+// HTTP/cron-triggered via /api/calibration_update — no Netlify schedule (the throttled
+// scheduler was the failure mode). External cron (cron-job.org primary + GH Actions
+// backstop) drives it every ~30 min; the trader's cal-stale gate (180 min) tolerates gaps.

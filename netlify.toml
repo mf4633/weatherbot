@@ -31,8 +31,11 @@
 # (.github/workflows/{balance,combo}-snapshot-cron.yml), so their Netlify schedules
 # were redundant and are removed here. The functions stay HTTP-invocable.
 
-[functions."calibration_update"]
-  schedule = "*/30 * * * *"
+# calibration_update is now a BACKGROUND function (calibration_update-background.js):
+# the synchronous 10s HTTP limit timed it out (store.list + load + compute + write),
+# which is why it only ever ran under the throttled scheduler. Background functions get
+# 15 min and return 202, so the external cron (GitHub Actions / cron-job.org) can trigger
+# it reliably. No Netlify schedule — cron-driven. See 2026-06-04 commit.
 
 # pWin calibration drifts slowly — hourly is enough (was */30).
 [functions."pwin_calibration_fit"]
@@ -137,7 +140,7 @@
 # tripping the trader's cal-stale gate and halting the bot. Added 2026-06-04.
 [[redirects]]
   from = "/api/calibration_update"
-  to = "/.netlify/functions/calibration_update"
+  to = "/.netlify/functions/calibration_update-background"
   status = 200
 
 [[redirects]]
