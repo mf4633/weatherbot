@@ -121,8 +121,8 @@ const CITY_TZ = {
 
 async function computeCalibration() {
   const [settled, predictions] = await Promise.all([
-    loadAllBlobEntries(SETTLED_STORE, 2000),
-    loadAllBlobEntries(PREDICTIONS_STORE, 3000),
+    loadAllBlobEntries(SETTLED_STORE, 1500),
+    loadAllBlobEntries(PREDICTIONS_STORE, 600),
   ]);
   const actuals = indexActualsByCliDate(predictions);
 
