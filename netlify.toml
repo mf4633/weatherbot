@@ -132,6 +132,14 @@
   to = "/.netlify/functions/calibration_state"
   status = 200
 
+# HTTP route so the external cron (GitHub Actions) can trigger calibration_update —
+# Netlify's own */30 scheduler is throttled and was leaving calibration_state stale,
+# tripping the trader's cal-stale gate and halting the bot. Added 2026-06-04.
+[[redirects]]
+  from = "/api/calibration_update"
+  to = "/.netlify/functions/calibration_update"
+  status = 200
+
 [[redirects]]
   from = "/api/snapshots"
   to = "/.netlify/functions/snapshots"

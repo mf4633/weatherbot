@@ -63,11 +63,18 @@ function stdev(xs) {
   return Math.sqrt(v);
 }
 
-async function loadAllBlobEntries(storeName) {
+async function loadAllBlobEntries(storeName, maxEntries = Infinity) {
   const store = getStore(storeName);
   const { blobs } = await store.list().catch(() => ({ blobs: [] }));
+  let keys = (blobs || []).map(b => b.key);
+  // 2026-06-04: cap the load to the most-recent maxEntries. Keys are date-prefixed
+  // (CLI/YYYY-MM-DD/…) so sort-desc = newest first — same pattern snapshots.js uses to
+  // handle the 8k+ store. Loading ALL blobs OOM'd/timed-out the function on HTTP invocation
+  // (the cause of the cal-cron's 502 → calibration_state going stale → cal-stale halting the
+  // bot). A recent window is all the calibration needs.
+  if (keys.length > maxEntries) { keys.sort().reverse(); keys = keys.slice(0, maxEntries); }
   const entries = await Promise.all(
-    blobs.map(b => store.get(b.key, { type: "json" }).catch(() => null))
+    keys.map(k => store.get(k, { type: "json" }).catch(() => null))
   );
   return entries.filter(Boolean);
 }
@@ -114,8 +121,8 @@ const CITY_TZ = {
 
 async function computeCalibration() {
   const [settled, predictions] = await Promise.all([
-    loadAllBlobEntries(SETTLED_STORE),
-    loadAllBlobEntries(PREDICTIONS_STORE),
+    loadAllBlobEntries(SETTLED_STORE, 2000),
+    loadAllBlobEntries(PREDICTIONS_STORE, 3000),
   ]);
   const actuals = indexActualsByCliDate(predictions);
 
