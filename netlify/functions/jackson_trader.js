@@ -126,7 +126,14 @@ const CONCENTRATION_CAP = 0.20;
 // (would have prevented last night's correlated pile-on) and CONCENTRATION_CAP=0.20, the
 // failure mode is structurally blocked. Re-enable accepted with eyes open. Re-flip true
 // if (a) live LOW bleeds again, or (b) σ-audit on new settled LOW bets shows |z|/exp > 2.
-const LOW_HARD_OFF = false;
+//
+// 2026-06-04: RE-FLIPPED TRUE — criterion (a) met. Bot-only settled audit (jackson_audit,
+// segmented to exclude manual/orphan trades): LOW-NO −65.6% ROI, LOW-YES −74.5% ROI.
+// calibration_state shows low.n=0 (the actualLow join is empty → LOW has ZERO live
+// calibration; predictive_scale=1, no inflation). LOW had no equivalent of the HIGH σ-cap
+// / population-calibration validation. Hard-off until LOW gets the same treatment (population
+// refit on snapshot residualLow + its own price-level backtest). HIGH stays live (capped).
+const LOW_HARD_OFF = true;
 // (b) AGGREGATE_EXPOSURE_CAP: total open exposure / equity ceiling. Per-position
 // concentration (above) doesn't help when N small positions all sink together. 50%
 // keeps half of equity in cash reserve. Heuristic — needs its own backtest. Skips new
