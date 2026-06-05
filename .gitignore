@@ -14,3 +14,19 @@ node_modules/
 
 # edge-backtest caches (regenerable from Kalshi candlesticks)
 _edge_raw*.json
+
+# Scratch API snapshots / logs / ndjson dumps (the `_` prefix = throwaway probes).
+# Analysis scripts (_*.mjs / _*.py / _*.sh) are intentionally NOT ignored.
+_*.json
+_*.log
+_*.txt
+_*.ndjson
+_snap_*.json
+trader_log_*.json
+trader_run.json
+jackson2.json
+jackson_settled.ndjson
+kalshi.json
+fetch_data.log
+fetch_models.log
+analyze*.log
