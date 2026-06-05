@@ -99,8 +99,14 @@ const MIN_VOLUME = 20;
 // it self-abstains through the existing EV gate, with no discontinuity. What
 // remains here is pure LIVENESS — broken-pipe detection, not a statistical test:
 const CAL_MAX_AGE_MIN  = 180;  // calibration_state older than this = cron dark → abstain (can't trust σ)
-const CAL_BROKEN_JOIN_MIN_ELIGIBLE = 8;  // if >= this many settled bets were join-eligible but 0 matched,
-                                         // the actuals join is broken for that side (the LOW failure mode) → abstain
+// 2026-06-05: σ is now sourced from the POPULATION fit (sigma_{side}.posterior), not
+// bet-matched z. So liveness certifies on the population sample count, not the old
+// bet-matched cal-join-broken check (which deadlocked LOW: it couldn't trade → 0 settled
+// LOW bets → bet-matched n stuck at 0 → permanently "broken"). The population grows from
+// EVERY city's daily settle (logger writes actualLow for all cities) ~20/day, independent
+// of LOW betting — so this count climbs and LOW self-admits without ever needing to trade
+// first. Below this n the σ fit is mostly prior anyway (nu0=30), so the floor is cheap.
+const CAL_POP_MIN_N = 30;
 // 2026-05-28: CONCENTRATION CAP — no single (ticker,side) position may exceed
 // CONCENTRATION_CAP of equity. Enforced two ways: (1) new-entry stake sizing capped
 // at the limit; (2) sell-loop trim pass sells the excess on any over-concentrated
@@ -133,7 +139,20 @@ const CONCENTRATION_CAP = 0.20;
 // calibration; predictive_scale=1, no inflation). LOW had no equivalent of the HIGH σ-cap
 // / population-calibration validation. Hard-off until LOW gets the same treatment (population
 // refit on snapshot residualLow + its own price-level backtest). HIGH stays live (capped).
-const LOW_HARD_OFF = true;
+//
+// 2026-06-05: RE-FLIPPED FALSE — the documented exit criterion above is now MET. LOW got
+// the exact HIGH treatment: (1) ADAPTIVE sigma_low in calibration_update-background.js +
+// kalshi.js — population fit (actualLow−predLow), clamped to the same [1.5,2.5] guardrails,
+// prior fallback. The old SIGMA_FLOOR_LOW=2.0 that drove the −65% bleed was itself a
+// BET-MATCHED-audit artifact (|z|/exp≈5.9 = selection bias, the same one that inflated HIGH
+// to 2.775); the UNSELECTED population says RMS≈1.37/bias−0.13/no-fat-tails → honest σ≈1.45.
+// (2) Price-level backtest (backtest_bucket_pnl_low.mjs, 231 real-fill events): +EV across
+// the ENTIRE [1.5,2.5] envelope (+30.8/+28.2/+25.3% at thr 0.15) — a runaway fit can't lose.
+// Safety still layered: the cal-pop-thin gate holds LOW until sigma_low.n≥30, the Student-t
+// nu (bet-matched, starts fat-tailed at nu=4) keeps LOW humble until LOW bets prove out,
+// HOU LOW stays on LOW_PAUSED_CITIES, + CONCENTRATION/AGGREGATE caps. Re-flip true if live
+// LOW bleeds again or a fresh population σ-audit on settled LOW shows |z|/exp > 2.
+const LOW_HARD_OFF = false;
 // (b) AGGREGATE_EXPOSURE_CAP: total open exposure / equity ceiling. Per-position
 // concentration (above) doesn't help when N small positions all sink together. 50%
 // keeps half of equity in cash reserve. Heuristic — needs its own backtest. Skips new
@@ -910,14 +929,19 @@ export default async () => {
       ? Math.round((Date.now() - new Date(calState.updated_at).getTime()) / 60000) : null;
     const calHealthFor = (variable) => {
       const v = variable === "low" ? "low" : "high";
-      const s = calState?.[v];
       // Liveness ONLY. Uncertainty is handled upstream by the Student-t predictive;
       // here we hard-skip a side only when its calibration loop is DEAD:
-      if (!calState || !s) return { ok: false, reason: "cal-blob-missing" };
+      if (!calState) return { ok: false, reason: "cal-blob-missing" };
       if (calAgeMin != null && calAgeMin > CAL_MAX_AGE_MIN)
         return { ok: false, reason: `cal-stale-${calAgeMin}min` };  // cron dark
-      if ((s.eligible ?? 0) >= CAL_BROKEN_JOIN_MIN_ELIGIBLE && (s.n ?? 0) === 0)
-        return { ok: false, reason: `cal-join-broken-elig${s.eligible}-n0` };  // LOW failure mode
+      // Certify on the POPULATION σ fit (sigma_{side}) — the actual σ source — not the
+      // legacy bet-matched block. Missing posterior = the fit isn't published yet
+      // (e.g. calibration_update predates this side); thin n = not enough population
+      // residuals to trust. Both self-heal as daily settles accumulate. This is what
+      // replaced the deadlocking cal-join-broken bet-matched check (see CAL_POP_MIN_N).
+      const sig = calState?.[`sigma_${v}`];
+      if (sig?.posterior == null) return { ok: false, reason: `cal-sigma-missing-${v}` };
+      if ((sig.n ?? 0) < CAL_POP_MIN_N) return { ok: false, reason: `cal-pop-thin-${v}-n${sig.n ?? 0}` };
       return { ok: true, reason: null };
     };
     // Surfaced in the run summary (responseBody + trader_logs) so a dead/paused

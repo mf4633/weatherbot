@@ -78,5 +78,5 @@ function sim(sig,thr){ let pnl=0,stake=0,nb=0,w=0;
   return {nb,winPct:nb?100*w/nb:0,pnl,roi:stake>0?100*pnl/stake:0}; }
 console.log(`\n===== GATE 2 LOW (n_events=${raw.length}, decision ${DEC_HR}am, β_low(${HP})=${beta(HP).toFixed(2)}) =====`);
 console.log("σ-model | EV thr | #bets | win% | total P&L | ROI/stake");
-for(const sg of [2.0,2.5,3.0]) for(const thr of [0.05,0.10,0.15]){ const r=sim(sg,thr);
+for(const sg of [1.0,1.25,1.5,1.75,2.0,2.25,2.5,3.0,3.5]) for(const thr of [0.05,0.10,0.15]){ const r=sim(sg,thr);
   console.log(`${sg.toFixed(1).padEnd(8)}| ${thr.toFixed(2)}   | ${String(r.nb).padStart(4)}  | ${r.winPct.toFixed(0).padStart(3)}  | $${r.pnl.toFixed(2).padStart(8)} | ${r.roi.toFixed(1).padStart(6)}%`); }

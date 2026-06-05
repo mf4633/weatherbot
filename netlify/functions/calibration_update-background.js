@@ -220,6 +220,25 @@ async function computeCalibration() {
     (SIGMA_HIGH_NU0 * SIGMA_HIGH_PRIOR ** 2 + sumErr2) / (SIGMA_HIGH_NU0 + nErr));
   const sigmaHighPost = Math.min(SIGMA_HIGH_CAP, Math.max(SIGMA_HIGH_FLOOR, sigmaHighRaw));
 
+  // ADAPTIVE sigma_low — exact twin of sigma_high (2026-06-05). Same population-fit form,
+  // same guardrails. The old hardcoded SIGMA_FLOOR_LOW=2.0 came from a BET-MATCHED residual
+  // audit (|z|/exp≈5.9) — the same selection bias that inflated HIGH to 2.775. The UNSELECTED
+  // population residual (actualLow−predLow) is RMS≈1.37, bias≈−0.13, no fat tails → honest
+  // posterior ≈1.45 (clamps to the 1.5 floor), TIGHTER than the old 2.0 floor. Price-level
+  // backtest (_edge_raw_low.json, 231 events, real fills + CLI settle, backtest_bucket_pnl_low.mjs)
+  // is +EV across the ENTIRE [1.5,2.5] envelope (1.5→+30.8%, 2.0→+28.2%, 2.5→+25.3% at thr 0.15;
+  // breaks down only past σ=3.0) — so a runaway fit can't leave +EV, the guardrail invariant.
+  // Requires logger.js pred.actualLow (the keystone fix); population grows as LOW settles.
+  const SIGMA_LOW_PRIOR = 2.0, SIGMA_LOW_NU0 = 30, SIGMA_LOW_FLOOR = 1.5, SIGMA_LOW_CAP = 2.5;
+  const lowErrs = predictions
+    .map(p => (p?.actualLow != null && p?.predLow != null) ? p.actualLow - p.predLow : null)
+    .filter(e => Number.isFinite(e) && Math.abs(e) < 25);
+  const sumErr2Low = lowErrs.reduce((a, e) => a + e * e, 0);
+  const nErrLow = lowErrs.length;
+  const sigmaLowRaw = Math.sqrt(
+    (SIGMA_LOW_NU0 * SIGMA_LOW_PRIOR ** 2 + sumErr2Low) / (SIGMA_LOW_NU0 + nErrLow));
+  const sigmaLowPost = Math.min(SIGMA_LOW_CAP, Math.max(SIGMA_LOW_FLOOR, sigmaLowRaw));
+
   return {
     updated_at: new Date().toISOString(),
     prior_dof: PRIOR_DOF,
@@ -228,6 +247,12 @@ async function computeCalibration() {
       raw_posterior: Math.round(sigmaHighRaw * 1000) / 1000,
       prior: SIGMA_HIGH_PRIOR, nu0: SIGMA_HIGH_NU0,
       floor: SIGMA_HIGH_FLOOR, cap: SIGMA_HIGH_CAP, n: nErr
+    },
+    sigma_low: {
+      posterior: Math.round(sigmaLowPost * 1000) / 1000,
+      raw_posterior: Math.round(sigmaLowRaw * 1000) / 1000,
+      prior: SIGMA_LOW_PRIOR, nu0: SIGMA_LOW_NU0,
+      floor: SIGMA_LOW_FLOOR, cap: SIGMA_LOW_CAP, n: nErrLow
     },
     high: {
       n: zHigh.length,

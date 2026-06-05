@@ -189,7 +189,19 @@ const SIGMA_IRREDUCIBLE_F = 1.3;
 const SIGMA_HIGH_PRIOR = 2.0;
 const SIGMA_HIGH_FLOOR = 1.5;
 const SIGMA_HIGH_CAP   = 2.5;
-const SIGMA_FLOOR_LOW  = 2.0;
+// ADAPTIVE (calibrated) LOW predictive σ — exact twin of HIGH (2026-06-05). Same learned-
+// parameter form: calibration_update fits the posterior from the UNSELECTED prediction
+// population (actualLow−predLow, NOT bet-matched), this code re-clamps to [FLOOR,CAP] and
+// falls back to PRIOR. Replaces the former hardcoded SIGMA_FLOOR_LOW=2.0, which was derived
+// from a BET-MATCHED σ-audit (|z|/exp≈5.9) — the same selection bias that inflated HIGH to
+// 2.775 — and forced LOW too WIDE. Population residual is RMS≈1.37 (bias −0.13, no fat
+// tails) → honest posterior ≈1.45 → clamps to the 1.5 floor, TIGHTER than the old 2.0.
+//   [FLOOR, CAP] = HARD guardrails: the whole envelope backtests +EV on _edge_raw_low.json
+//   (231 real-fill events): 1.5→+30.8%, 2.0→+28.2%, 2.5→+25.3% at thr 0.15; +EV down to
+//   σ=1.0 and up to 3.0, breaks only past 3.0. LOW edge is wider/less σ-sensitive than HIGH.
+const SIGMA_LOW_PRIOR  = 2.0;
+const SIGMA_LOW_FLOOR  = 1.5;
+const SIGMA_LOW_CAP    = 2.5;
 
 // Per-city staleness gate. MUST mirror jackson_trader's PER_CITY_FRESHNESS_MAX_MIN so the
 // `stale` flags this endpoint exposes mean exactly what the live trader acts on. Gate is on
@@ -335,9 +347,12 @@ async function readCalibration() {
     // population (errors, NOT bet-matched) and hard-clamps it to the backtested-profitable
     // envelope. null here → caller falls back to the prior. See SIGMA_HIGH_* below.
     const sigmaHigh = blob?.sigma_high?.posterior ?? null;
-    return { high: side("high"), low: side("low"), sigmaHigh };
+    // Adaptive LOW predictive σ — exact twin of sigmaHigh (2026-06-05). Same population-fit,
+    // same [1.5,2.5] guardrails. null → caller falls back to SIGMA_LOW_PRIOR.
+    const sigmaLow = blob?.sigma_low?.posterior ?? null;
+    return { high: side("high"), low: side("low"), sigmaHigh, sigmaLow };
   } catch (e) {
-    return { high: { ...DFLT }, low: { ...DFLT }, sigmaHigh: null };
+    return { high: { ...DFLT }, low: { ...DFLT }, sigmaHigh: null, sigmaLow: null };
   }
 }
 
@@ -550,9 +565,14 @@ export default async () => {
     }
     // LOW event. upperFloor uses minSoFarCli (integer °F) — symmetric to HIGH lowerFloor.
     if (tickers.low && city.lowMean != null && city.lowStd != null) {
-      const sigmaEffRaw = Math.sqrt(city.lowStd ** 2 + SIGMA_IRREDUCIBLE_F ** 2)
-                          * calibration.low.scale;
-      const sigmaEff = Math.max(sigmaEffRaw, SIGMA_FLOOR_LOW);   // σ-audit floor
+      // Adaptive σ_low — exact twin of HIGH (2026-06-05). Population-fit posterior,
+      // re-clamped to [SIGMA_LOW_FLOOR, SIGMA_LOW_CAP], prior fallback. Replaces the old
+      // σ_ensemble×scale + SIGMA_FLOOR_LOW=2.0 form: that floor came from a bet-matched
+      // audit (selection bias) and forced LOW too WIDE; the unselected population says
+      // ~1.45 and the price-level backtest is +EV across the whole envelope. See kalshi.js
+      // SIGMA_LOW_* header + calibration_update-background.js sigma_low.
+      const sigmaEff = Math.min(SIGMA_LOW_CAP, Math.max(SIGMA_LOW_FLOOR,
+                                  calibration.sigmaLow ?? SIGMA_LOW_PRIOR));
       const r = await processEvent(city, tickers.low, "low", city.lowMean, sigmaEff,
                                     null, city.minSoFarCli ?? city.minSoFar, calibration.low.nu);
       if (r) {
