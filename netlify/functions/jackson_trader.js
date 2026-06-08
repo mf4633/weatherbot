@@ -99,6 +99,14 @@ const MIN_VOLUME = 20;
 // it self-abstains through the existing EV gate, with no discontinuity. What
 // remains here is pure LIVENESS — broken-pipe detection, not a statistical test:
 const CAL_MAX_AGE_MIN  = 180;  // calibration_state older than this = cron dark → abstain (can't trust σ)
+// 2026-06-08: SELF-HEAL. calibration_update-background's only reliable external driver was
+// cron-job.org job 7725770 (*/30), which was gapping to 1-3h — cal_age sawtoothed to ~300min
+// and 18% of cycles abstained whole-book on cal-stale, even though obs/forecast were fresh.
+// The TRADER's cron (cron-job.org 7725767, */5) is rock-solid. So instead of depending on a
+// separate fragile job, the trader fire-and-forgets a refresh of the background fn whenever
+// it sees calibration getting old. Background fn returns 202 instantly, so this never blocks
+// the cycle. Threshold well under CAL_MAX_AGE_MIN so a write lands long before the gate trips.
+const CAL_REFRESH_MIN  = 45;   // cal_age past this → trader kicks the calibration background fn
 // 2026-06-05: σ is now sourced from the POPULATION fit (sigma_{side}.posterior), not
 // bet-matched z. So liveness certifies on the population sample count, not the old
 // bet-matched cal-join-broken check (which deadlocked LOW: it couldn't trade → 0 settled
@@ -927,6 +935,22 @@ export default async () => {
     // calibration_state blob is stale (cron dark). Returns {ok, reason} per side.
     const calAgeMin = calState?.updated_at
       ? Math.round((Date.now() - new Date(calState.updated_at).getTime()) / 60000) : null;
+    // Self-heal stale calibration off the trader's reliable */5 cron (see CAL_REFRESH_MIN).
+    // The background fn returns 202 in ~200ms and writes within ~15s, so THIS cycle still
+    // gates on the current (stale) cal age — the refresh lands for the NEXT cycle. We AWAIT
+    // (not fire-and-forget) with a bounded timeout: an un-awaited fetch can be discarded when
+    // the serverless instance freezes before the request is even sent, so the kick would
+    // silently never fire. The AbortController caps the wait so a hung endpoint can't stall
+    // the trade cycle; any failure is swallowed (refresh is best-effort, never blocks trading).
+    if (calAgeMin == null || calAgeMin >= CAL_REFRESH_MIN) {
+      try {
+        const _ac = new AbortController();
+        const _t = setTimeout(() => _ac.abort(), 3000);
+        await fetch(`${SITE_BASE}/.netlify/functions/calibration_update-background`, {
+          headers: { authorization: "Basic " + btoa("internal:hydro") }, signal: _ac.signal
+        }).finally(() => clearTimeout(_t));
+      } catch { /* best-effort: never let a refresh failure break the trade cycle */ }
+    }
     const calHealthFor = (variable) => {
       const v = variable === "low" ? "low" : "high";
       // Liveness ONLY. Uncertainty is handled upstream by the Student-t predictive;
