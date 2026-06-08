@@ -143,6 +143,15 @@
   to = "/.netlify/functions/calibration_update-background"
   status = 200
 
+# HTTP route for the tolerant σ-revision/intraday-β refit background fn (2026-06-08).
+# logger's inline refit is disabled (INLINE_REFIT=false) because it 502s on the 10s sync
+# limit; this -background fn (15-min, 202) runs it reliably. Trader self-kicks it hourly
+# (gated to start after 2026-06-13). ?dryRun=1 verifies without writing live σ.
+[[redirects]]
+  from = "/api/sigma_refit"
+  to = "/.netlify/functions/sigma_refit-background"
+  status = 200
+
 [[redirects]]
   from = "/api/snapshots"
   to = "/.netlify/functions/snapshots"

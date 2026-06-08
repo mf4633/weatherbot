@@ -326,7 +326,9 @@ function fitVariableAlpha(snaps, predKey) {
   }));
   return { totalPairs, bins, alphaRaw: fitAlphaThroughOrigin(bins) };
 }
-async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
+// Exported (2026-06-08) so the tolerant sigma_refit-background fn can reuse the exact
+// same fit — single source of truth. Inline use here stays gated by INLINE_REFIT.
+export async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
   const cutoffUTC = now - SIGMA_REVISION_FIT_LOOKBACK_DAYS * 86_400_000;
   const cutoffDate = new Date(cutoffUTC).toISOString().slice(0, 10);  // "YYYY-MM-DD"
   const { blobs } = await snapshotsStore.list();
@@ -555,7 +557,7 @@ function fitBetaBins(rows, hrKey, fcKey, actKey, maxHr) {
   }
   return out;
 }
-async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
+export async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
   const { blobs } = await snapshotsStore.list();
   const cutoff = new Date(now - BETA_FIT_LOOKBACK_DAYS * 86400e3).toISOString().slice(0, 10);
   const keys = (blobs || []).map(b => b.key).filter(k => { const d = k.split("/")[1]; return d && d >= cutoff; })

@@ -107,6 +107,13 @@ const CAL_MAX_AGE_MIN  = 180;  // calibration_state older than this = cron dark 
 // it sees calibration getting old. Background fn returns 202 instantly, so this never blocks
 // the cycle. Threshold well under CAL_MAX_AGE_MIN so a write lands long before the gate trips.
 const CAL_REFRESH_MIN  = 45;   // cal_age past this → trader kicks the calibration background fn
+// 2026-06-08: re-enable the σ-revision / intraday-β refit (frozen since 2026-05-26 when
+// logger's INLINE_REFIT was disabled) by self-kicking the sigma_refit-background fn off the
+// trader's reliable */5 cron — ONCE PER HOUR (UTC minute < 5). GATED to start only after
+// SIGMA_REFIT_RESUME_TS so it doesn't move live σ during the hands-off observation window;
+// before that timestamp the kick is a no-op. Fire-and-forget with a bounded timeout, like
+// the cal kick. See sigma_refit-background.js, project_weatherbot_calibration_selfheal.
+const SIGMA_REFIT_RESUME_TS = Date.parse("2026-06-13T00:00:00Z");  // after the ~06-12 hands-off window
 // 2026-06-05: σ is now sourced from the POPULATION fit (sigma_{side}.posterior), not
 // bet-matched z. So liveness certifies on the population sample count, not the old
 // bet-matched cal-join-broken check (which deadlocked LOW: it couldn't trade → 0 settled
@@ -950,6 +957,21 @@ export default async () => {
           headers: { authorization: "Basic " + btoa("internal:hydro") }, signal: _ac.signal
         }).finally(() => clearTimeout(_t));
       } catch { /* best-effort: never let a refresh failure break the trade cycle */ }
+    }
+    // Hourly σ-revision/intraday-β refit kick — gated to start after the hands-off window
+    // (SIGMA_REFIT_RESUME_TS). UTC minute < 5 makes it fire ~once/hour off the */5 cron.
+    // Same bounded fire-and-forget contract as the cal kick: can never stall/break a cycle.
+    {
+      const _nowMs = Date.now();
+      if (_nowMs >= SIGMA_REFIT_RESUME_TS && new Date(_nowMs).getUTCMinutes() < 5) {
+        try {
+          const _ac2 = new AbortController();
+          const _t2 = setTimeout(() => _ac2.abort(), 3000);
+          await fetch(`${SITE_BASE}/.netlify/functions/sigma_refit-background`, {
+            headers: { authorization: "Basic " + btoa("internal:hydro") }, signal: _ac2.signal
+          }).finally(() => clearTimeout(_t2));
+        } catch { /* best-effort */ }
+      }
     }
     const calHealthFor = (variable) => {
       const v = variable === "low" ? "low" : "high";
