@@ -52,13 +52,32 @@ const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // admitting marginal 17-25¢ bets that dragged ROI to ~breakeven. 0.25 ~4× the ROI and maxes
 // total P&L. (In-sample, σ=2.5, pre-σ-margin; the threshold ORDERING is robust to those.)
 // LOW kept at 0.25 — that's its peak stable ROI (+43%); lower thresholds only dilute it.
-const MIN_EDGE_HIGH = 0.25;
-const MIN_EDGE_LOW  = 0.25;
+//
+// 2026-06-13 theoretical tightening (backtested via analyze_gate_sweeps.js on n=331
+// real settled WIN/LOSS from jackson_audit): Current book on 331 bets: 19.3% hit, -$867 PnL.
+// Raising to edge 0.28 / hk 0.20 produces large positive net_delta (~+$520 to +$590 range
+// depending on exact combo; e.g. hk=0.20 alone +$519 by recouping $665 from losers while
+// forgoing only $146 in winner PnL). Joint matrix confirms further gains at 0.28/0.20+.
+// This is the highest-leverage entry filter improvement supported by the historical
+// admissions. (Upward-only sim on past placed bets; future candidate distribution may differ.)
+//
+// Full-pool replay_backtest.js (data_models.json, synthetic market, identical model +
+// sizing + decision logic, only the two thresholds changed):
+//   Loose (0.05/0.02): 90d 24.0% ROI (1735 bets); 30d 23.3% ROI (567 bets, bankroll $20→~$8.96k).
+//   Tight (0.28/0.20): 90d 69.2% ROI (1398 bets); 30d 69.2% ROI (409 bets, bankroll $20→~$78.1k).
+// ~3× ROI, 19–28% fewer bets. Edge calibration improves at the higher bar (20-30¢ band near
+// perfectly calibrated in tight runs). Consistent with "marginal bets were net negative."
+const MIN_EDGE_HIGH = 0.28;
+const MIN_EDGE_LOW  = 0.28;
 function minEdgeFor(b) { return b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH; }
 // 2026-05-13: MIN_HALF_KELLY raised from 0.10 → 0.15. n=138 sweep: tightening to 0.15
 // rejected 4 bets (0W/4L), recouped $44 with zero wins forgone — clean Pareto win.
 // 0.20 would recoup $152 but rejects 27 bets including 2 wins (risk of overfit on n=138).
-const MIN_HALF_KELLY = 0.15;
+//
+// 2026-06-13: Further to 0.20 (paired with edge 0.28) per fresh n=331 sweep in
+// analyze_gate_sweeps.js — strong +$519 net_delta on the full historical book.
+// Replay confirms ~3× simulated ROI vs loose baseline.
+const MIN_HALF_KELLY = 0.20;
 // Cheap-tail floor: 2026-05-13 sweep on n=138 — bets at price ≤ 0.10 were 26/26
 // LOSSES, -$218 net. Raising 0.04 → 0.10 recoups $202 with ZERO wins forgone on
 // the existing population. The cleanest signal in the entire sweep. Cheap tails

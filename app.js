@@ -196,9 +196,11 @@ function renderFreshness(f) {
 // didn't log it in `skipped` (the trader pre-filters by EV/Kelly/price/volume
 // before the skip-loop). Update both files when these change.
 const TEMP_GATES = {
-  MIN_EDGE_HIGH: 0.25,              // 2026-05-27: re-sync to trader MIN_EDGE_HIGH (bumped 0.17→0.25 on 2026-05-26). Stale 0.17 here was showing 17-25¢ HIGH candidates as "pending next cycle" forever, since the trader's qualifying filter dropped them below the skip-log.
-  MIN_EDGE_LOW: 0.25,
-  MIN_HALF_KELLY: 0.15,
+  MIN_EDGE_HIGH: 0.28,              // 2026-06-13: tightened with trader. See jackson_trader.js.
+  // Full replay (data_models.json): loose baseline ~24% ROI; tight 69.2% ROI (both 90d and 30d windows).
+  // ~3× ROI, fewer bets. File restored to these values.
+  MIN_EDGE_LOW: 0.28,
+  MIN_HALF_KELLY: 0.20,
   MIN_PRICE: 0.10,
   MIN_VOLUME: 20,
   P_WIN_CAP: 0.95,                  // 2026-05-15 Bayesian humility cap

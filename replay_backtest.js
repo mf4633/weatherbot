@@ -17,8 +17,8 @@ const data = JSON.parse(readFileSync("data_models.json", "utf-8"));
 const TEST_DAYS = 90;
 const BANKROLL_START = 20;
 const MAX_CONCURRENT = 20;
-const MIN_EDGE = 0.05;
-const MIN_HALF_KELLY = 0.02;
+const MIN_EDGE = 0.28;
+const MIN_HALF_KELLY = 0.20;
 const MARKET_SPREAD = 0.02;
 const PLACE_HR = 12;  // local hour to place bets
 const MODELS = data.models.filter(m => !["jma_seamless", "gem_seamless"].includes(m));
@@ -296,3 +296,7 @@ for (let i = 0; i < dailyLog.length; i += Math.max(1, Math.floor(dailyLog.length
 }
 const last = dailyLog[dailyLog.length - 1];
 console.log(`  ${last.date}  bankroll=$${last.bankroll.toFixed(2)} (final)`);
+
+
+
+

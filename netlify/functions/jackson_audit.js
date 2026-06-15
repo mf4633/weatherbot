@@ -112,6 +112,26 @@ export default async (req) => {
               total: tempEntries.length + rainEntries.length },
     temp: tempEntries, rain: rainEntries
   };
+  // Include current live sigma/posterior from calibration_state for easy checking
+  // against the ~2.5 assumption in backtests (e.g. the +9.3% edge-sweep result).
+  // This closes the gap for ongoing "is live sigma holding the validated cell?" checks.
+  try {
+    const calStore = getStore("calibration_state");
+    const cal = await calStore.get("current.json", { type: "json" }).catch(() => null);
+    if (cal) {
+      out.calibration = {
+        sigma_high: cal.sigma_high,
+        sigma_low: cal.sigma_low,
+        sigma_high_posterior: cal.sigma_high_posterior,
+        sigma_low_posterior: cal.sigma_low_posterior,
+        high_n: cal.high_n,
+        low_n: cal.low_n,
+        updated_at: cal.updated_at || cal.last_update
+      };
+    }
+  } catch (e) {
+    out.calibration_error = e.message;
+  }
   return new Response(JSON.stringify(out, null, 2), {
     status: 200,
     headers: { "content-type": "application/json", "cache-control": "no-store" }
