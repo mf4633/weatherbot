@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Blocks runaway-agent pollution + leaked local paths from entering a commit.
+# Signatures: dispatch bait, fabricated-lead/"3-goals" narration, p3- task ids,
+# and absolute C:\Users\michael.flynn home paths.
+#
+# Portable: lives in scripts/ and is activated per clone with
+#   git config core.hooksPath scripts
+# Deliberate exception (rare): git commit --no-verify
+set -u
+
+# Added lines in the staged diff, excluding +++ headers and the guard's own
+# definition files (which by design contain the marker strings).
+added=$(git diff --cached --no-color -U0 --diff-filter=ACM -- . \
+          ':(exclude)scripts/pre-commit' \
+          ':(exclude).github/workflows/pollution-guard.yml' \
+        | grep -E '^\+' | grep -vE '^\+\+\+')
+[ -z "$added" ] && exit 0
+
+# 1) Wordy markers (plain regex, no backslashes).
+re='dispatch the 5 leads|real-dispatch-package|EXECUTION_READY|never gate fundamentals|hglStep0_2|exactly like what we need|scheduler 019eb|3-goals|p3-(friday|agent|docs|stormsewer|tauri|fieldhydro|board|verif|master|fly|keep|16)|file:///C:/Users'
+hits=$(printf '%s\n' "$added" | grep -inE "$re")
+
+# 2) Leaked home path (fixed-string, single- and double-backslash forms).
+phits=$(printf '%s\n' "$added" | grep -inF -e 'Users\michael.flynn' -e 'Users\\michael.flynn')
+
+if [ -n "$hits" ] || [ -n "$phits" ]; then
+  echo "x pre-commit blocked - agent-pollution / leaked-path markers in staged changes:"
+  { [ -n "$hits" ] && printf '%s\n' "$hits"; [ -n "$phits" ] && printf '%s\n' "$phits"; } \
+    | sed 's/^/    /' | head -40
+  echo ""
+  echo "  Remove these, or for a deliberate exception:  git commit --no-verify"
+  exit 1
+fi
+exit 0

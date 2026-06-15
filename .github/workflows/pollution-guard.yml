@@ -1,0 +1,33 @@
+name: pollution-guard
+
+# Server-side complement to scripts/pre-commit: fails CI if any tracked file
+# contains runaway-agent pollution markers or leaked absolute home paths.
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked files for pollution / leaked local paths
+        shell: bash
+        run: |
+          set -u
+          # All tracked files except the guard's own definitions (which by
+          # design contain the marker strings).
+          mapfile -t files < <(git ls-files | grep -vE \
+            '^(scripts/pre-commit|\.github/workflows/pollution-guard\.yml)$')
+          [ "${#files[@]}" -eq 0 ] && { echo "no files"; exit 0; }
+
+          re='dispatch the 5 leads|real-dispatch-package|EXECUTION_READY|never gate fundamentals|hglStep0_2|exactly like what we need|scheduler 019eb|3-goals|p3-(friday|agent|docs|stormsewer|tauri|fieldhydro|board|verif|master|fly|keep|16)|file:///C:/Users'
+          hits=$(grep -InE "$re" "${files[@]}" 2>/dev/null || true)
+          phits=$(grep -InF -e 'Users\michael.flynn' -e 'Users\\michael.flynn' "${files[@]}" 2>/dev/null || true)
+
+          if [ -n "${hits}${phits}" ]; then
+            echo "::error::agent-pollution / leaked-path markers found in tracked files"
+            printf '%s\n%s\n' "$hits" "$phits" | sed '/^$/d' | head -50
+            exit 1
+          fi
+          echo "clean: no pollution markers in tracked files"
