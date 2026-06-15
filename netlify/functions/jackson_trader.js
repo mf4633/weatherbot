@@ -915,8 +915,32 @@ async function placeSellOrder(ticker, side, count, priceCents) {
   return { ok: r.ok, status: r.status, body: j };
 }
 
-export default async () => {
-  if (!process.env.KALSHI_ACCESS_KEY_ID || !process.env.KALSHI_PRIVATE_KEY) {
+// Public (no-auth) Kalshi market-result lookup — paper mode runs without Kalshi
+// creds, so it can't use the authed getMarketResult. Mirrors jackson_audit's
+// getMarketPublic. Returns "yes"/"no" once settled, else null.
+async function getMarketResultPublic(ticker) {
+  try {
+    const r = await fetch(`https://api.elections.kalshi.com/trade-api/v2/markets/${ticker}`, {
+      headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10_000)
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const result = j?.market?.result;
+    return (result === "yes" || result === "no") ? result : null;
+  } catch (e) { return null; }
+}
+
+// Core trade cycle. isPaper=false (default) = the live "Andrew Jackson" trader.
+// isPaper=true = a faithful PAPER shadow on a virtual $100 bankroll: it runs the
+// IDENTICAL candidate gate stack + Kelly sizing, but (a) never touches Kalshi,
+// (b) sources bankroll/positions from the paper blob stores (open_bets /
+// settled_bets / paper_state, the ones /api/paper reads), and (c) is buys-only,
+// holding every position to settlement (no pyramid, no active sells). That last
+// choice is deliberate: it isolates the ENTRY-signal edge, which is exactly the
+// live-vs-backtest gap we're diagnosing (project_weatherbot_backtest_vs_live_gap).
+// Driven by paper_trader.js on its own */5 cron; reset/seed via /api/paper_reset.
+export async function runTraderCycle(isPaper = false) {
+  if (!isPaper && (!process.env.KALSHI_ACCESS_KEY_ID || !process.env.KALSHI_PRIVATE_KEY)) {
     return new Response(JSON.stringify({ ok: true, dormant: true,
       message: "Real-trader dormant: KALSHI_ACCESS_KEY_ID/KALSHI_PRIVATE_KEY not set" }), {
       status: 200, headers: { "content-type": "application/json" }
@@ -924,36 +948,50 @@ export default async () => {
   }
   // Hard arm-switch: real trading only fires when KALSHI_TRADING_LIVE === "true".
   // Without this, the trader is paused even if creds are present. Lets us land
-  // safety changes without immediately firing real orders.
-  const liveFlag = (process.env.KALSHI_TRADING_LIVE || "").trim().toLowerCase();
-  // Distinguish "paused" (kill switch off) from "dry-run" mode. In dry-run we still execute
-  // the placement loop (computing all skip/place decisions) but don't call Kalshi to actually
-  // submit orders. This lets us instrument the bucket-margin filter etc. without trading.
-  const isLive = ["true", "1", "yes", "on", "live"].includes(liveFlag);
-  const isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
-  if (!isLive && !isDryRun) {
-    return new Response(JSON.stringify({ ok: true, paused: true,
-      flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
-      message: "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode." }), {
-      status: 200, headers: { "content-type": "application/json" }
-    });
+  // safety changes without immediately firing real orders. Paper mode bypasses
+  // the arm-switch entirely (no real money at risk) and always runs the loop.
+  let isLive = false, isDryRun = false;
+  if (!isPaper) {
+    const liveFlag = (process.env.KALSHI_TRADING_LIVE || "").trim().toLowerCase();
+    // Distinguish "paused" (kill switch off) from "dry-run" mode. In dry-run we still execute
+    // the placement loop (computing all skip/place decisions) but don't call Kalshi to actually
+    // submit orders. This lets us instrument the bucket-margin filter etc. without trading.
+    isLive = ["true", "1", "yes", "on", "live"].includes(liveFlag);
+    isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
+    if (!isLive && !isDryRun) {
+      return new Response(JSON.stringify({ ok: true, paused: true,
+        flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
+        message: "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode." }), {
+        status: 200, headers: { "content-type": "application/json" }
+      });
+    }
   }
+  // noKalshi: simulate fills + skip every Kalshi network call. True in BOTH paper
+  // and dry-run. The buy loop already had a dryRun fork at each placeBuyOrder; we
+  // widen it to noKalshi so paper reuses the exact same placement path.
+  const noKalshi = isPaper || isDryRun;
+  const PAPER_SEED = 100;
 
   const placements = [], sales = [], errors = [], skipped = [];
-  const ledgerStore = getStore("jackson_open_bets");
-  const settledStore = getStore("jackson_settled_bets");
-  const cooldownStore = getStore("jackson_cooldown");
+  const ledgerStore = getStore(isPaper ? "open_bets" : "jackson_open_bets");
+  const settledStore = getStore(isPaper ? "settled_bets" : "jackson_settled_bets");
+  const cooldownStore = getStore(isPaper ? "paper_cooldown" : "jackson_cooldown");
   const calibrationStore = getStore("calibration_state");
+  const paperStateStore = isPaper ? getStore("paper_state") : null;
+  let paperState = null;          // loaded below; bankroll persisted at end
+  let paperOpenEntries = null;    // paper open bets, reused as `ledger`
+  let paperRealizedDelta = 0;     // net (post-fee) P&L booked this cycle
   try {
     // 1. Read live state from Kalshi + bot ledger + cooldown map.
-    const [balance, positionsResp, kalshiData, weatherData, { blobs: ledgerBlobs }, cooldownRaw, calState] = await Promise.all([
-      getBalance(),
-      getPositions(),
+    const [balanceRaw, positionsRaw, kalshiData, weatherData, { blobs: ledgerBlobs }, cooldownRaw, calState, paperStateRaw] = await Promise.all([
+      isPaper ? Promise.resolve(null) : getBalance(),
+      isPaper ? Promise.resolve(null) : getPositions(),
       fetchInternal("/api/kalshi"),
       fetchInternal("/api/weather"),
       ledgerStore.list().catch(() => ({ blobs: [] })),
       cooldownStore.get("map.json", { type: "json" }).catch(() => ({})),
-      calibrationStore.get("current.json", { type: "json" }).catch(() => null)
+      calibrationStore.get("current.json", { type: "json" }).catch(() => null),
+      isPaper ? paperStateStore.get("global", { type: "json" }).catch(() => null) : Promise.resolve(null)
     ]);
     // Calibration-health gate: certify each side's σ-inflation loop is alive and
     // sane before allowing new buys on it. See CAL_* constants. A side fails if
@@ -968,7 +1006,7 @@ export default async () => {
     // the serverless instance freezes before the request is even sent, so the kick would
     // silently never fire. The AbortController caps the wait so a hung endpoint can't stall
     // the trade cycle; any failure is swallowed (refresh is best-effort, never blocks trading).
-    if (calAgeMin == null || calAgeMin >= CAL_REFRESH_MIN) {
+    if (!isPaper && (calAgeMin == null || calAgeMin >= CAL_REFRESH_MIN)) {
       try {
         const _ac = new AbortController();
         const _t = setTimeout(() => _ac.abort(), 3000);
@@ -982,7 +1020,7 @@ export default async () => {
     // Same bounded fire-and-forget contract as the cal kick: can never stall/break a cycle.
     {
       const _nowMs = Date.now();
-      if (_nowMs >= SIGMA_REFIT_RESUME_TS && new Date(_nowMs).getUTCMinutes() < 5) {
+      if (!isPaper && _nowMs >= SIGMA_REFIT_RESUME_TS && new Date(_nowMs).getUTCMinutes() < 5) {
         try {
           const _ac2 = new AbortController();
           const _t2 = setTimeout(() => _ac2.abort(), 3000);
@@ -1025,29 +1063,44 @@ export default async () => {
     }
     const cityVarKey = (city, variable) => `cv:${city}:${variable || "high"}`;
 
-    const cashCents = balance.balance ?? 0;          // Kalshi returns balance in cents
-    const cashDollars = cashCents / 100;
-    // Equity = free cash + portfolio_value (open positions). Mirrors rain trader's
-    // line-457 formula. Used to decide stake-boost regime: below the threshold,
-    // we treat the bot as "earn-back mode" and let per-bet size be the lesser of
-    // STAKE_BOOST_FRAC * cash and STAKE_BOOST_DOLLAR_CAP. At/above the threshold,
-    // revert to normal STAKE_CEIL_FRAC * cash sizing.
-    const equityDollars = cashDollars + ((balance.portfolio_value ?? 0) / 100);
+    // Cash + equity. LIVE reads them from Kalshi; PAPER derives them from the
+    // virtual bankroll: equity = bankroll, free cash = bankroll − open paper
+    // stakes (each open bet's cost is "spent" until it settles). Bankroll is
+    // updated only at settlement (+= net realized), so this stays self-consistent.
+    let cashDollars, equityDollars, positions;
+    if (isPaper) {
+      paperState = paperStateRaw || { bankroll: PAPER_SEED, n_bets_total: 0, n_wins_total: 0, total_staked: 0, total_pnl: 0 };
+      paperOpenEntries = (await Promise.all(
+        ledgerBlobs.map(b => ledgerStore.get(b.key, { type: "json" }).catch(() => null))
+      )).filter(Boolean);
+      const openStake = paperOpenEntries.reduce((s, e) => s + (e.stake_dollars || 0), 0);
+      equityDollars = paperState.bankroll;
+      cashDollars = Math.max(0, paperState.bankroll - openStake);
+      positions = [];   // paper dedup runs off the ledger (botPlacedKeys), not Kalshi
+    } else {
+      const cashCents = balanceRaw.balance ?? 0;     // Kalshi returns balance in cents
+      cashDollars = cashCents / 100;
+      // Equity = free cash + portfolio_value (open positions). Mirrors rain trader's line-457 formula.
+      equityDollars = cashDollars + ((balanceRaw.portfolio_value ?? 0) / 100);
+      // Normalize Kalshi position fields. Real fields: position_fp (string of float;
+      // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
+      positions = (positionsRaw.market_positions || []).map(p => ({
+        ...p,
+        qty: parseFloat(p.position_fp || "0"),
+        exposure: parseFloat(p.market_exposure_dollars || "0"),
+        realizedPnl: parseFloat(p.realized_pnl_dollars || "0")
+      }));
+    }
+    // Stake-boost regime: below the threshold, "earn-back mode" sizes each bet at
+    // the lesser of STAKE_BOOST_FRAC*cash and STAKE_BOOST_DOLLAR_CAP; at/above it,
+    // normal STAKE_CEIL_FRAC*cash. Identical for paper so it faithfully mirrors what
+    // live WOULD do at the same equity. The single boost flag also drives the
+    // σ-margin gate threshold; both revert in lockstep at equity ≥ threshold.
     const stakeBoosted = equityDollars < STAKE_BOOST_EQUITY_THRESHOLD;
     const stakeCeilDollars = stakeBoosted
       ? Math.min(STAKE_BOOST_FRAC * cashDollars, STAKE_BOOST_DOLLAR_CAP)
       : STAKE_CEIL_FRAC * cashDollars;
-    // Single boost flag drives BOTH (a) the per-bet ceiling and (b) the σ-margin
-    // gate threshold. Both revert in lockstep at equity ≥ STAKE_BOOST_EQUITY_THRESHOLD.
     const sigmaBucketMarginZ = stakeBoosted ? SIGMA_BUCKET_MARGIN_Z_BOOST : SIGMA_BUCKET_MARGIN_Z;
-    // Normalize Kalshi position fields. Real fields: position_fp (string of float;
-    // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
-    const positions = (positionsResp.market_positions || []).map(p => ({
-      ...p,
-      qty: parseFloat(p.position_fp || "0"),
-      exposure: parseFloat(p.market_exposure_dollars || "0"),
-      realizedPnl: parseFloat(p.realized_pnl_dollars || "0")
-    }));
     const allOpenCount = positions.filter(p => p.qty !== 0).length;
     // Shared across pyramid loop (2b) and buy loop (3). Each placement adds its
     // dollar cost; cash-floor checks read `cashDollars - committed`.
@@ -1055,7 +1108,7 @@ export default async () => {
 
     // Bot ledger: entries we placed. Sell-loser logic ONLY iterates these.
     // User's pre-existing positions are off-limits.
-    const ledger = (await Promise.all(
+    const ledger = paperOpenEntries ?? (await Promise.all(
       ledgerBlobs.map(b => ledgerStore.get(b.key, { type: "json" }).catch(() => null))
     )).filter(Boolean);
     const botKey = (ticker, side) => `${ticker}-${side}`;
@@ -1078,7 +1131,7 @@ export default async () => {
       if (heldByKalshi.has(key)) liveLedger.push(entry);
       else settlingEntries.push(entry);
     }
-    if (settlingEntries.length > 0) {
+    if (!isPaper && settlingEntries.length > 0) {
       // Pull recent fills once for fee + sell-proceeds attribution. Limit 200
       // covers ~3-4 days of bot activity at current pace; longer-tail sells will
       // miss fee data but the realized payout from /markets is still authoritative.
@@ -1188,9 +1241,46 @@ export default async () => {
         }
       }
     }
+    // PAPER settle: every open paper bet whose market has resolved is booked at
+    // its terminal outcome (no fills, no sells, no phantom concept — paper fills
+    // are guaranteed). Unresolved markets stay in liveLedger (still "held"), with
+    // no age-based phantom deletion. Net P&L (incl. an entry-fee estimate matching
+    // Kalshi's 7% maker/taker schedule) accrues to paperRealizedDelta → bankroll.
+    if (isPaper && settlingEntries.length > 0) {
+      const results = await Promise.all(settlingEntries.map(e => getMarketResultPublic(e.ticker)));
+      for (let i = 0; i < settlingEntries.length; i++) {
+        const entry = settlingEntries[i];
+        const result = results[i];
+        if (result !== "yes" && result !== "no") { liveLedger.push(entry); continue; }  // unresolved → still held
+        const sideLower = (entry.side || "").toLowerCase();
+        const won = sideLower === result;
+        const contracts = entry.contracts || 0;
+        const stake = entry.stake_dollars || 0;
+        const realized = (won ? 1.0 : 0.0) * contracts - stake;   // ex-fee, matches live audit basis
+        const p = entry.price || 0;
+        const fee = Math.ceil(0.07 * contracts * p * (1 - p) * 100) / 100;   // Kalshi fee estimate
+        const net = realized - fee;
+        const settledRecord = {
+          ...entry,
+          settledAtUTC: new Date().toISOString(),
+          realized_pnl: Math.round(realized * 100) / 100,
+          fees_paid: fee,
+          pnl_dollars: Math.round(net * 100) / 100,   // net — /api/paper by_city reads this
+          outcome: won ? "WIN" : "LOSS",
+          marketResult: result,
+          targetCli: entry.city || null,              // /api/paper by_city groups on this
+        };
+        await settledStore.setJSON(`${entry.betId}.json`, settledRecord)
+          .catch(err => errors.push({ where: "paper-settled-write", betId: entry.betId, err: String(err) }));
+        await ledgerStore.delete(`${entry.betId}.json`).catch(() => {});
+        paperRealizedDelta += net;
+      }
+    }
     const botPlacedKeys = new Set(liveLedger.map(e => botKey(e.ticker, e.side)));
     // Total open exposure for the aggregate-exposure cap (set near top of file).
-    const currentExposureDollars = positions.reduce((s, p) => s + (p.exposure || 0), 0);
+    const currentExposureDollars = isPaper
+      ? liveLedger.reduce((s, e) => s + (e.stake_dollars || 0), 0)
+      : positions.reduce((s, p) => s + (p.exposure || 0), 0);
     const botOpenCount = liveLedger.length;
     // Replaces the old "MAX_CONCURRENT - botOpenCount" definition. Reports how many
     // additional bets fit at STAKE_FLOOR with remaining cash — the real binding
@@ -1233,8 +1323,9 @@ export default async () => {
 
     // 2. Sell positions where forward EV diverges from the current market bid by
     // more than SELL_HYSTERESIS (in either direction — losers AND overshooting
-    // winners). ONLY among bot-placed positions.
-    if (kalshiData?.cities) {
+    // winners). ONLY among bot-placed positions. Skipped entirely in paper mode
+    // (buys-only, hold-to-settlement — see runTraderCycle header).
+    if (!isPaper && kalshiData?.cities) {
       const cityIndex = Object.fromEntries(kalshiData.cities.map(c => [c.name, c]));
       // 2026-05-28: CONCENTRATION TRIM PASS — cap any held position whose Kalshi
       // exposure exceeds CONCENTRATION_CAP * equityDollars. Sells the excess at the
@@ -1413,7 +1504,7 @@ export default async () => {
     let pyramidCommitted = 0;
     const cycleSellKeys = new Set();
     for (const s of sales) cycleSellKeys.add(botKey(s.ticker, s.side));
-    if (kalshiData?.cities) {
+    if (!isPaper && kalshiData?.cities) {   // pyramid adds disabled in paper (buys-only)
       for (const p of positions) {
         if (p.qty === 0) continue;
         if (cashDollars - committed - pyramidCommitted < STAKE_FLOOR) break;
@@ -1969,8 +2060,9 @@ export default async () => {
         const priceCents = Math.max(1, Math.min(99, Math.round(orderPrice * 100)));
         // Dry-run mode: skip Kalshi order submission, fake an "ok" response so the
         // placement is logged for instrumentation purposes.
-        const res = isDryRun ? { ok: true, body: { order: { client_order_id: `dryrun-${Date.now()}` }, dryRun: true } }
-                             : await placeBuyOrder(fullTicker, b.side, contracts, priceCents);
+        const res = noKalshi
+          ? { ok: true, body: { order: { client_order_id: `${isPaper ? "paper" : "dryrun"}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, dryRun: !isPaper, paper: isPaper } }
+          : await placeBuyOrder(fullTicker, b.side, contracts, priceCents);
         // Expected payout = contracts × $1 × p_winning (assuming win pays $1/contract).
         const pWin = b.p_model;  // p_model is set to pNo for NO side, p_yes for YES side
         const expectedPayout = contracts * (Number.isFinite(pWin) ? pWin : 0);
@@ -1985,7 +2077,7 @@ export default async () => {
                           pWin: pWin != null ? Math.round(pWin * 1000) / 1000 : null,
                           expectedPayout: Math.round(expectedPayout * 100) / 100,
                           marginDebug: b._marginDebug,  // debug instrumentation
-                          dryRun: isDryRun,
+                          dryRun: isDryRun, paper: isPaper,
                           ok: res.ok });
         if (!res.ok) {
           errors.push({ where: "buy", ticker: fullTicker, response: res.body });
@@ -2005,13 +2097,15 @@ export default async () => {
           // because intra-run we want to allow complementary bets in the same event
           // (e.g., NO on both B45 and B85 tails). The cv lock is a CROSS-RUN backstop;
           // sells set it immediately because a sell-driven flip is the dangerous case.
-          if (!isDryRun) boughtCityVarKeys.add(cvLockKey);
+          if (!isDryRun || isPaper) boughtCityVarKeys.add(cvLockKey);
           // Track this placement in the intra-run heldEventSide set so a later
           // candidate in the same run with the same (event, side) gets the stack-cap
           // skip. The cross-run heldKey set already covers prior-run positions.
           heldEventSide.add(eventSideKey);
-          // Save to bot ledger so future runs know we own this position. Skip in dry-run.
-          if (isDryRun) continue;
+          // Save to bot ledger so future runs know we own this position. Skip in
+          // pure dry-run (instrumentation only); paper DOES persist (it's a real
+          // virtual position that must settle later).
+          if (isDryRun && !isPaper) continue;
           const betId = res.body?.order?.client_order_id || `${fullTicker}-${b.side}-${Date.now()}`;
           await ledgerStore.setJSON(`${betId}.json`, {
             betId, ticker: fullTicker, side: b.side, contracts,
@@ -2041,11 +2135,25 @@ export default async () => {
 
     const ranAtUTC = new Date().toISOString();
     const stakeCeil = Math.round(stakeCeilDollars * 100) / 100;
+    // Persist the paper bankroll (only settlements move it; placements just lock
+    // cash via open stakes, which we recompute from the ledger next cycle).
+    if (isPaper && paperState) {
+      const newBankroll = Math.round((paperState.bankroll + paperRealizedDelta) * 100) / 100;
+      await paperStateStore.setJSON("global", {
+        ...paperState,
+        bankroll: newBankroll,
+        total_pnl: Math.round(((paperState.total_pnl || 0) + paperRealizedDelta) * 100) / 100,
+        updated_at: ranAtUTC,
+      }).catch(err => errors.push({ where: "paper-state-write", err: String(err) }));
+    }
     const responseBody = {
       ok: true,
+      mode: isPaper ? "paper" : (isDryRun ? "dryrun" : "live"),
       ranAtUTC,
-      cashDollars,
+      cashDollars: Math.round(cashDollars * 100) / 100,
       equityDollars: Math.round(equityDollars * 100) / 100,
+      ...(isPaper ? { paper_bankroll: Math.round((paperState.bankroll + paperRealizedDelta) * 100) / 100,
+                      paper_realized_delta: Math.round(paperRealizedDelta * 100) / 100 } : {}),
       stake_mode: stakeBoosted ? "boost" : "normal",
       sigma_margin_z: sigmaBucketMarginZ,
       botOpenCount, allOpenCount,
@@ -2059,7 +2167,7 @@ export default async () => {
     // Write per-cycle structured log to trader_logs blob. Filename = ISO timestamp.
     // Tail (most recent ~200 entries) read via /api/trader_log.
     try {
-      const logStore = getStore("trader_logs");
+      const logStore = getStore(isPaper ? "paper_trader_logs" : "trader_logs");
       await logStore.setJSON(`${ranAtUTC}.json`, {
         ranAtUTC, cashDollars,
         equityDollars: Math.round(equityDollars * 100) / 100,
@@ -2103,7 +2211,11 @@ export default async () => {
       ok: false, error: String(e), placements, sales, skipped, errors
     }), { status: 500, headers: { "content-type": "application/json" } });
   }
-};
+}
 
-// Same 5-min schedule as paper trader. Will short-circuit if env vars missing.
+// Live scheduled entrypoint. The paper shadow runs from paper_trader.js, which
+// imports runTraderCycle(true) on its own */5 cron.
+export default async () => runTraderCycle(false);
+
+// Will short-circuit if env vars missing / arm-switch off.
 export const config = { schedule: "*/5 * * * *" };
