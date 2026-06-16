@@ -5,9 +5,13 @@
 // /api/paper reads), it's buys-only, and it holds every position to settlement.
 // Purpose: measure the live-vs-backtest edge gap on a clean, no-money book.
 //
-// Own */5 cron (same cadence as the live trader). Seed/reset via /api/paper_reset.
+// HTTP-triggered (NOT a Netlify schedule — those are throttled to near-never here,
+// which is why the live bots run off cron-job.org; see project_weatherbot_cron).
+// jackson_trader's default export kicks this every cycle off that reliable trigger,
+// so paper advances on the same */5 cadence as live. Also directly pingable for
+// debugging. Seed/reset via /api/paper_reset.
 import { runTraderCycle } from "./jackson_trader.js";
 
 export default async () => runTraderCycle(true);
 
-export const config = { schedule: "*/5 * * * *" };
+export const config = { path: "/api/paper_trader" };

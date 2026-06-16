@@ -2213,9 +2213,23 @@ export async function runTraderCycle(isPaper = false) {
   }
 }
 
-// Live scheduled entrypoint. The paper shadow runs from paper_trader.js, which
-// imports runTraderCycle(true) on its own */5 cron.
-export default async () => runTraderCycle(false);
+// Live scheduled entrypoint. Also kicks the PAPER shadow each cycle so it advances
+// on this endpoint's reliable cron-job.org trigger (Netlify's own schedules are
+// throttled to near-never — see project_weatherbot_cron). Bounded-await like the
+// calibration self-kick: paper_trader runs as its own invocation with its own
+// budget; if it exceeds the wait, the abort ends only OUR wait, not paper's run.
+// Paper can never affect the live cycle (separate invocation, errors swallowed).
+export default async () => {
+  const live = await runTraderCycle(false);
+  try {
+    const _ac = new AbortController();
+    const _t = setTimeout(() => _ac.abort(), 3000);
+    await fetch(`${SITE_BASE}/.netlify/functions/paper_trader`, {
+      headers: { authorization: "Basic " + btoa("internal:hydro") }, signal: _ac.signal
+    }).finally(() => clearTimeout(_t));
+  } catch { /* paper is best-effort; never block or fail the live cycle */ }
+  return live;
+};
 
 // Will short-circuit if env vars missing / arm-switch off.
 export const config = { schedule: "*/5 * * * *" };

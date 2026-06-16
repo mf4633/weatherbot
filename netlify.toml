@@ -9,9 +9,9 @@
   schedule = "*/5 * * * *"
 
 # Paper shadow trader — faithful $100 virtual mirror of jackson_trader's entry
-# engine (runTraderCycle(true)). Same */5 cadence; no money. Seed via /api/paper_reset.
-[functions."paper_trader"]
-  schedule = "*/5 * * * *"
+# engine. HTTP-triggered (Netlify schedules are throttled here); jackson_trader's
+# default export kicks /api/paper_trader every cycle off the reliable cron-job.org
+# trigger. Route below; no schedule. Seed via /api/paper_reset.
 
 # 2026-06-02: cut scheduled-function load to test whether Netlify's cron throttling
 # (firing */5 fns only every few hours) is invocation-budget driven. jackson_react was
@@ -78,6 +78,11 @@
 [[redirects]]
   from = "/api/paper_reset"
   to = "/.netlify/functions/paper_reset"
+  status = 200
+
+[[redirects]]
+  from = "/api/paper_trader"
+  to = "/.netlify/functions/paper_trader"
   status = 200
 
 [[redirects]]
