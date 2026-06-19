@@ -362,7 +362,11 @@ export async function runRefitSigmaRevision(snapshotsStore, regimeStore, now) {
   };
   const α_high = high.totalPairs >= SIGMA_REVISION_MIN_PAIRS ? clamp(high.alphaRaw) : null;
   const α_low  = low.totalPairs  >= SIGMA_REVISION_MIN_PAIRS ? clamp(low.alphaRaw)  : null;
-  const regimeBlob = (await regimeStore.get("global", { type: "json" })) || {};
+  // Strong consistency: this fn and runRefitIntradayBeta both read-modify-write "global"
+  // back-to-back. Default eventual reads returned a stale copy, so beta's write clobbered
+  // sigma's fresh alphas every run — sigma_revision_state froze at the 06-13 seed-null
+  // values for 6 days (2026-06-19 diagnosis). Strong reads guarantee read-your-writes.
+  const regimeBlob = (await regimeStore.get("global", { type: "json", consistency: "strong" })) || {};
   regimeBlob.sigma_revision_state = {
     α_high, α_low,
     α_high_raw: high.alphaRaw, α_low_raw: low.alphaRaw,
@@ -568,7 +572,10 @@ export async function runRefitIntradayBeta(snapshotsStore, regimeStore, now) {
   const high = fitBetaBins(snaps, "hrsToPeak", "forecastHigh", "actualHigh", 9);
   const low  = fitBetaBins(snaps, "hrsToTrough", "forecastLow", "actualLow", 6);
   if (!high.length && !low.length) return { fit: false, reason: "no-bin-met-min", n: snaps.length };
-  const regimeBlob = (await regimeStore.get("global", { type: "json" }).catch(() => null)) || {};
+  // Strong consistency (see runRefitSigmaRevision): beta runs second in the same bg
+  // invocation and must read the sigma_revision_state sigma just wrote, or its setJSON
+  // clobbers sigma's fresh alphas back to the prior value (the 06-13 lost-update bug).
+  const regimeBlob = (await regimeStore.get("global", { type: "json", consistency: "strong" }).catch(() => null)) || {};
   regimeBlob.intraday_beta_state = { high, low, nSnaps: snaps.length,
     lookbackDays: BETA_FIT_LOOKBACK_DAYS, fitAtUTC: new Date(now).toISOString() };
   await regimeStore.setJSON("global", regimeBlob);
