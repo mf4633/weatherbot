@@ -212,6 +212,21 @@ const TRADER_FRESHNESS_MAX_MIN = 180;
 function kalshiFeePerDollar(price) {
   return 0.07 * (1 - price);
 }
+// Corrected fee model (EDGE_AUDIT.md finding E). The gross edge (p_model − price) is
+// per CONTRACT, so the fee subtracted from it must also be per contract:
+//   fee_per_contract = ceil(7 · P · (1−P)) / 100   (matches the settlement math in
+// jackson_trader.js). The legacy kalshiFeePerDollar above is the fee per $1 STAKED,
+// which over-charges by ~1/price and biases the bot too conservative on cheap bets.
+// FLAG-GATED + OFF by default: switching the fee changes which bets clear MIN_EDGE,
+// so MIN_EDGE_* must be re-swept first (run resweep_fee.js against settled bets).
+// With FEE_PER_CONTRACT unset, kalshiEntryFee === kalshiFeePerDollar → byte-identical.
+const FEE_PER_CONTRACT = process.env.FEE_PER_CONTRACT === "true";
+function kalshiFeePerContract(price) {
+  return Math.ceil(0.07 * price * (1 - price) * 100) / 100;
+}
+function kalshiEntryFee(price) {
+  return FEE_PER_CONTRACT ? kalshiFeePerContract(price) : kalshiFeePerDollar(price);
+}
 
 // --- pWin recalibration (Platt), fit by pwin_calibration_fit.js, stored in the
 // `pwin_calibration_state` blob. OFF by default: it is loaded every request but only
@@ -495,8 +510,8 @@ export default async () => {
       // 5¢ realized after Kalshi's take.
       const grossEvYes = b.yes_ask != null ? p_model - b.yes_ask : null;
       const grossEvNo  = b.no_ask  != null ? (1 - p_model) - b.no_ask : null;
-      const feeYes = b.yes_ask != null ? kalshiFeePerDollar(b.yes_ask) : null;
-      const feeNo  = b.no_ask  != null ? kalshiFeePerDollar(b.no_ask)  : null;
+      const feeYes = b.yes_ask != null ? kalshiEntryFee(b.yes_ask) : null;
+      const feeNo  = b.no_ask  != null ? kalshiEntryFee(b.no_ask)  : null;
       const evYes = grossEvYes != null ? grossEvYes - feeYes : null;
       const evNo  = grossEvNo  != null ? grossEvNo  - feeNo  : null;
       return { ...b, p_model: Math.round(p_model * 1000) / 1000,

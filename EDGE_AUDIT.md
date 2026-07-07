@@ -48,10 +48,21 @@ edges realize ≈0 after fees" narrative is a symptom of this: the real per-cont
 drag is only ~1-2¢, so the 28¢ floor is compensating for **calibration/spread**, not
 fees (the code half-admits this in the `MIN_EDGE_HIGH` comment).
 
-**To fix safely:** switch to `feePerContract = ceil(0.07·price·(1−price)·100)/100` in
-`kalshi.js`, then re-run `node analyze_gate_sweeps.js` and `node replay_backtest.js`
-(both need the archive/live data) and re-derive `MIN_EDGE_HIGH/LOW`, `MIN_PRICE`.
-Ship the fee change and the new floors together.
+**Status — prepared on branch `claude/weatherbot-fee-resweep`:**
+- The corrected fee `feePerContract = ceil(0.07·price·(1−price)·100)/100` is wired into
+  `kalshi.js` and `jackson_trader.js` behind `FEE_PER_CONTRACT` (env flag, **default
+  off** → byte-identical to today until you flip it).
+- `resweep_fee.js` recomputes every settled bet's net edge under the corrected fee and
+  re-runs the `MIN_EDGE` tightening sweep (ALL/HIGH/LOW), plus a "hold-selectivity"
+  floor = the `MIN_EDGE_new` that still admits exactly the bets the old 0.28 gate did.
+  Run it offline from a saved dump: `BETS_FILE=./audit.json node resweep_fee.js`, or
+  live: `AUTH="x:hydro" node resweep_fee.js`.
+
+**To ship:** run `resweep_fee.js` against real settled bets → set `MIN_EDGE_HIGH/LOW`
+(and `MIN_PRICE`) to the chosen new floors → deploy with `FEE_PER_CONTRACT=true`. Ship
+the fee flag and the new floors **together**. (Settled data can't measure
+over-admission, so the hold-selectivity floor is the conservative starting point; the
+sweep tells you whether tightening further pays.)
 
 ### F. σ that prices bets is flat, population-fit, and hard-capped at 2.5
 `kalshi.js` prices buckets on a single `sigmaEff = clamp([1.5, 2.5], calibration.sigmaHigh)`

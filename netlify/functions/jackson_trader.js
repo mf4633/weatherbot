@@ -248,6 +248,16 @@ const AUTO_CLOSE_AT_PRICE = 0.99;
 // ask is 1¢, and crossing to that low bid gives up far more than settlement would.
 // Posting a limit at ≥98¢ either fills better or rides to settlement at $1.00.
 const AUTO_CLOSE_MIN_SELL = 0.98;
+// Fee model for the trader-side EV recomputes (σ-climb, Kelly-LCB gates). Mirrors
+// kalshi.js: default is the legacy per-$ fee; FEE_PER_CONTRACT=true switches to the
+// corrected per-contract fee (EDGE_AUDIT.md finding E). Keep this flag in lockstep
+// with kalshi.js's FEE_PER_CONTRACT so entry EV and these gate recomputes agree.
+// Off by default → these gates are byte-identical to before.
+const FEE_PER_CONTRACT = process.env.FEE_PER_CONTRACT === "true";
+function entryFee(price) {
+  return FEE_PER_CONTRACT ? Math.ceil(0.07 * price * (1 - price) * 100) / 100
+                          : 0.07 * (1 - price);
+}
 // Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
@@ -1947,7 +1957,7 @@ export async function runTraderCycle(isPaper = false) {
                       - normCdf01((b.loInt - 0.5 - muShifted) / sigmaEffClimb);
           }
           const pWinClimb = b.side?.toLowerCase() === "yes" ? pYesClimb : (1 - pYesClimb);
-          const feeClimb = 0.07 * (1 - b.price);
+          const feeClimb = entryFee(b.price);
           const evClimb = (pWinClimb - b.price) - feeClimb;
           const halfKellyClimb = b.price < 1
             ? Math.max(0, (pWinClimb - b.price) / (1 - b.price)) / 2 : 0;
@@ -1971,7 +1981,7 @@ export async function runTraderCycle(isPaper = false) {
         // sample (+$112 net in backtest_gates.js Kelly-LCB A/B).
         const lcb = kellyLcbAdjust(b, cityInputAges[b.city], alphasFromWeather);
         if (lcb) {
-          const fee = 0.07 * (1 - b.price);
+          const fee = entryFee(b.price);
           const evLCB = (lcb.pLCB - b.price) - fee;
           const halfKellyLCB = b.price < 1 ? Math.max(0, (lcb.pLCB - b.price) / (1 - b.price)) / 2 : 0;
           if (evLCB < minEdgeFor(b) || halfKellyLCB < MIN_HALF_KELLY) {
