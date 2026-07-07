@@ -243,6 +243,11 @@ const SELL_HYSTERESIS = 0.20;
 // comparison entirely — this is a velocity-of-money optimization, not a sell-loser
 // signal. 2026-05-13.
 const AUTO_CLOSE_AT_PRICE = 0.99;
+// Floor limit price for an auto-close sell. On a near-certain winner we never dump
+// below this — a wide-spread market can show our bid at 90-95¢ while the opposing
+// ask is 1¢, and crossing to that low bid gives up far more than settlement would.
+// Posting a limit at ≥98¢ either fills better or rides to settlement at $1.00.
+const AUTO_CLOSE_MIN_SELL = 0.98;
 // Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
@@ -1463,7 +1468,11 @@ export async function runTraderCycle(isPaper = false) {
         // expected payout by enough to cover round-trip fees (10% hysteresis).
         if (!autoClose && holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
         // SELL. In dry-run, fake the order response.
-        const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
+        // On auto-close, post a limit at ≥ AUTO_CLOSE_MIN_SELL instead of crossing to
+        // our (possibly low) bid — see AUTO_CLOSE_MIN_SELL. ev-flip exits still cross
+        // the bid because the goal there is to exit now, not to hold for settlement.
+        const effSellPrice = autoClose ? Math.max(sellPrice, AUTO_CLOSE_MIN_SELL) : sellPrice;
+        const sellPriceCents = Math.max(1, Math.round(effSellPrice * 100));
         const res = isDryRun ? { ok: true, body: { dryRun: true } }
                              : await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
@@ -1481,7 +1490,13 @@ export async function runTraderCycle(isPaper = false) {
           // until the cooldown expires or new info arrives. Catches the SATX 2026-05-07
           // pattern where YES on B62.5 was sold mid-run, then NO on B60.5 was bought
           // immediately after on the same SATX-low event.
-          if (citySide?.name && soldVariable) {
+          // EXCEPTION: an auto-close is a profit-take-and-recycle (near-certain winner
+          // sold at ~99¢), NOT a model flip — the model is not untrustworthy here. Locking
+          // the city/variable would starve exactly the capital redeployment the 99¢
+          // auto-close exists for, so skip the cv-lock on auto-close. (The ticker+side
+          // cooldown above still applies, which is harmless — we wouldn't rebuy a ~99¢
+          // bucket anyway.)
+          if (!autoClose && citySide?.name && soldVariable) {
             cooldownMap[cityVarKey(citySide.name, soldVariable)] = new Date().toISOString();
           }
         }
@@ -1692,9 +1707,15 @@ export async function runTraderCycle(isPaper = false) {
         const h = calHealthFor(b.variable || "high");
         if (!h.ok) skipped.push({ ...briefBet(b), reason: h.reason });
       }
+      // Liquidity gate: prefer 24h volume (the intended "traded recently" filter) but
+      // fall back to lifetime volume when kalshi.js couldn't source a 24h figure — so a
+      // missing field can never zero out the gate and halt trading. For the daily temp
+      // markets (created fresh each morning) lifetime ≈ today's volume anyway; the 24h
+      // figure only tightens genuinely multi-day/stale markets.
+      const liq = (b) => (b.volume24h ?? b.volume);
       const qualifying = (kalshiData.topBets || []).filter(b =>
         b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
-        && (b.volume == null || b.volume >= MIN_VOLUME)
+        && (liq(b) == null || liq(b) >= MIN_VOLUME)
         && calHealthFor(b.variable || "high").ok);
       let placed = 0;
       // `committed` is declared outside the buy loop (see line ~736) so the

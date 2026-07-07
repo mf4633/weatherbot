@@ -213,6 +213,30 @@ function kalshiFeePerDollar(price) {
   return 0.07 * (1 - price);
 }
 
+// --- pWin recalibration (Platt), fit by pwin_calibration_fit.js, stored in the
+// `pwin_calibration_state` blob. OFF by default: it is loaded every request but only
+// APPLIED when PWIN_CALIBRATION_ENABLED=true. When disabled, calibratePWin is the
+// identity, so every EV/Kelly number is byte-identical to the pre-scaffold behavior.
+// Enable only after validating the fit against fresh residuals — see EDGE_AUDIT.md.
+const PWIN_CALIBRATION_ENABLED = process.env.PWIN_CALIBRATION_ENABLED === "true";
+function _sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function _logitClamp(p) { const e = 1e-6, q = Math.min(1 - e, Math.max(e, p)); return Math.log(q / (1 - q)); }
+// Map a raw win probability through the fitted per-variable Platt recalibration.
+// Returns pWin unchanged unless enabled AND a converged fit for this variable exists.
+function calibratePWin(pWin, variable, pwinCal) {
+  if (!PWIN_CALIBRATION_ENABLED || !pwinCal || !pwinCal.fit) return pWin;
+  const fit = (variable === "low" ? pwinCal.platt_low : pwinCal.platt_high) ?? pwinCal.platt;
+  if (!fit || fit.converged === false || !Number.isFinite(fit.A) || !Number.isFinite(fit.B)) return pWin;
+  return _sigmoid(fit.A * _logitClamp(pWin) + fit.B);
+}
+async function readPwinCalibration() {
+  try {
+    const store = await getBlobStore("pwin_calibration_state");
+    if (!store) return null;
+    return await store.get("current.json", { type: "json" });
+  } catch (e) { return null; }
+}
+
 // Synthesize a human-readable label for any bucket, even when Kalshi's subtitle is empty.
 function bucketLabel(loInt, hiInt, subtitle) {
   if (subtitle && subtitle.trim()) return subtitle.trim();
@@ -366,6 +390,9 @@ export default async () => {
   // stdev. Applied as a multiplicative scaler AFTER the hierarchical-prior
   // quadrature, so the irreducible floor is still respected as a lower bound.
   const calibration = await readCalibration();
+  // pWin recalibration state — loaded always, applied only when PWIN_CALIBRATION_ENABLED
+  // (default off). See calibratePWin; when off it never changes any EV/Kelly value.
+  const pwinCal = await readPwinCalibration();
 
   const now = new Date();
   const cities = [];
@@ -453,7 +480,10 @@ export default async () => {
       const label   = bucketLabel(loInt, hiInt, mkt.subtitle);
       return { ticker: mkt.ticker, subtitle: mkt.subtitle, label, loInt, hiInt,
                yes_ask, yes_bid, no_ask, no_bid, last, midPx,
-               volume: mkt.volume_fp || 0 };
+               volume: mkt.volume_fp || 0,
+               // 24h volume for the trader's liquidity gate (the "traded recently" intent).
+               // null when Kalshi doesn't supply it → trader falls back to lifetime volume.
+               volume24h: mkt.volume_24h_fp ?? mkt.volume_24h ?? null };
     });
     const probSum = bucketsRaw.reduce((a, b) =>
       a + bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor, nu), 0);
@@ -481,24 +511,36 @@ export default async () => {
     const eventBets = [];
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
-        const k = kelly(b.p_model, b.yes_ask);
+        // Default-off: pYes=b.p_model, evYes=b.evYes → identical to pre-scaffold. When
+        // PWIN_CALIBRATION_ENABLED, recalibrate the win prob and re-derive EV (same fee).
+        let pYes = b.p_model, evYes = b.evYes;
+        if (PWIN_CALIBRATION_ENABLED) {
+          pYes = Math.round(calibratePWin(b.p_model, variable, pwinCal) * 1000) / 1000;
+          evYes = pYes - b.yes_ask - (b.feeYes ?? 0);
+        }
+        const k = kelly(pYes, b.yes_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: b.p_model, ev: b.evYes,
-          evPerDay: b.evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
-          kelly: k, halfKelly: k / 2, volume: b.volume,
+          side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: pYes, ev: evYes,
+          evPerDay: evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
+          kelly: k, halfKelly: k / 2, volume: b.volume, volume24h: b.volume24h,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
           obsAgeMin, nwsGridAgeMin, stale: betStale
         });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
-        const pNo = 1 - b.p_model;
+        // Default-off: pNo=1-b.p_model, evNo=b.evNo → identical to pre-scaffold.
+        let pNo = 1 - b.p_model, evNo = b.evNo;
+        if (PWIN_CALIBRATION_ENABLED) {
+          pNo = Math.round(calibratePWin(1 - b.p_model, variable, pwinCal) * 1000) / 1000;
+          evNo = pNo - b.no_ask - (b.feeNo ?? 0);
+        }
         const k = kelly(pNo, b.no_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: b.evNo,
-          evPerDay: b.evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
-          kelly: k, halfKelly: k / 2, volume: b.volume,
+          side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: evNo,
+          evPerDay: evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
+          kelly: k, halfKelly: k / 2, volume: b.volume, volume24h: b.volume24h,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
           obsAgeMin, nwsGridAgeMin, stale: betStale
         });
