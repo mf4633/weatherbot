@@ -5,6 +5,7 @@ import { getStore } from "@netlify/blobs";
 import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
+import { normCdf as _Phi } from "./lib/stats.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -181,14 +182,8 @@ const REGIME_RESIDUAL_SEED = {
 
 const MONTHS = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
 
-// Standard normal PDF and CDF (Abramowitz & Stegun 26.2.17).
+// Standard normal PDF here; CDF `_Phi` is imported from lib/stats.js (A&S 26.2.17).
 function _phi(x) { return Math.exp(-x*x/2) / Math.sqrt(2 * Math.PI); }
-function _Phi(x) {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989423 * Math.exp(-x*x/2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return x > 0 ? 1 - p : p;
-}
 // Truncated normal mean: E[X | X >= a] where X ~ N(mu, sigma^2).
 function truncNormalMean(mu, sigma, a) {
   const alpha = (a - mu) / sigma;

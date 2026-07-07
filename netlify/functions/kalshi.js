@@ -7,6 +7,8 @@
 //
 // All Kalshi prices are in dollars (0.01–0.99 for active markets).
 
+import { normCdf } from "./lib/stats.js";
+
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
 
@@ -28,13 +30,7 @@ const CITY_TO_KALSHI = {
   "Boston":            { high: "KXHIGHTBOS", low: "KXLOWTBOS"   }
 };
 
-// Standard normal CDF (Abramowitz & Stegun 26.2.17, ~7-decimal accuracy).
-function normCdf(x) {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989423 * Math.exp(-x * x / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return x > 0 ? 1 - p : p;
-}
+// Standard normal CDF (Abramowitz & Stegun 26.2.17) — see lib/stats.js.
 
 // --- Student-t CDF, for the Bayesian posterior-predictive bucket probabilities.
 // The calibration loop (calibration_update.js) emits (ν, scale); the outcome's
@@ -216,6 +212,45 @@ const TRADER_FRESHNESS_MAX_MIN = 180;
 function kalshiFeePerDollar(price) {
   return 0.07 * (1 - price);
 }
+// Corrected fee model (EDGE_AUDIT.md finding E). The gross edge (p_model − price) is
+// per CONTRACT, so the fee subtracted from it must also be per contract:
+//   fee_per_contract = ceil(7 · P · (1−P)) / 100   (matches the settlement math in
+// jackson_trader.js). The legacy kalshiFeePerDollar above is the fee per $1 STAKED,
+// which over-charges by ~1/price and biases the bot too conservative on cheap bets.
+// FLAG-GATED + OFF by default: switching the fee changes which bets clear MIN_EDGE,
+// so MIN_EDGE_* must be re-swept first (run resweep_fee.js against settled bets).
+// With FEE_PER_CONTRACT unset, kalshiEntryFee === kalshiFeePerDollar → byte-identical.
+const FEE_PER_CONTRACT = process.env.FEE_PER_CONTRACT === "true";
+function kalshiFeePerContract(price) {
+  return Math.ceil(0.07 * price * (1 - price) * 100) / 100;
+}
+function kalshiEntryFee(price) {
+  return FEE_PER_CONTRACT ? kalshiFeePerContract(price) : kalshiFeePerDollar(price);
+}
+
+// --- pWin recalibration (Platt), fit by pwin_calibration_fit.js, stored in the
+// `pwin_calibration_state` blob. OFF by default: it is loaded every request but only
+// APPLIED when PWIN_CALIBRATION_ENABLED=true. When disabled, calibratePWin is the
+// identity, so every EV/Kelly number is byte-identical to the pre-scaffold behavior.
+// Enable only after validating the fit against fresh residuals — see EDGE_AUDIT.md.
+const PWIN_CALIBRATION_ENABLED = process.env.PWIN_CALIBRATION_ENABLED === "true";
+function _sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function _logitClamp(p) { const e = 1e-6, q = Math.min(1 - e, Math.max(e, p)); return Math.log(q / (1 - q)); }
+// Map a raw win probability through the fitted per-variable Platt recalibration.
+// Returns pWin unchanged unless enabled AND a converged fit for this variable exists.
+function calibratePWin(pWin, variable, pwinCal) {
+  if (!PWIN_CALIBRATION_ENABLED || !pwinCal || !pwinCal.fit) return pWin;
+  const fit = (variable === "low" ? pwinCal.platt_low : pwinCal.platt_high) ?? pwinCal.platt;
+  if (!fit || fit.converged === false || !Number.isFinite(fit.A) || !Number.isFinite(fit.B)) return pWin;
+  return _sigmoid(fit.A * _logitClamp(pWin) + fit.B);
+}
+async function readPwinCalibration() {
+  try {
+    const store = await getBlobStore("pwin_calibration_state");
+    if (!store) return null;
+    return await store.get("current.json", { type: "json" });
+  } catch (e) { return null; }
+}
 
 // Synthesize a human-readable label for any bucket, even when Kalshi's subtitle is empty.
 function bucketLabel(loInt, hiInt, subtitle) {
@@ -370,6 +405,9 @@ export default async () => {
   // stdev. Applied as a multiplicative scaler AFTER the hierarchical-prior
   // quadrature, so the irreducible floor is still respected as a lower bound.
   const calibration = await readCalibration();
+  // pWin recalibration state — loaded always, applied only when PWIN_CALIBRATION_ENABLED
+  // (default off). See calibratePWin; when off it never changes any EV/Kelly value.
+  const pwinCal = await readPwinCalibration();
 
   const now = new Date();
   const cities = [];
@@ -457,7 +495,10 @@ export default async () => {
       const label   = bucketLabel(loInt, hiInt, mkt.subtitle);
       return { ticker: mkt.ticker, subtitle: mkt.subtitle, label, loInt, hiInt,
                yes_ask, yes_bid, no_ask, no_bid, last, midPx,
-               volume: mkt.volume_fp || 0 };
+               volume: mkt.volume_fp || 0,
+               // 24h volume for the trader's liquidity gate (the "traded recently" intent).
+               // null when Kalshi doesn't supply it → trader falls back to lifetime volume.
+               volume24h: mkt.volume_24h_fp ?? mkt.volume_24h ?? null };
     });
     const probSum = bucketsRaw.reduce((a, b) =>
       a + bucketProb(mean, std, b.loInt, b.hiInt, lowerFloor, upperFloor, nu), 0);
@@ -469,8 +510,8 @@ export default async () => {
       // 5¢ realized after Kalshi's take.
       const grossEvYes = b.yes_ask != null ? p_model - b.yes_ask : null;
       const grossEvNo  = b.no_ask  != null ? (1 - p_model) - b.no_ask : null;
-      const feeYes = b.yes_ask != null ? kalshiFeePerDollar(b.yes_ask) : null;
-      const feeNo  = b.no_ask  != null ? kalshiFeePerDollar(b.no_ask)  : null;
+      const feeYes = b.yes_ask != null ? kalshiEntryFee(b.yes_ask) : null;
+      const feeNo  = b.no_ask  != null ? kalshiEntryFee(b.no_ask)  : null;
       const evYes = grossEvYes != null ? grossEvYes - feeYes : null;
       const evNo  = grossEvNo  != null ? grossEvNo  - feeNo  : null;
       return { ...b, p_model: Math.round(p_model * 1000) / 1000,
@@ -485,24 +526,36 @@ export default async () => {
     const eventBets = [];
     for (const b of buckets) {
       if (b.evYes != null && b.evYes > 0.02 && b.yes_ask < 0.95) {
-        const k = kelly(b.p_model, b.yes_ask);
+        // Default-off: pYes=b.p_model, evYes=b.evYes → identical to pre-scaffold. When
+        // PWIN_CALIBRATION_ENABLED, recalibrate the win prob and re-derive EV (same fee).
+        let pYes = b.p_model, evYes = b.evYes;
+        if (PWIN_CALIBRATION_ENABLED) {
+          pYes = Math.round(calibratePWin(b.p_model, variable, pwinCal) * 1000) / 1000;
+          evYes = pYes - b.yes_ask - (b.feeYes ?? 0);
+        }
+        const k = kelly(pYes, b.yes_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: b.p_model, ev: b.evYes,
-          evPerDay: b.evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
-          kelly: k, halfKelly: k / 2, volume: b.volume,
+          side: "YES", price: b.yes_ask, bid: b.yes_bid, p_model: pYes, ev: evYes,
+          evPerDay: evYes / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
+          kelly: k, halfKelly: k / 2, volume: b.volume, volume24h: b.volume24h,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
           obsAgeMin, nwsGridAgeMin, stale: betStale
         });
       }
       if (b.evNo != null && b.evNo > 0.02 && b.no_ask < 0.95) {
-        const pNo = 1 - b.p_model;
+        // Default-off: pNo=1-b.p_model, evNo=b.evNo → identical to pre-scaffold.
+        let pNo = 1 - b.p_model, evNo = b.evNo;
+        if (PWIN_CALIBRATION_ENABLED) {
+          pNo = Math.round(calibratePWin(1 - b.p_model, variable, pwinCal) * 1000) / 1000;
+          evNo = pNo - b.no_ask - (b.feeNo ?? 0);
+        }
         const k = kelly(pNo, b.no_ask);
         eventBets.push({
           city: city.name, variable, bucket: b.label, ticker: b.ticker.split("-").pop(),
-          side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: b.evNo,
-          evPerDay: b.evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
-          kelly: k, halfKelly: k / 2, volume: b.volume,
+          side: "NO", price: b.no_ask, bid: b.no_bid, p_model: pNo, ev: evNo,
+          evPerDay: evNo / HOLDING_DAYS, holdingDays: HOLDING_DAYS,
+          kelly: k, halfKelly: k / 2, volume: b.volume, volume24h: b.volume24h,
           loInt: b.loInt, hiInt: b.hiInt, modelMean: mean, modelStd: std,
           obsAgeMin, nwsGridAgeMin, stale: betStale
         });

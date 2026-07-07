@@ -1,0 +1,20 @@
+name: safety-test
+
+# Runs the Kalshi API safety regression test (test_safety.js) on every push/PR.
+# This asserts the trading client can NEVER call a deposit/withdraw/transfer
+# endpoint — a real-money guard that previously ran on nobody's machine.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npm test

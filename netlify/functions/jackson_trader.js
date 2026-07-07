@@ -12,6 +12,7 @@
 
 import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketResult } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
+import { normCdf01 } from "./lib/stats.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // No concurrent-position cap. Threshold gates (EV / halfKelly / Kelly-LCB), tile
@@ -242,6 +243,21 @@ const SELL_HYSTERESIS = 0.20;
 // comparison entirely — this is a velocity-of-money optimization, not a sell-loser
 // signal. 2026-05-13.
 const AUTO_CLOSE_AT_PRICE = 0.99;
+// Floor limit price for an auto-close sell. On a near-certain winner we never dump
+// below this — a wide-spread market can show our bid at 90-95¢ while the opposing
+// ask is 1¢, and crossing to that low bid gives up far more than settlement would.
+// Posting a limit at ≥98¢ either fills better or rides to settlement at $1.00.
+const AUTO_CLOSE_MIN_SELL = 0.98;
+// Fee model for the trader-side EV recomputes (σ-climb, Kelly-LCB gates). Mirrors
+// kalshi.js: default is the legacy per-$ fee; FEE_PER_CONTRACT=true switches to the
+// corrected per-contract fee (EDGE_AUDIT.md finding E). Keep this flag in lockstep
+// with kalshi.js's FEE_PER_CONTRACT so entry EV and these gate recomputes agree.
+// Off by default → these gates are byte-identical to before.
+const FEE_PER_CONTRACT = process.env.FEE_PER_CONTRACT === "true";
+function entryFee(price) {
+  return FEE_PER_CONTRACT ? Math.ceil(0.07 * price * (1 - price) * 100) / 100
+                          : 0.07 * (1 - price);
+}
 // Stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll.
 // At $20 bankroll: stake range $1–$2. At $200: $1–$20. Conviction-weighted.
 const STAKE_FLOOR = 1.0;
@@ -510,14 +526,7 @@ function bucketBoundaryMargin(b, weatherCity) {
 // Cold-tail HIGH (added same): boundary = hi + 0.5.
 //   YES wins iff high < boundary → P(YES) = Φ((boundary - m)/σ)
 //   NO  wins iff high ≥ boundary → P(NO) = 1 − Φ((boundary - m)/σ)
-function normCdf01(z) {
-  // Abramowitz–Stegun 7.1.26 approximation; max error ~1.5e-7.
-  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
-  const sign = z < 0 ? -1 : 1; const x = Math.abs(z) / Math.SQRT2;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1) * t * Math.exp(-x*x);
-  return 0.5 * (1 + sign * y);
-}
+// normCdf01 (A&S 7.1.26) is imported from lib/stats.js.
 function tailBucketPosteriorP(b, weatherCity, sigmaCooling) {
   const side = b.side?.toLowerCase();
   if (side !== "yes" && side !== "no") return null;
@@ -1469,7 +1478,11 @@ export async function runTraderCycle(isPaper = false) {
         // expected payout by enough to cover round-trip fees (10% hysteresis).
         if (!autoClose && holdEV >= sellProceeds * (1 - SELL_HYSTERESIS)) continue;
         // SELL. In dry-run, fake the order response.
-        const sellPriceCents = Math.max(1, Math.round(sellPrice * 100));
+        // On auto-close, post a limit at ≥ AUTO_CLOSE_MIN_SELL instead of crossing to
+        // our (possibly low) bid — see AUTO_CLOSE_MIN_SELL. ev-flip exits still cross
+        // the bid because the goal there is to exit now, not to hold for settlement.
+        const effSellPrice = autoClose ? Math.max(sellPrice, AUTO_CLOSE_MIN_SELL) : sellPrice;
+        const sellPriceCents = Math.max(1, Math.round(effSellPrice * 100));
         const res = isDryRun ? { ok: true, body: { dryRun: true } }
                              : await placeSellOrder(ticker, isYes ? "YES" : "NO", contracts, sellPriceCents);
         sales.push({ ticker, side: isYes ? "YES" : "NO", count: contracts, sellPriceCents,
@@ -1487,7 +1500,13 @@ export async function runTraderCycle(isPaper = false) {
           // until the cooldown expires or new info arrives. Catches the SATX 2026-05-07
           // pattern where YES on B62.5 was sold mid-run, then NO on B60.5 was bought
           // immediately after on the same SATX-low event.
-          if (citySide?.name && soldVariable) {
+          // EXCEPTION: an auto-close is a profit-take-and-recycle (near-certain winner
+          // sold at ~99¢), NOT a model flip — the model is not untrustworthy here. Locking
+          // the city/variable would starve exactly the capital redeployment the 99¢
+          // auto-close exists for, so skip the cv-lock on auto-close. (The ticker+side
+          // cooldown above still applies, which is harmless — we wouldn't rebuy a ~99¢
+          // bucket anyway.)
+          if (!autoClose && citySide?.name && soldVariable) {
             cooldownMap[cityVarKey(citySide.name, soldVariable)] = new Date().toISOString();
           }
         }
@@ -1698,9 +1717,15 @@ export async function runTraderCycle(isPaper = false) {
         const h = calHealthFor(b.variable || "high");
         if (!h.ok) skipped.push({ ...briefBet(b), reason: h.reason });
       }
+      // Liquidity gate: prefer 24h volume (the intended "traded recently" filter) but
+      // fall back to lifetime volume when kalshi.js couldn't source a 24h figure — so a
+      // missing field can never zero out the gate and halt trading. For the daily temp
+      // markets (created fresh each morning) lifetime ≈ today's volume anyway; the 24h
+      // figure only tightens genuinely multi-day/stale markets.
+      const liq = (b) => (b.volume24h ?? b.volume);
       const qualifying = (kalshiData.topBets || []).filter(b =>
         b.ev >= minEdgeFor(b) && b.halfKelly >= MIN_HALF_KELLY && b.price >= MIN_PRICE
-        && (b.volume == null || b.volume >= MIN_VOLUME)
+        && (liq(b) == null || liq(b) >= MIN_VOLUME)
         && calHealthFor(b.variable || "high").ok);
       let placed = 0;
       // `committed` is declared outside the buy loop (see line ~736) so the
@@ -1932,7 +1957,7 @@ export async function runTraderCycle(isPaper = false) {
                       - normCdf01((b.loInt - 0.5 - muShifted) / sigmaEffClimb);
           }
           const pWinClimb = b.side?.toLowerCase() === "yes" ? pYesClimb : (1 - pYesClimb);
-          const feeClimb = 0.07 * (1 - b.price);
+          const feeClimb = entryFee(b.price);
           const evClimb = (pWinClimb - b.price) - feeClimb;
           const halfKellyClimb = b.price < 1
             ? Math.max(0, (pWinClimb - b.price) / (1 - b.price)) / 2 : 0;
@@ -1956,7 +1981,7 @@ export async function runTraderCycle(isPaper = false) {
         // sample (+$112 net in backtest_gates.js Kelly-LCB A/B).
         const lcb = kellyLcbAdjust(b, cityInputAges[b.city], alphasFromWeather);
         if (lcb) {
-          const fee = 0.07 * (1 - b.price);
+          const fee = entryFee(b.price);
           const evLCB = (lcb.pLCB - b.price) - fee;
           const halfKellyLCB = b.price < 1 ? Math.max(0, (lcb.pLCB - b.price) / (1 - b.price)) / 2 : 0;
           if (evLCB < minEdgeFor(b) || halfKellyLCB < MIN_HALF_KELLY) {
