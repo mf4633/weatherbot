@@ -7,6 +7,8 @@
 //
 // All Kalshi prices are in dollars (0.01–0.99 for active markets).
 
+import { normCdf } from "./lib/stats.js";
+
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
 
@@ -28,13 +30,7 @@ const CITY_TO_KALSHI = {
   "Boston":            { high: "KXHIGHTBOS", low: "KXLOWTBOS"   }
 };
 
-// Standard normal CDF (Abramowitz & Stegun 26.2.17, ~7-decimal accuracy).
-function normCdf(x) {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989423 * Math.exp(-x * x / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return x > 0 ? 1 - p : p;
-}
+// Standard normal CDF (Abramowitz & Stegun 26.2.17) — see lib/stats.js.
 
 // --- Student-t CDF, for the Bayesian posterior-predictive bucket probabilities.
 // The calibration loop (calibration_update.js) emits (ν, scale); the outcome's
