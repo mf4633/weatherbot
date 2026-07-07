@@ -7,7 +7,7 @@ const CITY_TO_KALSHI_SERIES = {
   "New York":          "KXHIGHNY",
   "Los Angeles":       "KXHIGHLAX",
   "Chicago":           "KXHIGHCHI",
-  "Houston":           "KXHIGHHOU",
+  "Houston":           "KXHIGHTHOU",
   "Phoenix":           "KXHIGHTPHX",
   "Philadelphia":      "KXHIGHPHIL",
   "San Antonio":       "KXHIGHTSATX",
@@ -55,7 +55,9 @@ function bucketProb(mean, std, loInt, hiInt, maxSoFar) {
   return Math.max(0, pHi - pLo);
 }
 
-const wd = await (await fetch(`${SITE}/api/weather`)).json();
+const wr = await fetch(`${SITE}/api/weather`);
+if (!wr.ok) { console.error(`GET /api/weather failed: HTTP ${wr.status}`); process.exit(1); }
+const wd = await wr.json();
 console.log(`Pulled ${wd.cities.length} city predictions (cached=${wd.cached})\n`);
 
 const allBets = [];
