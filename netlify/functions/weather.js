@@ -2,7 +2,7 @@
 // For top-20 US cities. Uses NWS hourly forecast + METAR observations + bias correction.
 
 import { getStore } from "@netlify/blobs";
-import { fetch1MinObs, getTodayMaxMin } from "./lib/asos1min.js";
+import { fetch1MinObs, getTodayMaxMin, coverageCrossCheck } from "./lib/asos1min.js";
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
@@ -735,7 +735,7 @@ function resolveIntradayBeta(regimeBlob) {
   return { high: merge(HIGH_BIAS_BETA_SEED, st?.high), low: merge(LOW_BIAS_BETA_SEED, st?.low) };
 }
 
-function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm) {
+function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm, oneMinByStation) {
   const now = new Date();
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
@@ -797,6 +797,19 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     console.log(`[asos1min] ${city.station}: n=${oneMin.n} cov=${synopticCoverage} ${detail}`);
   } else {
     console.log(`[asos1min] ${city.station}: n=0 cov=none no-data`);
+  }
+  // Airmass cross-check for a degraded settlement monitor (SETTLEMENT-SAFE — never
+  // touches maxSoFar/maxSoFarCli). When the primary is on hourly-only/stalled/no
+  // 5-min coverage AND a well-sited neighbor still shows the airmass climbing, the
+  // flat maxSoFar is probably stale-low; flag it so the trader cuts size / waits.
+  let coverageWarn = null;
+  if (synopticCoverage !== "1min" && synopticCoverage !== "5min") {
+    const xc = coverageCrossCheck(oneMinByStation, city.station, city.tz, now);
+    if (xc) {
+      const warn = xc.rise30F != null && xc.rise30F >= 1.0;
+      coverageWarn = { primaryCov: synopticCoverage, ...xc, warn };
+      if (warn) console.log(`[coverage-xcheck] ${city.station}: primary=${synopticCoverage} but ${xc.neighbor} +${xc.rise30F.toFixed(1)}F/30min — maxSoFar likely stale-low, cut size`);
+    }
   }
   // IEM divergence alarm: if our maxSoFar (METAR + Synoptic-derived) disagrees with
   // IEM's preliminary daily max by more than 1°F, one of the two has stale or missing
@@ -1387,6 +1400,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       latest5MinAvg: oneMin.latest5MinAvg != null ? round(oneMin.latest5MinAvg) : null,
       nBuckets5Min: oneMin.nBuckets5Min,
     } : null,
+    // Airmass cross-check when the settlement monitor's own 5-min feed is degraded
+    // (null unless a neighbor witness exists; see asos1min.js coverageCrossCheck).
+    coverageWarn: coverageWarn ? {
+      ...coverageWarn,
+      rise30F: coverageWarn.rise30F != null ? round(coverageWarn.rise30F) : null,
+      neighborLatestF: coverageWarn.neighborLatestF != null ? round(coverageWarn.neighborLatestF) : null,
+    } : null,
     // HIGH (today's max).
     maxSoFar: maxSoFar != null ? round(maxSoFar) : null,
     maxSoFarCli,
@@ -1473,7 +1493,7 @@ export default async (req) => {
     const oneMin = getTodayMaxMin(oneMinByStation, c.station, c.tz);
     const iem = iemByStation?.[c.station] ?? null;
     const dsm = dsmByStation?.[c.station] ?? null;
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem, dsm);
+    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem, dsm, oneMinByStation);
   });
 
   CACHE = { ts: now, data: cities };

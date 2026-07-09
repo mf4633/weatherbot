@@ -35,6 +35,8 @@ export function parseMetar(line, refNow) {
   }
   if (tempC == null) return null;
   const w = line.match(/\b(\d{3}|VRB)(\d{2,3})(?:G\d{2,3})?KT\b/);
+  const sky = (line.match(/\b(?:FEW|SCT|BKN|OVC)\d{3}\b/g) || []).join(" ") ||
+              (/\b(?:CLR|SKC|NSC|NCD)\b/.test(line) ? "CLR" : "");
   return {
     ts,
     temp_f: c2f(tempC),
@@ -42,6 +44,7 @@ export function parseMetar(line, refNow) {
     wind_dir_deg: w ? (w[1] === "VRB" ? null : +w[1]) : null,
     wind_speed_kt: w ? +w[2] : 0,
     slp_mb: slpFrom(line),
+    sky,
   };
 }
 
@@ -68,4 +71,36 @@ export function buildSnapshot({ station, tz, metarLines, refNow = new Date(), ma
   let slp_24h_ago_mb = null, best = Infinity;
   for (const o of obs) if (o.slp_mb != null) { const d = Math.abs(o.ts.getTime() - target); if (d < best) { best = d; slp_24h_ago_mb = o.slp_mb; } }
   return { station, now, max_so_far_f, yesterday, yesterday_max_f, slp_24h_ago_mb };
+}
+
+// buildSnapshotV2 — snapshot for claude_analog_v2's multi-day analog ensemble.
+// Buckets all obs by station-local day, then hands the engine the N most-recent prior
+// local days as analogs (most-recent-first), each with its own hourly obs + observed max.
+// Shape: { station, now, max_so_far_f, analogs:[{hourlies, max_f}], slp_24h_ago_mb }.
+export function buildSnapshotV2({ station, tz, metarLines, refNow = new Date(), maxSoFarF = null, nAnalogs = 2 }) {
+  const obs = (metarLines || []).map(l => parseMetar(l, refNow)).filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+  if (!obs.length) return null;
+  const now = obs[obs.length - 1];
+  const today = localDate(now.ts, tz);
+  // group obs into local-day buckets
+  const byDay = new Map();
+  for (const o of obs) {
+    const d = localDate(o.ts, tz);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(o);
+  }
+  const todayObs = byDay.get(today) || [now];
+  const max_so_far_f = maxSoFarF != null ? maxSoFarF : Math.max(...todayObs.map(o => o.temp_f));
+  // prior local days, most-recent-first, capped at nAnalogs
+  const priorDays = [...byDay.keys()].filter(d => d < today).sort().reverse().slice(0, nAnalogs);
+  const analogs = priorDays.map(d => {
+    const hourlies = byDay.get(d);
+    return { hourlies, max_f: Math.max(...hourlies.map(o => o.temp_f)) };
+  });
+  // SLP nearest to now-24h (advection proxy)
+  const target = now.ts.getTime() - 86400000;
+  let slp_24h_ago_mb = null, best = Infinity;
+  for (const o of obs) if (o.slp_mb != null) { const d = Math.abs(o.ts.getTime() - target); if (d < best) { best = d; slp_24h_ago_mb = o.slp_mb; } }
+  return { station, now, max_so_far_f, analogs, slp_24h_ago_mb };
 }

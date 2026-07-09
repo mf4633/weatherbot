@@ -8,8 +8,8 @@
 // Places no trades. Pure model + verification; see STRATEGY.md / TRADING_POSTMORTEM.md.
 
 import { getStore } from "@netlify/blobs";
-import { buildSnapshot } from "./lib/metar.js";
-import { predict } from "./lib/claude_analog.js";
+import { buildSnapshotV2 } from "./lib/metar.js";
+import { predict } from "./lib/claude_analog_v2.js";
 import { score } from "./lib/scoreboard.js";
 
 const SITE = "https://weatherbot-mf.netlify.app";
@@ -23,7 +23,7 @@ async function getJSON(path) {
 }
 
 async function fetchMetars(ids) {
-  const url = `https://aviationweather.gov/api/data/metar?ids=${ids.join(",")}&hours=48&format=raw`;
+  const url = `https://aviationweather.gov/api/data/metar?ids=${ids.join(",")}&hours=72&format=raw`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`METAR fetch ${r.status}`);
   return r.text();
@@ -69,13 +69,20 @@ async function runPredict(doLog) {
   for (const c of cities) {
     const kc = ksByName[c.name];
     const { bins, market } = binsAndMarket(kc?.highBuckets);
-    const snap = buildSnapshot({ station: c.station, tz: c.tz, metarLines: stationLines(metarText, c.station), maxSoFarF: c.maxSoFarCli ?? c.maxSoFar });
+    const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: stationLines(metarText, c.station), maxSoFarF: c.maxSoFarCli ?? c.maxSoFar });
     if (!snap) continue;
-    const card = predict(snap, null, bins.length ? bins : null);
+    const card = predict(snap, null, bins.length ? bins : null, Object.keys(market).length ? market : null);
+    const d = card.dist;
     const bayes = bayesCard(c);
-    const claude = { point: round1(card.point_f), sigma: round1(card.sigma_f), floor: card.floor_f,
-                     ci68: card.ci68.map(round1), components: card.components, bin_probs: card.bin_probs };
-    const divergence = bayes ? round1(card.point_f - bayes.point) : null;
+    // point = mixture mean (convection-aware); floor/ci68/bin_probs scored by scoreboard.js.
+    const claude = {
+      point: round1(d.mean()), mu: round1(d.mu), sigma: round1(d.sigma), floor: round1(d.floor),
+      ci68: [round1(d.quantile(0.16)), round1(d.quantile(0.84))],
+      p_trunc: round1(d.pTrunc), depth: round1(d.depth),
+      components: Object.fromEntries(Object.entries(card.components).map(([k, v]) => [k, round1(v)])),
+      bin_probs: card.bin_probs, market_pt: round1(card.market_pt), divergence_note: card.divergence_note,
+    };
+    const divergence = bayes ? round1(d.mean() - bayes.point) : null;
     out.push({ city: c.name, station: c.station, claude, bayes, market, divergence });
     if (store) {
       const date = localDate(c.tz);
