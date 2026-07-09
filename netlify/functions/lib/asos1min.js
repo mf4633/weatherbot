@@ -17,11 +17,26 @@
 // Must stay in sync with weather.js CITIES — any served station missing here
 // silently falls back to the hourly METAR/RMK max (the ±1°F-low case this module
 // exists to fix) and, worse, loses the 5-min-weighted CLI settlement basis.
+// The trailing block are non-served airmass CROSS-CHECK stations (see
+// COVERAGE_NEIGHBORS) — fetched only so a degraded settlement monitor has a
+// witness; they never feed any city's max.
 const STATIONS = [
   "KNYC", "KLAX", "KMDW", "KHOU", "KPHX", "KPHL", "KSAT", "KSAN", "KDFW", "KJAX",
   "KAUS", "KTPA", "KSJC", "KCMH", "KCLT", "KIND", "KSEA", "KDEN", "KDCA", "KBOS",
   "KMIA", "KSFO", "KMSY", "KLAS", "KOKC", "KMSP", "KATL", "KAVL",
+  "KLGA", "KJFK", "KEWR",
 ];
+
+// Airmass cross-check neighbors for stations whose own 5-min feed is unreliable.
+// Central Park (KNYC) degrades to hourly-only more than any station we serve
+// (the 2026-05-07 maintenance-flag incident: 4 obs in 240 min). These airports
+// answer ONE question — "is the region still warming while our KNYC monitor is
+// blind?" — and nothing else. Their 2–4°F urban-park-vs-airport offset makes
+// them useless as a max substitute, so they are strictly an alarm/gating input
+// and never touch maxSoFar / maxSoFarCli. LGA is best-sited (~13 km).
+export const COVERAGE_NEIGHBORS = {
+  KNYC: ["KLGA", "KJFK", "KEWR"],
+};
 
 const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
 
@@ -158,4 +173,49 @@ export function getTodayMaxMin(byStation, station, tzName, now = new Date()) {
     latest5MinAvg,
     nBuckets5Min: buckets.size,
   };
+}
+
+// 5-min-weighted warming over the last `minutes` for a station's 1-min stream:
+// mean of the ~5-min window at the latest ob minus the mean of the ~5-min window
+// `minutes` earlier. Positive = still climbing. Null when either window is empty
+// (feed too sparse to be a witness). Windowed means, not single samples, so a
+// lone noisy ob can't fake a trend.
+export function recentRise(byStation, station, minutes = 30, now = new Date()) {
+  const series = byStation?.[station];
+  if (!series || series.length < 10) return null;
+  const HALF = 2.5 * 60 * 1000;
+  const avgAround = (centerMs) => {
+    let sum = 0, n = 0;
+    for (const o of series) if (Math.abs(o.ts.getTime() - centerMs) <= HALF) { sum += o.tempF; n++; }
+    return n ? sum / n : null;
+  };
+  const lastMs = series[series.length - 1].ts.getTime();
+  const nowAvg = avgAround(lastMs);
+  const pastAvg = avgAround(lastMs - minutes * 60 * 1000);
+  if (nowAvg == null || pastAvg == null) return null;
+  return nowAvg - pastAvg;
+}
+
+// Cross-check a degraded settlement monitor against its airmass neighbors. Picks
+// the first neighbor (COVERAGE_NEIGHBORS[station]) that itself has real, fresh
+// 5-min coverage and reports its recent warming rate. Returns null when the
+// station has no configured neighbor or no neighbor is a usable witness.
+// SETTLEMENT-SAFE: callers use this only to flag "primary blind + airmass still
+// rising ⇒ maxSoFar likely stale-low"; it never feeds maxSoFar / maxSoFarCli.
+export function coverageCrossCheck(byStation, station, tzName, now = new Date()) {
+  const neighbors = COVERAGE_NEIGHBORS[station];
+  if (!neighbors || !byStation) return null;
+  for (const nb of neighbors) {
+    const mm = getTodayMaxMin(byStation, nb, tzName, now);
+    if (!mm || mm.n < 30) continue;                       // neighbor needs real coverage
+    const ageMin = mm.latestTs ? (now.getTime() - mm.latestTs.getTime()) / 60000 : null;
+    if (ageMin == null || ageMin > 30) continue;          // and must be fresh to be a witness
+    return {
+      neighbor: nb,
+      neighborCov: ageMin <= 10 ? "1min" : "5min",
+      neighborLatestF: mm.latestF,
+      rise30F: recentRise(byStation, nb, 30, now),
+    };
+  }
+  return null;
 }
