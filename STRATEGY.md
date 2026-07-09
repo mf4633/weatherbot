@@ -61,9 +61,14 @@ records every 15 min, **places no trades**):
 - Conservative *physical* bounds on the final CLI extremum from obs in hand (no model).
 - A bet is emitted **only** when `[floor, ceil]` is entirely inside the winning set
   (near-certain) AND the market still misprices it by more than the fee — else it abstains.
-- Bounds carry a `SETTLE_MARGIN` (CLI rounding) and generous remaining-rise/fall tables, so
-  it errs toward abstention. **The remaining-rise/fall tables are conservative placeholders
-  — fit them from shadow-logged `(obs@hour, final-CLI)` pairs before trusting real money.**
+- Bounds carry a `SETTLE_MARGIN` (CLI rounding) and remaining-rise/fall tables in
+  `lib/diurnal_bounds.js`, so it errs toward abstention. The tables ship as **conservative
+  placeholders**; regenerate them from data (a `/api/snapshots` export or shadow-logger
+  export) with `fit_diurnal.mjs`, which sets each hour's bound to a safe upper envelope
+  (P99.5 + 1°F buffer) of the observed remaining move and reports the coverage/frequency
+  tradeoff:
+  - `node fit_diurnal.mjs --synthetic` — self-test (recovers a known envelope at 100% coverage)
+  - `SNAPSHOTS=<export.json> node fit_diurnal.mjs --write` — regenerate `diurnal_bounds.js`
 
 **Evaluation harness** (`eval_strategy.mjs`): replays snapshots through a strategy with
 realistic fills + settlement and reports the numbers that decide a pilot — **realized win

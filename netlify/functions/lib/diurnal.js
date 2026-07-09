@@ -13,34 +13,20 @@
 // (obs-at-local-hour, final-CLI-extremum) — that is exactly the dataset market_logger.js
 // collects and eval_strategy.mjs consumes. Until then, treat every lock-in as a hypothesis.
 
-// Upper bound (°F) on how much MORE the daily high can rise after `localHour`.
-// Large in the morning (whole warming day ahead → no certainty), collapsing toward ~0
-// after the afternoon peak / sunset.
-export function maxRemainingRise(localHour) {
-  const h = localHour;
-  if (h == null) return 40;      // unknown time → no bound
-  if (h < 10) return 40;         // pre-warming: effectively unbounded
-  if (h < 12) return 22;
-  if (h < 14) return 12;
-  if (h < 15) return 8;
-  if (h < 16) return 5;
-  if (h < 17) return 3;
-  if (h < 18) return 2;
-  return 1;                      // post-sunset: high is locked (tiny anomaly margin)
-}
+import { RISE, FALL } from "./diurnal_bounds.js";
 
-// Upper bound (°F) on how much LOWER the daily low can still fall after `localHour`.
-// Lows trough near dawn, but a CLI calendar day (LST midnight→midnight) can see a late
-// evening cold-frontal drop, so LOW stays deliberately un-lockable longer than HIGH
-// (larger allowance = fewer, safer LOW lock-ins).
-export function maxRemainingFall(localHour) {
-  const h = localHour;
-  if (h == null) return 40;
-  if (h < 8)  return 40;         // pre-dawn: the low may still be dropping now
-  if (h < 18) return 8;          // daytime: usually locked, but guard an evening front
-  if (h < 22) return 5;
-  return 2;                      // late night: low essentially locked for the LST day
-}
+// Table lookup: first { ltHour, val } whose ltHour > localHour. Null hour → widest bound.
+const lookup = (table, h) => (table.find(e => (h == null ? Infinity : h) < e.ltHour) || table[table.length - 1]).val;
+
+// Upper bound (°F) on how much MORE the daily high can rise after `localHour`. Large in
+// the morning (whole warming day ahead → no certainty), collapsing toward ~0 after peak.
+// Tables live in diurnal_bounds.js — regenerate from data with fit_diurnal.mjs.
+export function maxRemainingRise(localHour) { return lookup(RISE, localHour); }
+
+// Upper bound (°F) on how much LOWER the daily low can still fall after `localHour`. Lows
+// trough near dawn, but a CLI calendar day can see a late evening frontal drop, so LOW
+// stays deliberately un-lockable longer than HIGH (larger allowance = fewer, safer locks).
+export function maxRemainingFall(localHour) { return lookup(FALL, localHour); }
 
 // Settlement uncertainty (°F): CLI rounds via a °C-internal path and reads a specific
 // station, so an 87.8°F obs can settle 87°F. Widen bounds by this before any containment
