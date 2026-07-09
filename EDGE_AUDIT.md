@@ -118,3 +118,23 @@ non-degenerate; mild over/under-fit flags on SJC/TPA warm-walk worth a glance.
 - `backtest_gates.js` / `analyze_gate_sweeps.js` still print the pre-2026-06-13
   thresholds (0.20/0.10/0.04) as "current production" — will mislead the next tuner.
 - `netlify.toml` schedules `pwin_calibration_fit` hourly; the file declares `*/30`.
+
+---
+
+## claude_analog v3 — unfitted priors (re-fit once the ledger has volume)
+
+The L4 advection-regime layer (`claude_analog_v3.js`) ships with **hand-set priors,
+not fitted coefficients** — flagged here so they're re-estimated once the shadow
+scoreboard accumulates advection days, not treated as validated:
+
+- **L1 upstream:** `K_UPSTREAM = 3.5` °F at full overcast, `UPSTREAM_SIGMA_INFL = 1.6`,
+  `BEARING_TOL = 70°`, and the per-station `UPSTREAM_STATIONS` lead-hours/bearings.
+- **L4 regime score:** SLP-fall cap `0.4` (÷8 mb), Td-rise cap `0.3` (÷15 °F),
+  upstream weight `0.3`; `RAMP_CAP_AT_FULL_ADVECTION = 0.55`, `ADVECTION_SIGMA_INFL = 1.5`.
+- **L2 tilt / L3 lock:** tilt `w = |d|/(|d|+3)`; lock gate `drop ≥ 1.5 °F` + `deck ≥ 0.5`.
+
+These were chosen to reproduce the 2026-07-09 KNYC post-mortem — a single day — so
+they are an anecdote-fit, not an out-of-sample fit. **Do not size on the L4 path until
+the pre-registered gate (`evaluateGate`) clears and these are re-fit against settled
+advection days.** The scored ledger is pure (tilt off), so the gate measures the model
+unaided regardless.
