@@ -185,8 +185,8 @@ export function marketPoint(bookCents) {
     let mid;
     if (lbl.startsWith("<=")) mid = parseInt(lbl.slice(2), 10) - 1;
     else if (lbl.startsWith(">=")) mid = parseInt(lbl.slice(2), 10) + 1;
-    else if (lbl.includes("-")) { const [lo, hi] = lbl.split("-"); mid = (+lo + +hi) / 2; }
-    else mid = +lbl;
+    else { const r = lbl.match(/^(-?\d+)-(-?\d+)$/);           // FIX 2: signed winter bins
+           mid = r ? (+r[1] + +r[2]) / 2 : +lbl; }
     acc += p * mid; total += p;
   }
   return total ? acc / total : NaN;

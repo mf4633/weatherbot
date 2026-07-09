@@ -30,8 +30,8 @@ export function parseMetar(line, refNow) {
   const tg = line.match(/\bT([01])(\d{3})([01])(\d{3})\b/);   // RMK tenths (most precise)
   if (tg) { tempC = (tg[1] === "1" ? -1 : 1) * (+tg[2]) / 10; dewC = (tg[3] === "1" ? -1 : 1) * (+tg[4]) / 10; }
   else {
-    const bt = line.match(/\s(M?\d{2})\/(M?\d{2})\s/);         // body whole-degree
-    if (bt) { tempC = parseInt(bt[1].replace("M", "-"), 10); dewC = parseInt(bt[2].replace("M", "-"), 10); }
+    const bt = line.match(/\s(M?\d{2})\/(M?\d{2})?\s/);        // body whole-degree; dew optional (FIX 3: "25/ " must keep the temp)
+    if (bt) { tempC = parseInt(bt[1].replace("M", "-"), 10); dewC = bt[2] ? parseInt(bt[2].replace("M", "-"), 10) : null; }
   }
   if (tempC == null) return null;
   const w = line.match(/\b(\d{3}|VRB)(\d{2,3})(?:G\d{2,3})?KT\b/);
