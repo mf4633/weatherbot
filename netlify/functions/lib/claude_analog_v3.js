@@ -120,7 +120,11 @@ export function informedMarketTilt(modelMu, mktPt, enabled) {
 // a false lock is worse than a late one.
 export function detectPeakLock(snapPrev, snapNow, cfg = null) {
   cfg = cfg || getConfig(snapNow.station);
-  const h = snapNow.now.ts.getUTCHours() + snapNow.now.ts.getUTCMinutes() / 60.0;
+  // 2026-07-09 bugfix: threshold is 11 LOCAL time. METAR ts is UTC; convert via
+  // the snapshot's IANA tz. Without tz we cannot know local time — refuse to
+  // lock rather than false-lock a dawn dip at the midnight max (see tests).
+  if (!snapNow.tz) return { locked: false, note: "no tz on snapshot — lock disabled (UTC-hours false-lock guard)" };
+  const h = localHourFrac(snapNow.now.ts, snapNow.tz);
   if (h < 11.0) return { locked: false, note: "too early to lock" };
   const drop = snapNow.max_so_far_f - snapNow.now.temp_f;
   if (drop < 1.5) return { locked: false, note: `trace only ${drop.toFixed(1)}°F off the max` };
@@ -189,7 +193,9 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp;
   mu = Math.max(mu, snap.max_so_far_f);
 
-  const h = snap.now.ts.getUTCHours() + snap.now.ts.getUTCMinutes() / 60.0;
+  // 2026-07-09 bugfix: sigma schedule runs on LOCAL hours (UTC shrank eastern
+  // stations' sigma 4-5h early). No tz → stay at sigma_open (widest = safest).
+  const h = snap.tz ? localHourFrac(snap.now.ts, snap.tz) : cfg.morning_hour;
   let sigma;
   if (h <= cfg.morning_hour) sigma = cfg.sigma_open;
   else if (h >= cfg.peak_hour) sigma = cfg.sigma_peak;
@@ -217,4 +223,13 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   if (kalshiBins) card.bin_probs = dist.binProbs(kalshiBins);
   if (mktPt != null) { card.market_pt = mktPt; card.divergence_note = interpretDivergence(dist.mean(), mktPt); }
   return card;
+}
+
+// --- local-time helper (2026-07-09 UTC-hours bugfix) ---------------------------
+export function localHourFrac(ts, tz) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(ts);
+  const get = (t) => parseInt(parts.find(p => p.type === t)?.value ?? "0", 10);
+  return (get("hour") % 24) + get("minute") / 60.0;
 }

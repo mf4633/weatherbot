@@ -7,14 +7,15 @@ import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 let pass = 0, fail = 0;
 const approx = (a, b, t = 0.05) => a != null && Math.abs(a - b) <= t;
 const ok = (n, c) => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}`); } };
-const D = (mo, d, h, mi) => new Date(Date.UTC(2026, mo - 1, d, h, mi));
+const D = (mo, d, h, mi) => new Date(Date.UTC(2026, mo - 1, d, h + 4, mi));  // fixtures are EDT local; +4 = UTC (2026-07-09 tz bugfix)
+const TZ = "America/New_York";
 const ob = (mo, d, h, mi, t, td, dir, spd, slp, sky) => ({ ts: D(mo, d, h, mi), temp_f: t, dewpoint_f: td, wind_dir_deg: dir, wind_speed_kt: spd, slp_mb: slp, sky });
 const binsMatch = (got, ref) => Object.keys(ref).every(k => approx(got[k], ref[k], 0.002));
 
 const BINS = [{ label: "<=82", lo: -Infinity, hi: 82 }, { label: "83-84", lo: 83, hi: 84 }, { label: "85-86", lo: 85, hi: 86 },
               { label: "87-88", lo: 87, hi: 88 }, { label: "89-90", lo: 89, hi: 90 }, { label: ">=91", lo: 91, hi: Infinity }];
 const BOOK = { "<=82": 22, "83-84": 59, "85-86": 28, "87-88": 3, "89-90": 1, ">=91": 1 };
-const snap951 = { station: "KNYC", now: ob(7, 9, 9, 51, 79, 70, 225, 5, 1013.6, "CLR"), max_so_far_f: 79,
+const snap951 = { station: "KNYC", tz: TZ, now: ob(7, 9, 9, 51, 79, 70, 225, 5, 1013.6, "CLR"), max_so_far_f: 79,
   analogs: [{ hourlies: [ob(7, 8, 9, 51, 73, 63, null, 0, 1017.5, "CLR")], max_f: 85 }], slp_24h_ago_mb: 1017.5 };
 const UP = {
   KPHL: ob(7, 9, 9, 51, 78, 70, 230, 7, 1013.0, "SCT035 BKN110"),
@@ -49,9 +50,9 @@ ok("TILT note reports 44% toward market", /44% toward market/.test(tilt.tilt_not
 ok("TILT bins match py", binsMatch(tilt.bin_probs, { "<=82": 0.50411, "83-84": 0.1053, "85-86": 0.0978, "87-88": 0.0846, "89-90": 0.06816, ">=91": 0.14002 }));
 
 // ---- 1:05 PM: trace falling under the deck → L3 peak lock ----
-const snap1251 = { station: "KNYC", now: ob(7, 9, 12, 51, 81.9, 72, null, 4, 1012.4, "SCT028 SCT039 OVC110"), max_so_far_f: 82,
+const snap1251 = { station: "KNYC", tz: TZ, now: ob(7, 9, 12, 51, 81.9, 72, null, 4, 1012.4, "SCT028 SCT039 OVC110"), max_so_far_f: 82,
   analogs: snap951.analogs, slp_24h_ago_mb: 1016.7 };
-const snap1305 = { station: "KNYC", now: ob(7, 9, 13, 5, 79.4, 72, 170, 6, 1012.3, "SCT028 BKN045 OVC100"), max_so_far_f: 82,
+const snap1305 = { station: "KNYC", tz: TZ, now: ob(7, 9, 13, 5, 79.4, 72, 170, 6, 1012.3, "SCT028 BKN045 OVC100"), max_so_far_f: 82,
   analogs: snap951.analogs, slp_24h_ago_mb: 1016.6 };
 const lock = predict(snap1305, null, BINS, BOOK, null, snap1251);
 ok("LOCK peak_locked true", lock.peak_locked === true);
@@ -68,6 +69,20 @@ ok("no lock at 12:51 (0.1°F off max)", detectPeakLock(null, snap1251, getConfig
 // coverage: every L1 station is real (starts with K, 4 chars) and no self-reference
 ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).every(([s, ups]) =>
   ups.length && ups.every(u => /^K[A-Z]{3}$/.test(u.station) && u.station !== s)));
+
+
+// --- 2026-07-09 tz bugfix regressions (dawn false-lock) -------------------------
+{
+  const dawnPrev = { station: "KNYC", tz: TZ, now: { ts: new Date(Date.UTC(2026, 6, 10, 10, 51)), temp_f: 72, dewpoint_f: 68, wind_dir_deg: 340, wind_speed_kt: 4, slp_mb: 1014, sky: "OVC012" }, max_so_far_f: 75 };
+  const dawnNow  = { station: "KNYC", tz: TZ, now: { ts: new Date(Date.UTC(2026, 6, 10, 11, 51)), temp_f: 71, dewpoint_f: 68, wind_dir_deg: 340, wind_speed_kt: 4, slp_mb: 1014, sky: "OVC012" }, max_so_far_f: 75 };
+  ok("TZ no dawn false-lock at 7:51 AM EDT", detectPeakLock(dawnPrev, dawnNow).locked === false);
+  const seaPrev = { station: "KSEA", tz: "America/Los_Angeles", now: { ts: new Date(Date.UTC(2026, 6, 10, 11, 53)), temp_f: 58, dewpoint_f: 54, wind_dir_deg: 200, wind_speed_kt: 5, slp_mb: 1016, sky: "OVC008" }, max_so_far_f: 61 };
+  const seaNow  = { station: "KSEA", tz: "America/Los_Angeles", now: { ts: new Date(Date.UTC(2026, 6, 10, 12, 53)), temp_f: 57, dewpoint_f: 54, wind_dir_deg: 200, wind_speed_kt: 5, slp_mb: 1016, sky: "OVC008" }, max_so_far_f: 61 };
+  ok("TZ no dawn false-lock at 5:53 AM PDT (marine arm)", detectPeakLock(seaPrev, seaNow).locked === false);
+  const noTz = { station: "KNYC", now: dawnNow.now, max_so_far_f: 82 };
+  ok("TZ missing-tz fail-safe refuses lock", detectPeakLock(null, noTz).locked === false);
+}
+
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
