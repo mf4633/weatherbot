@@ -48,16 +48,31 @@
       ? `<div class="ci muted" title="${(cl.divergence_note || "").replace(/"/g, "'")}">market ${f1(cl.market_pt)}°F ${
           Math.abs(cl.point - cl.market_pt) < 1 ? "≈ model" : (cl.point > cl.market_pt ? "▲ model hotter" : "▼ model colder")}</div>`
       : "";
+    // v3 L3: peak locked — the day's max is physically behind us.
+    const lock = cl.peak_locked
+      ? `<div class="calibrating-note" title="${(cl.lock_note || "").replace(/"/g, "'")}">🔒 peak locked at ${f1(cl.floor)}°F — max is in</div>` : "";
+    // v3 L1/L4: incoming upstream cloud + out-of-regime (advection) guard.
+    const up = cl.upstream && cl.upstream.length
+      ? `<div class="ci muted">upstream sky: ${cl.upstream.map(u => `${u.station.replace(/^K/, "")} ${(100 * u.deficit).toFixed(0)}%`).join("  ")}</div>` : "";
+    const adv = !cl.peak_locked && cl.advection_score > 0.25
+      ? `<div class="ci muted">⚠ advection regime ${f1(cl.advection_score)} — analogs off-regime, ramp capped &amp; σ inflated</div>` : "";
+    // v3 L2: informed-market tilt (sizing view — never scored).
+    const sizing = cl.sizing && Math.abs((cl.sizing.point ?? cl.point) - cl.point) >= 0.1
+      ? `<div class="ci muted" title="${(cl.sizing.note || "").replace(/"/g, "'")}">sizing (market-tilt): ${f1(cl.sizing.point)}°F</div>` : "";
     return `<div class="card">
       <h2>${c.city} <span class="cli">${c.station}</span></h2>
       <div class="row"><span>Claude analog</span><span class="big cool" style="font-size:20px">${f1(cl.point)}°F</span></div>
       <div class="row"><span>Bayesian</span><span>${b ? f1(b.point) + "°F" : "—"}</span></div>
       <div class="row"><span>divergence</span><span>${flag}</span></div>
+      ${lock}
       <div class="ci">σ ${f1(cl.sigma)}  •  floor ${f1(cl.floor)}  •  CI68 [${f1(cl.ci68[0])}, ${f1(cl.ci68[1])}]</div>
       <div class="ci">${comp}</div>
       ${conv}
+      ${up}
+      ${adv}
       ${bins ? `<div class="ci">bins: ${bins}</div>` : ""}
       ${mkt}
+      ${sizing}
     </div>`;
   }
 

@@ -8,8 +8,8 @@
 // Places no trades. Pure model + verification; see STRATEGY.md / TRADING_POSTMORTEM.md.
 
 import { getStore } from "@netlify/blobs";
-import { buildSnapshotV2 } from "./lib/metar.js";
-import { predict } from "./lib/claude_analog_v2.js";
+import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
+import { predict, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { score } from "./lib/scoreboard.js";
 
 const SITE = "https://weatherbot-mf.netlify.app";
@@ -58,20 +58,43 @@ function bayesCard(c) {
            ci68: [c.mean - c.std, c.mean + c.std] };
 }
 
+// Parse a station's METAR lines into obs sorted oldest→newest (for prev-ob / upstream).
+function parsedObs(text, station, refNow) {
+  return stationLines(text, station).map(l => parseMetar(l, refNow)).filter(Boolean).sort((a, b) => a.ts - b.ts);
+}
+
 async function runPredict(doLog) {
   const [wx, ks] = await Promise.all([getJSON("/api/weather"), getJSON("/api/kalshi")]);
   const ksByName = Object.fromEntries((ks.cities || []).map(c => [c.name, c]));
   const cities = (wx.cities || []).filter(c => c.station && !c.error);
-  const metarText = await fetchMetars([...new Set(cities.map(c => c.station))]);
+  // Include L1 upstream neighbors in the METAR fetch — their CURRENT sky is the
+  // incoming-advection signal (2026-07-09 KNYC shield). Union across all cities.
+  const upIds = new Set();
+  for (const c of cities) for (const u of (UPSTREAM_STATIONS[c.station] || [])) upIds.add(u.station);
+  const metarText = await fetchMetars([...new Set([...cities.map(c => c.station), ...upIds])]);
+  const refNow = new Date();
   const store = doLog ? getStore(STORE) : null;
-  const now = new Date().toISOString();
+  const now = refNow.toISOString();
   const out = [];
   for (const c of cities) {
     const kc = ksByName[c.name];
     const { bins, market } = binsAndMarket(kc?.highBuckets);
     const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: stationLines(metarText, c.station), maxSoFarF: c.maxSoFarCli ?? c.maxSoFar });
     if (!snap) continue;
-    const card = predict(snap, null, bins.length ? bins : null, Object.keys(market).length ? market : null);
+    // L1: current ob at each upstream neighbor. L3: previous ob (falling-trace check).
+    const upstreamObs = {};
+    for (const u of (UPSTREAM_STATIONS[c.station] || [])) {
+      const o = parsedObs(metarText, u.station, refNow);
+      if (o.length) upstreamObs[u.station] = o[o.length - 1];
+    }
+    const sObs = parsedObs(metarText, c.station, refNow);
+    const snapPrev = sObs.length >= 2 ? { station: c.station, now: sObs[sObs.length - 2], max_so_far_f: snap.max_so_far_f } : null;
+    const binsArg = bins.length ? bins : null;
+    const mktArg = Object.keys(market).length ? market : null;
+    // Ledger card is PURE (tilt off) so the scoreboard scores the model unaided.
+    const card = predict(snap, null, binsArg, mktArg, upstreamObs, snapPrev, false);
+    // Sizing card tilts toward the informed market (L2) — display only, never scored.
+    const sizingCard = mktArg ? predict(snap, null, binsArg, mktArg, upstreamObs, snapPrev, true) : null;
     const d = card.dist;
     const bayes = bayesCard(c);
     // point = mixture mean (convection-aware); floor/ci68/bin_probs scored by scoreboard.js.
@@ -81,6 +104,12 @@ async function runPredict(doLog) {
       p_trunc: round1(d.pTrunc), depth: round1(d.depth),
       components: Object.fromEntries(Object.entries(card.components).map(([k, v]) => [k, round1(v)])),
       bin_probs: card.bin_probs, market_pt: round1(card.market_pt), divergence_note: card.divergence_note,
+      // v3 signals (not scored — context for reading the card / sizing)
+      advection_score: round1(card.advection_score),
+      peak_locked: card.peak_locked, lock_note: card.lock_note || null,
+      upstream: card.upstream_audit && card.upstream_audit.length
+        ? card.upstream_audit.map(a => ({ station: a.station, deficit: a.deficit })) : null,
+      sizing: sizingCard ? { point: round1(sizingCard.dist.mean()), bin_probs: sizingCard.bin_probs, note: sizingCard.tilt_note } : null,
     };
     const divergence = bayes ? round1(d.mean() - bayes.point) : null;
     out.push({ city: c.name, station: c.station, claude, bayes, market, divergence });

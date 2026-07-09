@@ -83,7 +83,7 @@ export function skyDeficit(sky, ceiling) {
 
 // --- helpers ---
 const phi = (z) => 0.5 * (1 + erf(z / Math.SQRT2));
-const inSector = (deg, sectors) => deg != null && sectors.some(([lo, hi]) => deg >= lo && deg <= hi);
+export const inSector = (deg, sectors) => deg != null && sectors.some(([lo, hi]) => deg >= lo && deg <= hi);
 const logistic = (x) => 1 / (1 + Math.exp(-x));
 const hm = (ts) => ts.getUTCHours() * 60 + ts.getUTCMinutes();
 function nearestOb(hourlies, ts) {
@@ -112,12 +112,12 @@ export function analogEnsemble(snap, cfg) {
   return { ramp: rampAcc / wsum, analogTd: tdAcc / wsum, audits };
 }
 
-// --- adjustment terms ---
-function bowen(snap, analogTd, cfg) {
+// --- adjustment terms (exported so claude_analog_v3.js can reuse them) ---
+export function bowen(snap, analogTd, cfg) {
   if (snap.now.dewpoint_f == null) return 0;
   return -cfg.k_td * cfg.mixing_dilution * Math.max(0, snap.now.dewpoint_f - analogTd);
 }
-function trajectory(snap, cfg) {
+export function trajectory(snap, cfg) {
   const ob = snap.now;
   if (cfg.regime === "sea_breeze") {
     if (inSector(ob.wind_dir_deg, MARINE_SECTORS[snap.station] || [])) return -cfg.sea_breeze_penalty;
@@ -130,12 +130,12 @@ function trajectory(snap, cfg) {
   }
   return 0;
 }
-function airmass(snap, cfg) {
+export function airmass(snap, cfg) {
   if (snap.slp_24h_ago_mb == null || snap.now.slp_mb == null) return 0;
   return Math.max(-cfg.slp_cap, Math.min(cfg.slp_cap, -cfg.k_slp * (snap.now.slp_mb - snap.slp_24h_ago_mb)));
 }
-function insolation(snap, cfg) { return -cfg.k_sky * skyDeficit(snap.now.sky, cfg.sky_ceiling_x100ft); }
-function truncation(snap, cfg) {
+export function insolation(snap, cfg) { return -cfg.k_sky * skyDeficit(snap.now.sky, cfg.sky_ceiling_x100ft); }
+export function truncation(snap, cfg) {
   if (!cfg.conv_enabled) return { p: 0, depth: 0 };
   const td = snap.now.dewpoint_f != null ? snap.now.dewpoint_f : cfg.conv_td_ref;
   let slpFall = 0;
