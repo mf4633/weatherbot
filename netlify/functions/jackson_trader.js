@@ -962,15 +962,24 @@ export async function runTraderCycle(isPaper = false) {
   let isLive = false, isDryRun = false;
   if (!isPaper) {
     const liveFlag = (process.env.KALSHI_TRADING_LIVE || "").trim().toLowerCase();
-    // Distinguish "paused" (kill switch off) from "dry-run" mode. In dry-run we still execute
-    // the placement loop (computing all skip/place decisions) but don't call Kalshi to actually
-    // submit orders. This lets us instrument the bucket-margin filter etc. without trading.
-    isLive = ["true", "1", "yes", "on", "live"].includes(liveFlag);
+    // POST-MORTEM HALT (TRADING_POSTMORTEM.md): the model is a proven net loser
+    // (−45% ROI, May–Jul 2026; it forecasts worse than the market it trades). Real
+    // trading is HARD-HALTED regardless of KALSHI_TRADING_LIVE until a candidate
+    // strategy clears the go/no-go bar in STRATEGY.md. Resuming is a deliberate
+    // double-key: set KALSHI_TRADING_RESUME="true" AND KALSHI_TRADING_LIVE="true".
+    // Dry-run and paper are unaffected (no real money at risk).
+    const resumed = process.env.KALSHI_TRADING_RESUME === "true";
+    isLive = resumed && ["true", "1", "yes", "on", "live"].includes(liveFlag);
+    // Distinguish "paused"/"halted" from "dry-run" mode. In dry-run we still execute the
+    // placement loop (computing all skip/place decisions) but don't call Kalshi to submit
+    // orders — lets us instrument without trading. Dry-run stays available while halted.
     isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
     if (!isLive && !isDryRun) {
-      return new Response(JSON.stringify({ ok: true, paused: true,
+      return new Response(JSON.stringify({ ok: true, paused: true, halted: !resumed,
         flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
-        message: "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode." }), {
+        message: resumed
+          ? "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode."
+          : "Real-trader HALTED per TRADING_POSTMORTEM.md (model is a net loser). No real orders will be placed. To resume, set KALSHI_TRADING_RESUME='true' AND KALSHI_TRADING_LIVE='true'." }), {
         status: 200, headers: { "content-type": "application/json" }
       });
     }

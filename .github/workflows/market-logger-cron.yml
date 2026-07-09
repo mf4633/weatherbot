@@ -1,0 +1,37 @@
+name: Market-logger cron
+
+# Drives the shadow market-data logger (market_logger.js) reliably, because Netlify's
+# own scheduler is throttled (see netlify.toml). Each run RECORDS the full Kalshi book +
+# obs for all cities and SETTLES any past local dates (idempotent — skips already-settled
+# days). Places NO trades. Hourly is adequate for the first data-collection pass; for
+# denser afternoon/evening sampling, add a cron-job.org trigger on ?mode=record.
+on:
+  schedule:
+    - cron: "5 * * * *"      # hourly (GitHub Actions can't hold a reliable sub-hourly cadence)
+  workflow_dispatch: {}
+
+concurrency:
+  group: market-logger
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record snapshot
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 60 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/market_logger?mode=record" \
+            -o /tmp/rec.json -w "record HTTP %{http_code}\n" || true
+          jq '{ok, key, cities}' /tmp/rec.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
+      - name: Settle past days
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 120 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/market_logger?mode=settle" \
+            -o /tmp/set.json -w "settle HTTP %{http_code}\n" || true
+          jq '{ok, settledDays}' /tmp/set.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
