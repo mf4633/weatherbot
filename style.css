@@ -100,6 +100,11 @@ main {
 .kalshi-table .warm { color: var(--warm); }
 .kalshi-table .cool { color: var(--cool); }
 .kalshi-table .muted { color: var(--muted); padding: 12px; }
+#claude-section { padding: 16px 24px 8px; border-top: 1px solid var(--border); }
+#claude-section h2 { margin: 0 0 4px; font-size: 18px; }
+#claude-section h3 { margin: 18px 0 8px; font-size: 14px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+#claude-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 4px 0; }
+#claude-grid .card .cli { color: var(--accent); }
 #paper-section { padding: 20px 24px 8px; border-top: 1px solid var(--border); }
 #paper-section h2 { margin: 0 0 4px; font-size: 18px; }
 #paper-section h3 { margin: 22px 0 8px; font-size: 14px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }

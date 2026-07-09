@@ -35,6 +35,12 @@
 [functions."market_logger"]
   schedule = "*/15 * * * *"
 
+# Claude obs-analog engine (/api/claude). Default mode logs a Claude/Bayes/Market
+# decision per city to the verification scoreboard; ?mode=settle joins CLI outcomes,
+# ?mode=scoreboard scores. Places no trades. Hourly logging is plenty (obs move slowly).
+[functions."claude"]
+  schedule = "0 * * * *"
+
 # combo is a paper-only meta-strategy — hourly is plenty (was */30).
 [functions."combo_trader"]
   schedule = "0 * * * *"
@@ -182,6 +188,11 @@
 [[redirects]]
   from = "/api/market_logger"
   to = "/.netlify/functions/market_logger"
+  status = 200
+
+[[redirects]]
+  from = "/api/claude"
+  to = "/.netlify/functions/claude"
   status = 200
 
 [[redirects]]
