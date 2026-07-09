@@ -60,6 +60,21 @@
 
 <main id="grid"></main>
 
+<section id="claude-section">
+  <h2>Claude analog — obs-anchored high (vs Bayesian)</h2>
+  <p class="sub">
+    A deliberately different engine: anchored to <strong>observations + yesterday's realized
+    diurnal ramp</strong>, treating NWS guidance as absent, so its disagreement with the
+    Bayesian card above is itself a signal. <code>T_max = T_now + R_analog + A_bowen +
+    A_trajectory + A_airmass</code>. A large <strong>divergence</strong> means the two
+    epistemologies disagree — worth a look, never auto-traded. Full method: <code>claude_analog.py</code>.
+  </p>
+  <h3>Verification scoreboard <span class="muted" style="font-weight:normal">(Claude vs Bayes vs Market, settled vs CLI)</span></h3>
+  <div id="claude-scoreboard" class="sub muted">Loading…</div>
+  <h3>Per-city cards</h3>
+  <main id="claude-grid"></main>
+</section>
+
 <section id="rain-outlook-section">
   <h2>Rainfall outlook (this month)</h2>
   <p class="sub">
@@ -186,5 +201,6 @@
 </footer>
 
 <script src="/app.js"></script>
+<script src="/claude_ui.js"></script>
 </body>
 </html>

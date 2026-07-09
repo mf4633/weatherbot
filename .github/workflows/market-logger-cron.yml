@@ -35,3 +35,15 @@ jobs:
             "https://weatherbot-mf.netlify.app/api/market_logger?mode=settle" \
             -o /tmp/set.json -w "settle HTTP %{http_code}\n" || true
           jq '{ok, settledDays}' /tmp/set.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
+      - name: Claude engine — log decisions + settle scoreboard
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          curl --max-time 90 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/claude" \
+            -o /tmp/cl.json -w "claude-predict HTTP %{http_code}\n" || true
+          jq '{ok, count}' /tmp/cl.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
+          curl --max-time 120 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/claude?mode=settle" \
+            -o /tmp/cls.json -w "claude-settle HTTP %{http_code}\n" || true
+          jq '{ok, settled}' /tmp/cls.json 2>/dev/null || echo "(non-JSON — next hour retries)"
