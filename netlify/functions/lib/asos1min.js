@@ -14,9 +14,13 @@
 // To enable: register at https://synopticdata.com/, get a free API token,
 // set SYNOPTIC_API_TOKEN on Netlify (Site settings → Environment variables).
 
+// Must stay in sync with weather.js CITIES — any served station missing here
+// silently falls back to the hourly METAR/RMK max (the ±1°F-low case this module
+// exists to fix) and, worse, loses the 5-min-weighted CLI settlement basis.
 const STATIONS = [
   "KNYC", "KLAX", "KMDW", "KHOU", "KPHX", "KPHL", "KSAT", "KSAN", "KDFW", "KJAX",
   "KAUS", "KTPA", "KSJC", "KCMH", "KCLT", "KIND", "KSEA", "KDEN", "KDCA", "KBOS",
+  "KMIA", "KSFO", "KMSY", "KLAS", "KOKC", "KMSP", "KATL", "KAVL",
 ];
 
 const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
