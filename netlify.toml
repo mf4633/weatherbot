@@ -28,6 +28,13 @@
 [functions."logger"]
   schedule = "*/5 * * * *"
 
+# Shadow market-data logger (STRATEGY.md Step 0). Records the full Kalshi book + obs
+# every 15 min; places NO trades. Settle/export are triggered out-of-band via the route
+# below (external cron or manual): ?mode=settle joins CLI outcomes, ?mode=export emits the
+# eval_strategy.mjs dataset.
+[functions."market_logger"]
+  schedule = "*/15 * * * *"
+
 # combo is a paper-only meta-strategy — hourly is plenty (was */30).
 [functions."combo_trader"]
   schedule = "0 * * * *"
@@ -170,6 +177,11 @@
 [[redirects]]
   from = "/api/snapshots"
   to = "/.netlify/functions/snapshots"
+  status = 200
+
+[[redirects]]
+  from = "/api/market_logger"
+  to = "/.netlify/functions/market_logger"
   status = 200
 
 [[redirects]]
