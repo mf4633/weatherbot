@@ -1,0 +1,64 @@
+name: Scoreboard snapshot + gate check
+
+# Durability + go/no-go, once a day. Netlify Blobs is the ONLY copy of the Claude
+# scoreboard panel (v3 card + full Kalshi book + settled CLI truth, per city-hour);
+# this pulls ?mode=export and commits it to git so weeks of irreplaceable data can't
+# evaporate on a single-platform hiccup. It also reads the pre-registered trading gate
+# and opens an issue ONLY when the out-of-sample sample matures (n crosses nMin) or the
+# PASS/HOLD verdict flips — no daily noise. Reads only; places no trades.
+on:
+  schedule:
+    - cron: "40 13 * * *"     # 13:40 UTC daily — after the morning CLI settlements land
+  workflow_dispatch: {}
+
+concurrency:
+  group: scoreboard-snapshot
+  cancel-in-progress: false
+
+permissions:
+  contents: write            # commit the snapshot
+  issues: write              # open the gate-flip ping
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Pull export + evaluate gate
+        id: snap
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: node scripts/snapshot_scoreboard.mjs
+
+      - name: Commit snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/scoreboard-snapshots/
+          if git diff --cached --quiet; then
+            echo "no snapshot change"
+          else
+            git commit -m "chore: scoreboard snapshot $(date -u +%F) [skip ci]"
+            git push
+          fi
+
+      - name: Ping on gate flip
+        if: steps.snap.outputs.notify == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REASON: ${{ steps.snap.outputs.reason }}
+        run: |
+          gh issue create \
+            --title "Trading gate update — $(date -u +%F)" \
+            --body "@${{ github.repository_owner }} the pre-registered trading gate moved.
+
+          **$REASON**
+
+          Rule (STRATEGY.md): trading stays OFF until v3's out-of-sample Brier beats the market's posted book over n≥30 settled city-days; first step on PASS is a small pilot, not full Kelly. Review the scoreboard before enabling anything." \
+            --repo "${{ github.repository }}"

@@ -165,6 +165,21 @@ async function runScoreboard() {
            gate: evaluateGate(records) };
 }
 
+// Full dataset dump for off-platform durability. Netlify Blobs is the only copy
+// of the panel (model card + full Kalshi book + settled truth, per city-hour);
+// the snapshot workflow pulls this daily and commits it to git so weeks of
+// irreplaceable data can't evaporate on a single-platform hiccup.
+async function runExport() {
+  const store = getStore(STORE);
+  const { blobs } = await store.list();
+  const records = (await Promise.all((blobs || []).map(b => store.get(b.key, { type: "json" }).catch(() => null)))).filter(Boolean);
+  const decisions = records.filter(r => r.type === "decision").length;
+  const settlements = records.filter(r => r.type === "settlement").length;
+  return { ok: true, mode: "export", exported_at: new Date().toISOString(),
+           count: records.length, decisions, settlements,
+           gate: evaluateGate(records), records };
+}
+
 const round1 = (x) => x == null ? x : Math.round(x * 10) / 10;
 const json = (o, s = 200) => new Response(JSON.stringify(o, null, 2), { status: s, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
@@ -173,6 +188,7 @@ export default async (req) => {
   try {
     if (mode === "settle") return json(await runSettle());
     if (mode === "scoreboard") return json(await runScoreboard());
+    if (mode === "export") return json(await runExport());
     return json(await runPredict(new URL(req.url).searchParams.get("log") !== "0"));
   } catch (e) {
     return json({ ok: false, error: String(e?.message || e) }, 500);
