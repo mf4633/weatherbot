@@ -13,9 +13,12 @@ import { erf } from "../../../erf.js";
 
 // Wind sectors (deg, inclusive) from which marine/lake air reaches the sensor.
 export const MARINE_SECTORS = {
-  KNYC: [[90, 200]], KLGA: [[60, 180]], KBOS: [[20, 170]], KPHL: [[100, 180]],
-  KMDW: [[0, 110]], KDEN: [], KDFW: [], KSAT: [], KLAX: [[180, 290]],
-  KSEA: [[160, 280]], KDCA: [[120, 200]],
+  // Coastal / lake stations: sectors from which marine air reaches the sensor.
+  KLAX: [[180, 290]], KNYC: [[90, 200]], KLGA: [[60, 180]], KMIA: [[45, 160]],
+  KMDW: [[0, 110]], KBOS: [[20, 170]], KSEA: [[160, 280]], KPHL: [[100, 180]],
+  KHOU: [[110, 200]], KSFO: [[230, 320]], KMSY: [[100, 200]], KDCA: [[120, 200]],
+  // Continental stations: no marine trajectory term.
+  KDEN: [], KDFW: [], KSAT: [], KAUS: [], KLAS: [], KOKC: [], KPHX: [], KMSP: [], KATL: [],
 };
 
 // Per-station tuning defaults (the 2026-07-09 session coefficients).

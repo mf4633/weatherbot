@@ -44,17 +44,22 @@ from typing import Optional, Sequence
 # the sensor. Everything else is treated as land trajectory.
 # Extend per station as you add cities.
 MARINE_SECTORS: dict[str, list[tuple[int, int]]] = {
-    "KNYC": [(90, 200)],          # E through SSW off the harbor/Atlantic
-    "KLGA": [(60, 180)],
-    "KBOS": [(20, 170)],          # backdoor NE through S
-    "KPHL": [(100, 180)],         # weak Delaware Bay influence
-    "KMDW": [(0, 110)],           # lake breeze N through E
-    "KDEN": [],                    # continental; no marine term
-    "KDFW": [],
-    "KSAT": [],
+    # Coastal / lake stations: sectors from which marine air reaches the sensor.
     "KLAX": [(180, 290)],          # onshore SW; basically always marine
-    "KSEA": [(160, 280)],
+    "KNYC": [(90, 200)],           # E through SSW off the harbor/Atlantic
+    "KLGA": [(60, 180)],
+    "KMIA": [(45, 160)],           # Atlantic/Biscayne Bay: NE through SSE
+    "KMDW": [(0, 110)],            # Lake Michigan breeze N through E
+    "KBOS": [(20, 170)],           # backdoor NE through S
+    "KSEA": [(160, 280)],          # Puget Sound onshore
+    "KPHL": [(100, 180)],          # weak Delaware Bay influence
+    "KHOU": [(110, 200)],          # Galveston Bay/Gulf: ESE through SSW sea breeze
+    "KSFO": [(230, 320)],          # onshore W through NW (marine layer)
+    "KMSY": [(100, 200)],          # Lake Pontchartrain/Gulf: SE through SSW
     "KDCA": [(120, 200)],          # weak Potomac/Chesapeake term
+    # Continental stations: no marine trajectory term.
+    "KDEN": [], "KDFW": [], "KSAT": [], "KAUS": [], "KLAS": [],
+    "KOKC": [], "KPHX": [], "KMSP": [], "KATL": [],
 }
 
 # Per-station tuning. Defaults are the coefficients used in the 2026-07-09
