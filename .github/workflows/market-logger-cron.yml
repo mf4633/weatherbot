@@ -35,15 +35,13 @@ jobs:
             "https://weatherbot-mf.netlify.app/api/market_logger?mode=settle" \
             -o /tmp/set.json -w "settle HTTP %{http_code}\n" || true
           jq '{ok, settledDays}' /tmp/set.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
-      - name: Claude engine — log decisions + settle scoreboard
+      - name: Claude engine — log decisions + settle scoreboard (background fn)
         env:
           BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
         run: |
-          curl --max-time 90 -sS -u "$BASIC_AUTH" \
-            "https://weatherbot-mf.netlify.app/api/claude" \
-            -o /tmp/cl.json -w "claude-predict HTTP %{http_code}\n" || true
-          jq '{ok, count}' /tmp/cl.json 2>/dev/null || echo "(non-JSON — likely a Netlify timeout; next hour retries)"
-          curl --max-time 120 -sS -u "$BASIC_AUTH" \
-            "https://weatherbot-mf.netlify.app/api/claude?mode=settle" \
-            -o /tmp/cls.json -w "claude-settle HTTP %{http_code}\n" || true
-          jq '{ok, settled}' /tmp/cls.json 2>/dev/null || echo "(non-JSON — next hour retries)"
+          # Background function: returns 202 immediately, runs predict+settle for up to
+          # 15 min so it actually finishes logging (the synchronous /api/claude timed out
+          # at ~10s and logged nothing — the store sat empty). Fire-and-forget.
+          curl --max-time 30 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/claude_log-background" \
+            -o /tmp/cl.txt -w "claude-log-bg HTTP %{http_code} (202 = accepted)\n" || true
