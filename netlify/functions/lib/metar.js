@@ -102,5 +102,5 @@ export function buildSnapshotV2({ station, tz, metarLines, refNow = new Date(), 
   const target = now.ts.getTime() - 86400000;
   let slp_24h_ago_mb = null, best = Infinity;
   for (const o of obs) if (o.slp_mb != null) { const d = Math.abs(o.ts.getTime() - target); if (d < best) { best = d; slp_24h_ago_mb = o.slp_mb; } }
-  return { station, now, max_so_far_f, analogs, slp_24h_ago_mb };
+  return { station, tz: tz || null, now, max_so_far_f, analogs, slp_24h_ago_mb };
 }
