@@ -239,7 +239,8 @@ def get_config(station: str) -> StationConfig:
 
 @dataclass
 class HourlyOb:
-    ts: datetime
+    ts: datetime          # NAIVE LOCAL time in this reference; the JS port uses UTC
+                          # and must convert per-station (see tz contract in _v3.py)
     temp_f: float
     dewpoint_f: Optional[float] = None
     wind_dir_deg: Optional[int] = None

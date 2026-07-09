@@ -53,6 +53,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Sequence
 
+# TIMEZONE CONTRACT (read before porting): every HourlyOb.ts here is treated as
+# NAIVE LOCAL time — the hour thresholds (peak-lock's "11 LT", the sigma schedule)
+# compare ts.hour directly. Production is JS and its timestamps are UTC, so the JS
+# port MUST convert to the station's IANA tz first (see localHourFrac in
+# claude_analog_v3.js). Ignoring this is exactly what caused the 2026-07-09
+# dawn-false-lock bug. These .py files are the reference/derivation only; the live
+# engine is the JS.
+
 from claude_analog_v2 import (
     AnalogDay, CardV2, HourlyOb, MixtureDist, ObsSnapshot, StationConfig,
     STATION_CONFIGS, MARINE_SECTORS, OFFSHORE_SECTORS,

@@ -72,6 +72,9 @@ async function runPredict(doLog) {
   const upIds = new Set();
   for (const c of cities) for (const u of (UPSTREAM_STATIONS[c.station] || [])) upIds.add(u.station);
   const metarText = await fetchMetars([...new Set([...cities.map(c => c.station), ...upIds])]);
+  // One refNow for all cities: parseMetar only uses it to disambiguate a METAR's
+  // day-of-month within the 72h window, and metarTime's month-rollover logic is
+  // tolerant to a few hours of tz offset, so a shared wall-clock is safe here.
   const refNow = new Date();
   const store = doLog ? getStore(STORE) : null;
   const now = refNow.toISOString();
@@ -116,7 +119,7 @@ async function runPredict(doLog) {
     if (store) {
       const date = localDate(c.tz);
       await store.setJSON(`dec/${c.station}/${date}/${String(localHour(c.tz)).padStart(2, "0")}.json`,
-        { type: "decision", station: c.station, cli: c.cli || null, contract_date: date, asof: now, claude, bayes, market })
+        { type: "decision", city: c.name, station: c.station, cli: c.cli || null, contract_date: date, asof: now, claude, bayes, market })
         .catch(() => {});
     }
   }
@@ -192,6 +195,36 @@ async function runScoreboard() {
            gate: evaluateGate(records) };
 }
 
+// Fast read for the dashboard cards: the newest logged decision per station,
+// straight from the blob store — NO external fetches or recompute (the full
+// ?mode=predict path fetches weather+kalshi+72h METARs for ~28 cities plus all
+// L1 upstream neighbors and can exceed the function timeout). The hourly cron
+// keeps these decisions fresh. Keyed by station so the client joins on c.station.
+async function runLatest() {
+  const store = getStore(STORE);
+  const { blobs } = await store.list({ prefix: "dec/" });
+  const best = {};  // station -> { key, sort } where sort = "YYYY-MM-DD HH"
+  for (const b of blobs || []) {
+    const parts = b.key.split("/");            // dec / station / date / hour.json
+    if (parts.length < 4) continue;
+    const [, station, date, hourFile] = parts;
+    const sort = `${date} ${hourFile.replace(".json", "")}`;
+    if (!best[station] || sort > best[station].sort) best[station] = { key: b.key, sort };
+  }
+  let asof = null;
+  const recs = (await Promise.all(Object.values(best).map(({ key }) => store.get(key, { type: "json" }).catch(() => null)))).filter(Boolean);
+  const cities = [], byStation = {};
+  for (const rec of recs) {
+    if (!rec.claude) continue;
+    if (rec.asof && (!asof || rec.asof > asof)) asof = rec.asof;
+    byStation[rec.station] = rec.claude;
+    const divergence = rec.bayes ? round1(rec.claude.point - rec.bayes.point) : null;
+    cities.push({ city: rec.city || rec.station, station: rec.station, claude: rec.claude, bayes: rec.bayes || null, market: rec.market || null, divergence });
+  }
+  cities.sort((a, b) => a.city.localeCompare(b.city));
+  return { ok: true, mode: "latest", asof, count: cities.length, byStation, cities };
+}
+
 // Full dataset dump for off-platform durability. Netlify Blobs is the only copy
 // of the panel (model card + full Kalshi book + settled truth, per city-hour);
 // the snapshot workflow pulls this daily and commits it to git so weeks of
@@ -216,6 +249,7 @@ export default async (req) => {
     if (mode === "settle") return json(await runSettle());
     if (mode === "scoreboard") return json(await runScoreboard());
     if (mode === "export") return json(await runExport());
+    if (mode === "latest") return json(await runLatest());
     return json(await runPredict(new URL(req.url).searchParams.get("log") !== "0"));
   } catch (e) {
     return json({ ok: false, error: String(e?.message || e) }, 500);
