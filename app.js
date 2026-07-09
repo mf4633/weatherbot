@@ -68,6 +68,7 @@ function renderCard(c) {
       <div class="big">no data</div>
     </div>`;
   }
+  const cl = claudeByCity[c.name];
   const tempColor = c.mean >= 70 ? "" : "cool";
   // CI bounds are obs-floored at maxSoFarCli / minSoFarCli (Math.floor / Math.ceil of
   // the CLI-grade obs — 5-min weighted + DSM — per weather.js 96e5a62). Compare against
@@ -126,7 +127,16 @@ function renderCard(c) {
     ${cliRows}
     <div class="pred">
       <div class="pred-label">HIGH</div>
-      <div class="big ${tempColor}">${c.mean.toFixed(1)}°F</div>
+      <div class="high-duo">
+        <div class="high-col">
+          <div class="big ${tempColor}">${c.mean.toFixed(1)}°F</div>
+          <div class="model-cap">Bayesian</div>
+        </div>
+        ${cl && cl.point != null ? `<div class="high-col">
+          <div class="big claude-num">${(+cl.point).toFixed(1)}°F${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>
+          <div class="model-cap">Claude analog</div>
+        </div>` : ""}
+      </div>
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.std.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci68)}</span></div>
       <div class="row ci"><span>95% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci95)}</span></div>
@@ -145,9 +155,23 @@ function renderCard(c) {
   </div>`;
 }
 
+// Claude analog prediction, keyed by city name, for the side-by-side HIGH number.
+// Read-only (?log=0 — the hourly cron owns the scoreboard write); cached on window so
+// claude_ui.js reuses this same fetch instead of hitting the heavy endpoint again.
+let claudeByCity = {};
+async function fetchClaude() {
+  try {
+    const r = await fetch("/api/claude?log=0", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    window.__claudeCache = { at: Date.now(), pred: j };
+    claudeByCity = Object.fromEntries((j.cities || []).map(c => [c.city, c.claude]));
+  } catch { /* leave the side-by-side number blank on failure */ }
+}
+
 async function load() {
   try {
-    const r = await fetch("/api/weather", { cache: "no-store" });
+    const [r] = await Promise.all([fetch("/api/weather", { cache: "no-store" }), fetchClaude()]);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     grid.innerHTML = j.cities.map(renderCard).join("");
