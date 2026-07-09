@@ -216,12 +216,22 @@ export default async () => {
     });
   }
   const liveFlag = (process.env.KALSHI_RAIN_TRADING_LIVE || "").trim().toLowerCase();
-  const isLive = ["true", "1", "yes", "on", "live"].includes(liveFlag);
+  // POST-MORTEM HALT (TRADING_POSTMORTEM.md + rain edge research, header above):
+  // BOTH rain legs are no-edge — monthly is hard-off (MIN_EQUITY_FOR_MONTHLY=1e9;
+  // model Brier 0.136 vs market 0.059), and daily-binary is also no-edge (model
+  // Brier 0.106 vs market 0.074). Real rain orders are HARD-HALTED regardless of
+  // KALSHI_RAIN_TRADING_LIVE until a rain strategy clears the go/no-go bar
+  // (STRATEGY.md). Resume is a deliberate double-key: set KALSHI_RAIN_TRADING_RESUME
+  // ="true" AND KALSHI_RAIN_TRADING_LIVE="true". Dry-run stays available.
+  const resumed = process.env.KALSHI_RAIN_TRADING_RESUME === "true";
+  const isLive = resumed && ["true", "1", "yes", "on", "live"].includes(liveFlag);
   const isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
   if (!isLive && !isDryRun) {
-    return new Response(JSON.stringify({ ok: true, paused: true,
+    return new Response(JSON.stringify({ ok: true, paused: true, halted: !resumed,
       flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
-      message: "Rain trader paused: KALSHI_RAIN_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode." }), {
+      message: resumed
+        ? "Rain trader paused: KALSHI_RAIN_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode."
+        : "Rain trader HALTED per TRADING_POSTMORTEM.md (both rain legs are no-edge). No real orders will be placed. To resume, set KALSHI_RAIN_TRADING_RESUME='true' AND KALSHI_RAIN_TRADING_LIVE='true'." }), {
       status: 200, headers: { "content-type": "application/json" }
     });
   }
