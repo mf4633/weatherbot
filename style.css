@@ -74,6 +74,27 @@ main {
   padding: 14px 16px;
   font-size: 13px;
 }
+/* Collapsible city cards: summary is the always-visible header, body expands on click. */
+details.card { padding: 0; }
+details.card > summary.card-summary {
+  list-style: none; cursor: pointer; padding: 12px 16px; border-radius: 6px;
+}
+details.card > summary.card-summary::-webkit-details-marker { display: none; }
+details.card > summary.card-summary:hover { background: rgba(255,255,255,0.02); }
+.card-head { display: flex; align-items: center; gap: 12px; }
+.card-head .card-title { flex: 1 1 auto; min-width: 0; }
+.card-head .card-title h2 { margin: 0; }
+.high-peek { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.high-peek .peek-b { color: var(--warm); font-weight: 600; }
+.high-peek .peek-c { color: #d97757; font-weight: 600; }
+.chev {
+  flex: 0 0 auto; width: 0; height: 0;
+  border-left: 6px solid var(--muted); border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  transition: transform .15s ease;
+}
+details.card[open] > summary .chev { transform: rotate(90deg); }
+details.card[open] > summary .high-peek { display: none; }   /* full big numbers live in the body */
+.card-body { padding: 0 16px 14px; }
 .card h2 { margin: 0 0 2px; font-size: 15px; }
 .card .cli { color: var(--muted); font-size: 11px; letter-spacing: 0.05em; }
 .card .pred {
