@@ -10,7 +10,7 @@
 import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
 import { predict, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
-import { score } from "./lib/scoreboard.js";
+import { score, evaluateGate } from "./lib/scoreboard.js";
 
 const SITE = "https://weatherbot-mf.netlify.app";
 const AUTH = "Basic " + btoa("internal:hydro");
@@ -161,7 +161,8 @@ async function runScoreboard() {
   const { blobs } = await store.list();
   const records = (await Promise.all((blobs || []).map(b => store.get(b.key, { type: "json" }).catch(() => null)))).filter(Boolean);
   return { ok: true, mode: "scoreboard", n_records: records.length,
-           all: score(records), lastObOnly: score(records, { lastObOnly: true }) };
+           all: score(records), lastObOnly: score(records, { lastObOnly: true }),
+           gate: evaluateGate(records) };
 }
 
 const round1 = (x) => x == null ? x : Math.round(x * 10) / 10;

@@ -91,3 +91,33 @@ or conclude the market reprices too fast for a retail lock-in and move to B or C
 *Scope note: the shadow logger fixes the postmortem's core data gap — it records the whole
 market, not just what we'd bet — so for the first time these hypotheses become testable
 against the market rather than against our own selection.*
+
+## Pre-registered trading gate (the Claude / v3 obs-analog strategy)
+
+The v2/v3 obs-analog engine is a **hypothesis**, not a demonstrated edge. Its parity
+tests prove it reproduces its own reference — not that it is *right*. The 2026-07-09
+KNYC replay is one day encoded after the fact; treating it as proof would be
+overfitting to an anecdote. Nothing gets real money on faith.
+
+**The gate** (`evaluateGate` in `lib/scoreboard.js`, surfaced live at
+`/api/claude?mode=scoreboard` → `gate`, and as the banner atop the dashboard
+scoreboard):
+
+- Take the **last pre-settlement decision** per settled city-day (no peeking).
+- Keep only days where **both** the v3 card and the Kalshi book posted a full set of bins.
+- Score a multi-bin **Brier** for each. The market's probs are its **raw yes-ask prices**
+  (price/100), so "beat the market" means beat the posted book **net of spread** — the
+  real bar, not a normalized toy.
+- `passed` iff **v3 Brier < market Brier** over **n ≥ 30** paired city-days.
+
+**Rule: trading stays OFF until `gate.passed` is true.** No live Claude trader is built
+or enabled, and both existing real-money traders (`jackson_trader`, `jackson_rain_trader`)
+remain halted behind their double-key env gates, until the gate clears. When it clears,
+the first step is a *small* pilot, not full Kelly — the gate proves calibration, not the
+fill/impact economics, which still need their own out-of-sample confirmation.
+
+This is deliberately the same discipline as Strategy A above: the shadow scoreboard
+records the whole market and the settled truth, so for the first time the model is scored
+against reality rather than against our own selection. Watch the one number. If it never
+clears 0.19-ish, the honest conclusion is that there is no edge here — and that is a valid,
+money-saving result.

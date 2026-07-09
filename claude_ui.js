@@ -7,6 +7,22 @@
   const f1 = (x) => (x == null ? "—" : (+x).toFixed(1));
   const pct = (x) => (x == null ? "—" : (100 * x).toFixed(0) + "%");
 
+  function gateBanner(g) {
+    if (!g) return "";
+    const cls = g.passed ? "decision" : "decision rejected";
+    const edge = g.edge == null ? "" :
+      ` &nbsp;•&nbsp; edge ${g.edge >= 0 ? "+" : ""}${g.edge.toFixed(3)} Brier (market − v3)`;
+    const detail = g.claudeBrier == null ? "" :
+      `<div class="sub muted">v3 ${g.claudeBrier.toFixed(3)} vs market ${g.marketBrier.toFixed(3)} · n=${g.n}/${g.nMin} paired settled city-days${edge}</div>`;
+    return `<div class="card" style="border-left:4px solid ${g.passed ? "#2e9e5b" : "#c0492e"}">
+      <div class="row"><span><b>Trading gate</b> <span class="muted small">(pre-registered)</span></span>
+        <span class="${cls}">${g.passed ? "PASS" : "HOLD — trading OFF"}</span></div>
+      <div class="ci">${g.verdict || ""}</div>
+      ${detail}
+      <div class="sub muted">Rule: no real money on the Claude strategy until v3's out-of-sample Brier beats the market's posted book (net of spread) over ≥30 settled city-days. Both real-money traders remain halted.</div>
+    </div>`;
+  }
+
   function scoreTable(sb) {
     if (!sb || !sb.all) return "";
     const rows = ["claude", "bayes", "market"].map((k) => {
@@ -84,7 +100,7 @@
         fetch("/api/claude").then((r) => r.json()),
         fetch("/api/claude?mode=scoreboard").then((r) => r.json()).catch(() => null),
       ]);
-      if (sb && scored) sb.innerHTML = scoreTable(scored);
+      if (sb && scored) sb.innerHTML = gateBanner(scored.gate) + scoreTable(scored);
       if (pred && pred.cities && pred.cities.length) {
         grid.innerHTML = pred.cities.map(cityRow).join("");
       } else {
