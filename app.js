@@ -20,6 +20,15 @@ const CALIBRATING_CITIES = new Set(["Asheville"]);
 let jacksonPositionsByCity = {};
 let initialHashHandled = false;
 
+// Which city cards are expanded — preserved across the 60s re-render so an open
+// card doesn't snap shut. toggle events don't bubble, so listen in capture phase.
+const openCards = new Set();
+if (grid) grid.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("card")) return;
+  if (d.open) openCards.add(d.id); else openCards.delete(d.id);
+}, true);
+
 function updateJacksonBadges() {
   document.querySelectorAll(".jackson-badge").forEach(el => el.remove());
   for (const [city, info] of Object.entries(jacksonPositionsByCity)) {
@@ -30,7 +39,8 @@ function updateJacksonBadges() {
     const badge = document.createElement("div");
     badge.className = "jackson-badge";
     badge.innerHTML = `🟢 Jackson holds ${info.n} position${info.n === 1 ? "" : "s"} <span class="muted">· $${info.exposure.toFixed(2)} at risk · ${sign}$${abs} unrealized</span>`;
-    cardEl.appendChild(badge);
+    // Into the summary so it's visible while the card is collapsed.
+    (cardEl.querySelector(".card-summary") || cardEl).appendChild(badge);
   }
 }
 
@@ -111,8 +121,21 @@ function renderCard(c) {
     ? `<span class="tag no-market-tag">no Kalshi mkt</span>` : "";
   const calibratingNote = CALIBRATING_CITIES.has(c.name)
     ? `<div class="calibrating-note">calibrating — n=0 logged residuals; prediction is raw NWS + national-shrink prior</div>` : "";
-  return `<div class="card" id="${cardId}">
-    <h2>${c.name} ${methodTag}${noMarketTag}</h2>
+  // Collapsed by default: summary shows name + a compact HIGH peek (Bayesian ·
+  // Claude, Claude in orange); click to expand the full detail. Open state is
+  // preserved across the 60s refresh via `openCards` (see toggle listener + render).
+  const peek = `<span class="high-peek">HIGH <span class="peek-b">${c.mean.toFixed(0)}°</span>${
+    cl && cl.point != null ? ` · <span class="peek-c">${(+cl.point).toFixed(0)}°</span>` : ""}${
+    cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</span>`;
+  return `<details class="card" id="${cardId}"${openCards.has(cardId) ? " open" : ""}>
+    <summary class="card-summary">
+      <div class="card-head">
+        <div class="card-title"><h2>${c.name} ${methodTag}${noMarketTag}</h2></div>
+        ${peek}
+        <span class="chev" aria-hidden="true"></span>
+      </div>
+    </summary>
+    <div class="card-body">
     ${calibratingNote}
     <div class="cli">CLI${c.cli} • ${c.station} • ${c.hrsToPeak}h to peak</div>
     <div class="row"><span>current${c.currentTempSource === "asos1min" ? ` <span class="tag">1-min</span>` : ""}</span><span>${fmtF(c.currentTemp)}${c.currentTempTime ? ` <span class="muted small">at ${fmtLocalTime(c.currentTempTime, c.tz)}${c.currentTempAgeMin != null ? `, ${c.currentTempAgeMin}m ago` : ""}</span>` : c.lastMetarTime ? ` <span class="muted small">at ${fmtLocalTime(c.lastMetarTime, c.tz)}${c.lastMetarAgeMin != null ? `, ${c.lastMetarAgeMin}m ago` : ""}</span>` : ""}</span></div>
@@ -152,7 +175,8 @@ function renderCard(c) {
       <div class="row ci"><span>68% CI${loCeiled ? `<span class="muted small"> obs-ceiled</span>` : ""}</span><span>${fmtPair(c.lowCi68)}</span></div>
       <div class="row ci"><span>95% CI${loCeiled ? `<span class="muted small"> obs-ceiled</span>` : ""}</span><span>${fmtPair(c.lowCi95)}</span></div>
     </div>` : ""}
-  </div>`;
+    </div>
+  </details>`;
 }
 
 // Claude analog prediction, keyed by city name, for the side-by-side HIGH number.
@@ -1301,6 +1325,8 @@ async function loadCombo() {
 function pulseCard(id) {
   const el = document.getElementById(id);
   if (!el) return false;
+  // Expand the target card when navigated to (nav link / hash) so it isn't hidden.
+  if (el instanceof HTMLDetailsElement && !el.open) { el.open = true; openCards.add(id); }
   el.classList.remove("pulse");
   void el.offsetWidth;
   el.classList.add("pulse");

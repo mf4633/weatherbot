@@ -475,11 +475,9 @@ def market_point(book_cents: dict[str, float]) -> float:
             mid = int(lbl[2:]) - 1.0
         elif lbl.startswith(">="):
             mid = int(lbl[2:]) + 1.0
-        elif "-" in lbl:
-            lo, hi = lbl.split("-")
-            mid = (int(lo) + int(hi)) / 2.0
         else:
-            mid = float(lbl)
+            m = re.match(r"^(-?\d+)-(-?\d+)$", lbl)   # 2026-07-09: signed winter bins
+            mid = (int(m.group(1)) + int(m.group(2))) / 2.0 if m else float(lbl)
         acc += p * mid
         total += p
     return acc / total if total else float("nan")

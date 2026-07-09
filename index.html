@@ -13,12 +13,6 @@
     <img src="/favicon.svg" alt="" class="logo" width="48" height="48">
     <h1>weatherbot</h1>
   </div>
-  <p class="sub">
-    Statistical predictions of <strong>today's high temperature</strong> at the top 20 US cities,
-    matched to each city's NWS <code>CLI&lt;station&gt;</code> climate-report station. Predictions update as
-    today's observations roll in. Refresh every 60s (server cache 10 min — METARs are hourly).
-    Distribution is normal; mean = median = mode by definition.
-  </p>
   <p class="status" id="status">Loading…</p>
 </header>
 
@@ -39,29 +33,12 @@
     <span><strong>Real-money trading is paused</strong> (2026-07-09) pending a strategy that clears validation —
     see the trading post-mortem. New orders are blocked at the code level; this section is read-only history.</span>
   </div>
-  <p class="sub">
-    Live Kalshi account <code>royal.greyhound5665</code>. Real-money rules:
-    stake = halfKelly × bankroll, floored at $1 and capped at 10% of bankroll;
-    gates at edge ≥ 17¢ for HIGH / ≥ 25¢ for LOW, half-Kelly ≥ 15%, price ≥ 10¢;
-    buy cycle every 5 min, sell + auto-close at 99¢ every 1 min;
-    no concurrent-bet cap (cash budget is the binding constraint).
-    Code has hard guardrails: <strong>only deposit/withdrawal action permitted is by you, manually, via the Kalshi UI.</strong>
-    The bot's API allowlist permits only orders, balance, positions, fills, and market data —
-    transfer endpoints are denied.
-  </p>
   <p id="jackson-status" class="sub muted">Loading…</p>
   <div id="jackson-state" class="paper-row"></div>
   <h3>Daily equity history</h3>
   <div id="balance-rollup" class="sub muted">Loading…</div>
   <div id="balance-chart-wrap" style="margin: 8px 0 16px 0;"></div>
   <h3>σ-calibration (live)</h3>
-  <p class="sub muted">
-    Continuously-updated multiplier on σ_eff, derived from empirical
-    <code>stdev(z)</code> across settled-bet residuals. Bayesian-shrunk toward 1.0
-    when n is low; adaptively capped by observed tail behavior. Factor &gt; 1
-    means the model has been systematically overconfident and the bot is
-    inflating uncertainty to compensate.
-  </p>
   <div id="calibration-wrap" class="sub muted">Loading…</div>
   <h3>Open positions</h3>
   <div id="jackson-open-wrap"></div>
@@ -77,13 +54,6 @@
 
 <section id="claude-section">
   <h2>Claude analog — obs-anchored high (vs Bayesian)</h2>
-  <p class="sub">
-    A deliberately different engine: anchored to <strong>observations + yesterday's realized
-    diurnal ramp</strong>, treating NWS guidance as absent, so its disagreement with the
-    Bayesian card above is itself a signal. <code>T_max = T_now + R_analog + A_bowen +
-    A_trajectory + A_airmass</code>. A large <strong>divergence</strong> means the two
-    epistemologies disagree — worth a look, never auto-traded. Full method: <code>claude_analog.py</code>.
-  </p>
   <h3>Verification scoreboard <span class="muted" style="font-weight:normal">(Claude vs Bayes vs Market, settled vs CLI)</span></h3>
   <div id="claude-scoreboard" class="sub muted">Loading…</div>
   <h3>Per-city cards</h3>
@@ -92,41 +62,17 @@
 
 <section id="rain-outlook-section">
   <h2>Rainfall outlook (this month)</h2>
-  <p class="sub">
-    Per-city posterior over total monthly rainfall — Bayesian gamma fit using
-    observed-so-far + ensemble QPF for the forecast window + climatology for the tail.
-    Mean / median / mode + σ + 68% / 95% CIs come from the gamma posterior directly
-    (Wilson-Hilferty quantiles for the CIs). Mode of a gamma with shape ≥ 1 is at
-    (k−1)θ; gamma is right-skewed so median &lt; mean and mode &lt; median.
-  </p>
   <main id="rain-outlook-grid"></main>
 </section>
 
 <section id="kalshi-section">
   <h2>Kalshi prediction-market edges</h2>
-  <p class="sub">
-    Compares our model's per-bucket probability to current Kalshi
-    <a href="https://kalshi.com/markets" target="_blank" rel="noopener">daily-high markets</a>
-    for the 13 covered cities. Edge is per-$1 staked, <strong>net of Kalshi fees</strong>
-    (≈ 0.07 × (1−price) per $1 contract).
-    <strong>Educational only — not betting advice.</strong> Model RMSE ~1.7°F; small edges are noise.
-  </p>
+  <p class="sub"><strong>Educational only — not betting advice.</strong></p>
   <p id="kalshi-freshness" class="sub"></p>
-  <p class="sub" style="margin-top:8px">
-    Sorted by <strong>Kelly fraction</strong> — optimal stake as % of bankroll given probability + price.
-    Bet half the Kelly value to protect against model error.
-  </p>
-
   <p id="kalshi-decision-stamp" class="sub muted" style="margin-top:4px"></p>
-  <p class="sub" style="margin-top:4px">
-    The <strong>Decision</strong> column reflects how the live Jackson trader weighed each edge on its most recent
-    cycle (every 5 min, temp) / (every 30 min, rain). <span class="decision bought">purchased</span>
-    means a real Kalshi buy fired. <span class="decision skipped">skipped</span> means a downstream safety gate
-    rejected it (tile-conflict, bucket-margin, tail-posterior, Kelly-LCB shrink, city-pause, cooldown, etc.).
-    <span class="decision below">below floor</span> means it never reached the trader's qualifying set
-    (edge / half-Kelly / price / volume floor). <span class="decision pending">pending</span> means it
-    qualified but the next trader cycle hasn't run yet (or the candidate appeared after the last cycle).
-    Hover for the numeric reason.
+  <p class="sub muted" style="margin-top:4px">
+    <strong>Decision</strong>: <span class="decision bought">purchased</span> · <span class="decision skipped">skipped</span> (safety gate) ·
+    <span class="decision below">below floor</span> · <span class="decision pending">pending</span>. Hover for the numeric reason.
   </p>
 
   <h3>HIGH temperature bets</h3>
@@ -169,12 +115,6 @@
 
 <section id="paper-section">
   <h2>Phase 0 paper trading (Đ — dollar-bucks, not real)</h2>
-  <p class="sub">
-    Not real money. Đ100 starting bankroll in <strong>dollar-bucks</strong> (Đ),
-    max 20 concurrent bets, stake = max(Đ1, bankroll/20). Logger places +EV
-    Kalshi bets every 5 min, settles when CLI lands the next morning. Sells
-    positions whose model has flipped negative (never sells winners).
-  </p>
   <div id="paper-state" class="paper-row"></div>
   <h3>Open positions</h3>
   <div id="paper-open-wrap"></div>
@@ -186,15 +126,6 @@
 
 <section id="combo-section">
   <h2>Combo bot — meta-strategy paper (Đ — dollar-bucks, not real)</h2>
-  <p class="sub">
-    Đ100 starting bankroll. Pulls candidate bets from <strong>both</strong> weatherbot
-    (temperature) and rainbot (rain), ranks them by half-Kelly, and fills the strongest
-    edges across the union — gate is net EV ≥ 10¢ AND half-Kelly ≥ 5%, max 20 concurrent,
-    Đ1–Đ5 stake band. Settles via Kalshi's public market endpoint when each underlying
-    market resolves. Runs every 30 min.
-    Paper-only for now; same logic could later port to the Andrew Jackson account if it
-    out-performs both single-source paper bots.
-  </p>
   <p id="combo-status" class="sub muted">Loading…</p>
   <div id="combo-banner">🏆 combo is leading both bots</div>
   <h3>Three-way leaderboard</h3>

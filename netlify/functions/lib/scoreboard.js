@@ -26,7 +26,10 @@ function binHit(label, truth) {
   label = label.replace(/°/g, "").trim();
   if (label.startsWith("<=")) return t <= parseInt(label.slice(2), 10);
   if (label.startsWith(">=")) return t >= parseInt(label.slice(2), 10);
-  if (label.includes("-")) { const [lo, hi] = label.split("-"); return +lo <= t && t <= +hi; }
+  // 2026-07-09 bugsweep FIX 2: '-5--4' / '-1-0' (winter bins) must not be split
+  // naively — regex handles signed endpoints.
+  const r = label.match(/^(-?\d+)-(-?\d+)$/);
+  if (r) return +r[1] <= t && t <= +r[2];
   return t === parseInt(label, 10);
 }
 
@@ -53,8 +56,8 @@ export function marketPoint(probs) {
     let mid;
     if (lbl.startsWith("<=")) mid = parseInt(lbl.slice(2), 10) - 1;
     else if (lbl.startsWith(">=")) mid = parseInt(lbl.slice(2), 10) + 1;
-    else if (lbl.includes("-")) { const [lo, hi] = lbl.split("-"); mid = (+lo + +hi) / 2; }
-    else mid = +lbl;
+    else { const r = lbl.match(/^(-?\d+)-(-?\d+)$/);           // FIX 2: signed bins
+           mid = r ? (+r[1] + +r[2]) / 2 : +lbl; }
     acc += p * mid; total += p;
   }
   return total ? acc / total : NaN;

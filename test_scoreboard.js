@@ -1,5 +1,5 @@
 // Parity test: lib/scoreboard.js must reproduce scoreboard.py's self-test numbers.
-import { score, evaluateGate } from "./netlify/functions/lib/scoreboard.js";
+import { score, evaluateGate, marketPoint } from "./netlify/functions/lib/scoreboard.js";
 
 let pass = 0, fail = 0;
 const approx = (a, b, t = 0.01) => a != null && Math.abs(a - b) <= t;
@@ -54,6 +54,18 @@ const flat = { "<=82": 0.33, "83-84": 0.34, "85-86": 0.33 };
 const gBad = evaluateGate([].concat(...Array.from({ length: 30 }, (_, i) => gday(i, 85, flat, { "<=82": 5, "83-84": 5, "85-86": 90 }))));
 ok("gate HOLD when claude no better than market", gBad.passed === false && gBad.n === 30);
 ok("gate excludes days with no market book", evaluateGate([].concat(...Array.from({ length: 40 }, (_, i) => gday(i, 83, bins2, null)))).n === 0);
+
+// ---- bugsweep FIX 2: signed winter bins (regression) ----
+ok("signed bins: marketPoint -5--4 = -4.5", Math.abs(marketPoint({ "-5--4": 100 }) + 4.5) < 1e-9);
+ok("signed bins: marketPoint -1-0 & 1-2 = 0.5", Math.abs(marketPoint({ "-1-0": 50, "1-2": 50 }) - 0.5) < 1e-9);
+{
+  const recs = [
+    { type: "decision", station: "KMSP", contract_date: "2026-01-15", asof: "t",
+      claude: { point: -4, sigma: 1, floor: -20, ci68: [-6, -2], bin_probs: { "-5--4": 1.0, "-3--2": 0.0 } } },
+    { type: "settlement", station: "KMSP", contract_date: "2026-01-15", cli_max: -4 },
+  ];
+  ok("signed bins: Brier 0 when truth -4 hits certain -5--4", score(recs).claude.brier === 0);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

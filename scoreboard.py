@@ -33,6 +33,7 @@ score the crowd as a third contestant.
 from __future__ import annotations
 
 import json
+import re
 import math
 import os
 from collections import defaultdict
@@ -77,9 +78,9 @@ def _bin_hit(label: str, truth: float) -> bool:
         return t <= int(label[2:])
     if label.startswith(">="):
         return t >= int(label[2:])
-    if "-" in label:
-        lo, hi = label.split("-")
-        return int(lo) <= t <= int(hi)
+    m = re.match(r"^(-?\d+)-(-?\d+)$", label)   # 2026-07-09: signed winter bins
+    if m:
+        return int(m.group(1)) <= t <= int(m.group(2))
     return t == int(label)
 
 
@@ -236,11 +237,9 @@ def _market_point(probs: dict) -> float:
             mid = int(lbl[2:]) - 1.0
         elif lbl.startswith(">="):
             mid = int(lbl[2:]) + 1.0
-        elif "-" in lbl:
-            lo, hi = lbl.split("-")
-            mid = (int(lo) + int(hi)) / 2.0
         else:
-            mid = float(lbl)
+            m = re.match(r"^(-?\d+)-(-?\d+)$", lbl)   # 2026-07-09: signed winter bins
+            mid = (int(m.group(1)) + int(m.group(2))) / 2.0 if m else float(lbl)
         acc += p * mid
         total += p
     return acc / total if total else float("nan")

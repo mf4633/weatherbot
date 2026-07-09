@@ -63,5 +63,11 @@ ok("v2 second analog older day", approx(v2.analogs[1].max_f, 96.9, 0.2));
 ok("v2 analog hourlies carry sky", v2.analogs[0].hourlies.some(h => /SCT090/.test(h.sky)));
 ok("v2 max_so_far from today obs", approx(v2.max_so_far_f, 68, 0.1));
 
+// bugsweep FIX 3 regression: a missing dewpoint ("27/ ") must keep the temp, not drop the ob.
+{
+  const m = parseMetar("KNYC 091951Z 22005KT 10SM FEW026 27/ A2994 RMK AO2 SLP136", new Date(Date.UTC(2026, 6, 9, 20, 0)));
+  ok("FIX3: '27/ ' keeps temp, dew null", m && Math.abs(m.temp_f - 80.6) < 0.1 && m.dewpoint_f === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

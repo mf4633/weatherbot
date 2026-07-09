@@ -123,14 +123,41 @@ async function runPredict(doLog) {
   return { ok: true, mode: "predict", asof: now, count: out.length, cities: out };
 }
 
-// Compact CLI fetch (mirror of logger.js): final daily max °F for a station's CLI code.
-async function fetchCliMax(cli) {
-  try {
-    const url = `https://forecast.weather.gov/product.php?site=NWS&product=CLI&issuedby=${cli}&format=txt&version=1&glossary=0`;
-    const r = await fetch(url); if (!r.ok) return null;
-    const m = (await r.text()).match(/MAXIMUM\s+(-?\d+)/i);
-    return m ? parseInt(m[1], 10) : null;
-  } catch { return null; }
+// 2026-07-09 bugsweep FIX 1: the old fetchCliMax grabbed version=1 with an
+// unanchored regex and NO covers-date check — an evening ?mode=settle run would
+// settle a past ledger row with TODAY's preliminary partial max (silent
+// scoreboard corruption of the exact table adjudicating Claude-vs-Bayes). Now:
+// iterate recent versions, extract <pre>, parse the product's CLIMATE SUMMARY
+// date, skip partial ("VALID AS OF") products, anchor ^MAXIMUM, and only accept
+// the final product that covers the target date.
+const CLI_MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+export function parseCliProduct(html) {
+  const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+  const text = pre ? pre[1] : html;
+  const f = text.match(/CLIMATE\s+SUMMARY\s+FOR\s+([A-Z]+)\s+(\d{1,2})\s+(\d{4})/i)
+         || text.match(/SUMMARY\s+FOR\s+([A-Z]+)\s+(\d{1,2})\s+(\d{4})/i);
+  let coversDate = null;
+  if (f) {
+    const mo = CLI_MONTHS[f[1].toUpperCase().slice(0, 3)];
+    if (mo != null) coversDate = `${f[3]}-${String(mo + 1).padStart(2, "0")}-${String(+f[2]).padStart(2, "0")}`;
+  }
+  const isPartial = /VALID\s+(AS\s+OF|TODAY|THROUGH)/i.test(text);
+  const m = text.match(/^\s*MAXIMUM\s+(-?\d+)/im);
+  return { coversDate, isPartial, maxF: m ? parseInt(m[1], 10) : null };
+}
+
+async function fetchCliMaxFor(cli, targetDate) {
+  for (let version = 1; version <= 4; version++) {
+    try {
+      const url = `https://forecast.weather.gov/product.php?site=NWS&product=CLI&issuedby=${cli}&format=txt&version=${version}&glossary=0`;
+      const r = await fetch(url); if (!r.ok) continue;
+      const p = parseCliProduct(await r.text());
+      if (p.coversDate !== targetDate) continue;   // wrong day's product
+      if (p.isPartial) continue;                    // evening preliminary — wait for the final
+      if (p.maxF != null) return p.maxF;
+    } catch { /* try next version */ }
+  }
+  return null;
 }
 
 async function runSettle() {
@@ -150,7 +177,7 @@ async function runSettle() {
     const anyKey = (blobs.find(b => b.key.startsWith(`dec/${station}/${date}/`)) || {}).key;
     const rec = anyKey ? await store.get(anyKey, { type: "json" }).catch(() => null) : null;
     const cli = rec?.cli; if (!cli) continue;
-    const cliMax = await fetchCliMax(cli);
+    const cliMax = await fetchCliMaxFor(cli, date);
     if (cliMax != null) { await store.setJSON(`settle/${station}/${date}.json`, { type: "settlement", station, contract_date: date, cli_max: cliMax }); done.push(`${station}/${date}`); }
   }
   return { ok: true, mode: "settle", settled: done };
