@@ -60,6 +60,44 @@ export function marketPoint(probs) {
   return total ? acc / total : NaN;
 }
 
+// Pre-registered trading gate: is v3 (claude) beating the market OUT OF SAMPLE?
+// Paired multi-bin Brier over settled city-days, using the LAST pre-settlement
+// decision per city-day and only days where BOTH claude and the market posted a
+// full book. Market probs are raw yes-ask prices (price/100) — so "beat market"
+// here means beat the posted book NET OF SPREAD, the real bar. `passed` requires
+// a lower claude Brier AND n >= nMin (default 30). Trading stays OFF until passed.
+export function evaluateGate(records, { nMin = 30 } = {}) {
+  const truths = {};
+  for (const r of records) if (r.type === "settlement") truths[`${r.station}|${r.contract_date}`] = r.cli_max;
+  const latest = {};
+  for (const r of records) {
+    if (r.type !== "decision") continue;
+    const k = `${r.station}|${r.contract_date}`;
+    if (!(k in truths)) continue;
+    if (!latest[k] || r.asof > latest[k].asof) latest[k] = r;
+  }
+  const brierOf = (probs, truth) =>
+    Object.entries(probs).reduce((a, [lbl, p]) => a + (p - (binHit(lbl, truth) ? 1 : 0)) ** 2, 0);
+  let n = 0, cSum = 0, mSum = 0;
+  for (const k of Object.keys(latest)) {
+    const r = latest[k], truth = truths[k];
+    const cp = r.claude?.bin_probs;
+    const mp = r.market ? Object.fromEntries(Object.entries(r.market).map(([kk, v]) => [kk, v / 100])) : null;
+    if (!cp || !Object.keys(cp).length || !mp || !Object.keys(mp).length) continue;
+    n++; cSum += brierOf(cp, truth); mSum += brierOf(mp, truth);
+  }
+  const claudeBrier = n ? cSum / n : null;
+  const marketBrier = n ? mSum / n : null;
+  const edge = (claudeBrier != null && marketBrier != null) ? marketBrier - claudeBrier : null;
+  const passed = n >= nMin && claudeBrier != null && claudeBrier < marketBrier;
+  const verdict = passed
+    ? `PASS — v3 Brier ${claudeBrier.toFixed(3)} < market ${marketBrier.toFixed(3)} over ${n} city-days; sizing may be considered`
+    : n < nMin
+      ? `HOLD — ${n}/${nMin} paired settled city-days (need out-of-sample volume before any real money)`
+      : `HOLD — v3 Brier ${claudeBrier.toFixed(3)} ≥ market ${marketBrier.toFixed(3)} over ${n} city-days (no demonstrated edge)`;
+  return { nMin, n, claudeBrier, marketBrier, edge, passed, verdict };
+}
+
 const summarize = (s) => s.n === 0 ? { n: 0 } : {
   n: s.n, mae: s.absErr / s.n, rmse: Math.sqrt(s.sqErr / s.n),
   brier: s.brierN ? s.brier / s.brierN : null,

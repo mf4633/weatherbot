@@ -1,5 +1,5 @@
 // Parity test: lib/scoreboard.js must reproduce scoreboard.py's self-test numbers.
-import { score } from "./netlify/functions/lib/scoreboard.js";
+import { score, evaluateGate } from "./netlify/functions/lib/scoreboard.js";
 
 let pass = 0, fail = 0;
 const approx = (a, b, t = 0.01) => a != null && Math.abs(a - b) <= t;
@@ -34,6 +34,26 @@ ok("cli83 bayes MAE 1.80", approx(s83.bayes.mae, 1.80));
 ok("cli83 bayes hit68 100%", s83.bayes.hit68 === 1);
 ok("cli83 market MAE 0.74", approx(s83.market.mae, 0.74));
 ok("cli83 market Brier 0.296", approx(s83.market.brier, 0.296));
+
+// ---- pre-registered trading gate (evaluateGate) ----
+const bins2 = { "<=82": 0.1, "83-84": 0.7, "85-86": 0.2 };        // sharp, right (truth 83)
+const mktSoft = { "<=82": 30, "83-84": 40, "85-86": 30 };         // yes-ask cents, diffuse
+function gday(i, truth, claudeProbs, market) {
+  return [
+    { type: "decision", station: `K${i}`, contract_date: "2026-07-01", asof: "t2", claude: { bin_probs: claudeProbs }, market },
+    { type: "settlement", station: `K${i}`, contract_date: "2026-07-01", cli_max: truth },
+  ];
+}
+const gFew = evaluateGate([].concat(...Array.from({ length: 5 }, (_, i) => gday(i, 83, bins2, mktSoft))));
+ok("gate HOLD below nMin (n=5)", gFew.passed === false && gFew.n === 5 && /HOLD/.test(gFew.verdict));
+const gMany = evaluateGate([].concat(...Array.from({ length: 30 }, (_, i) => gday(i, 83, bins2, mktSoft))));
+ok("gate n counts 30 paired city-days", gMany.n === 30);
+ok("gate PASS when claude Brier < market over ≥30", gMany.passed === true && gMany.edge > 0);
+ok("gate claude Brier < market Brier", gMany.claudeBrier < gMany.marketBrier);
+const flat = { "<=82": 0.33, "83-84": 0.34, "85-86": 0.33 };
+const gBad = evaluateGate([].concat(...Array.from({ length: 30 }, (_, i) => gday(i, 85, flat, { "<=82": 5, "83-84": 5, "85-86": 90 }))));
+ok("gate HOLD when claude no better than market", gBad.passed === false && gBad.n === 30);
+ok("gate excludes days with no market book", evaluateGate([].concat(...Array.from({ length: 40 }, (_, i) => gday(i, 83, bins2, null)))).n === 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
