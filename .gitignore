@@ -30,3 +30,7 @@ kalshi.json
 fetch_data.log
 fetch_models.log
 analyze*.log
+
+# Python bytecode
+__pycache__/
+*.pyc
