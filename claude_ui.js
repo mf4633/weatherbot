@@ -92,20 +92,14 @@
     </div>`;
   }
 
-  // Reuse app.js's read-only /api/claude fetch when it's fresh, so the page hits the
-  // heavy endpoint once, not twice. Falls back to its own ?log=0 fetch otherwise.
-  function getPred() {
-    const c = window.__claudeCache;
-    if (c && c.pred && Date.now() - c.at < 45000) return Promise.resolve(c.pred);
-    return fetch("/api/claude?log=0").then((r) => r.json());
-  }
-
   async function refresh() {
     const grid = $("claude-grid"), sb = $("claude-scoreboard");
     if (!grid) return;
     try {
+      // Fast blob-backed reads (newest logged decision per station + scoreboard),
+      // not the heavy recompute path — so the section always renders.
       const [pred, scored] = await Promise.all([
-        getPred(),
+        fetch("/api/claude?mode=latest").then((r) => r.json()),
         fetch("/api/claude?mode=scoreboard").then((r) => r.json()).catch(() => null),
       ]);
       if (sb && scored) sb.innerHTML = gateBanner(scored.gate) + scoreTable(scored);

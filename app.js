@@ -78,7 +78,7 @@ function renderCard(c) {
       <div class="big">no data</div>
     </div>`;
   }
-  const cl = claudeByCity[c.name];
+  const cl = claudeByStation[c.station];
   const tempColor = c.mean >= 70 ? "" : "cool";
   // CI bounds are obs-floored at maxSoFarCli / minSoFarCli (Math.floor / Math.ceil of
   // the CLI-grade obs — 5-min weighted + DSM — per weather.js 96e5a62). Compare against
@@ -179,31 +179,39 @@ function renderCard(c) {
   </details>`;
 }
 
-// Claude analog prediction, keyed by city name, for the side-by-side HIGH number.
-// Read-only (?log=0 — the hourly cron owns the scoreboard write); cached on window so
-// claude_ui.js reuses this same fetch instead of hitting the heavy endpoint again.
-let claudeByCity = {};
+// Claude analog high, keyed by STATION, for the side-by-side number. Read from the
+// FAST ?mode=latest endpoint (newest logged decision per station, no recompute) —
+// the full predict path is too heavy to block a page load on. Populated async and
+// patched into the already-rendered cards, so a slow/failed Claude fetch never
+// delays or blocks the Bayesian cards.
+let claudeByStation = {};
+let lastCities = [];
 async function fetchClaude() {
   try {
-    const r = await fetch("/api/claude?log=0", { cache: "no-store" });
-    if (!r.ok) return;
+    const r = await fetch("/api/claude?mode=latest", { cache: "no-store" });
+    if (!r.ok) return false;
     const j = await r.json();
-    window.__claudeCache = { at: Date.now(), pred: j };
-    claudeByCity = Object.fromEntries((j.cities || []).map(c => [c.city, c.claude]));
-  } catch { /* leave the side-by-side number blank on failure */ }
+    claudeByStation = j.byStation || {};
+    return Object.keys(claudeByStation).length > 0;
+  } catch { return false; }
 }
 
 async function load() {
   try {
-    const [r] = await Promise.all([fetch("/api/weather", { cache: "no-store" }), fetchClaude()]);
+    const r = await fetch("/api/weather", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    grid.innerHTML = j.cities.map(renderCard).join("");
+    lastCities = j.cities || [];
+    grid.innerHTML = lastCities.map(renderCard).join("");
     updateJacksonBadges();
     handleHashOnLoad();
     const t = new Date(j.ts || Date.now()).toLocaleTimeString();
     const cacheNote = j.cached ? ` (server cache, ${Math.round(j.ageMs / 1000)}s old)` : "";
     statusEl.textContent = `Updated ${t}${cacheNote} • next client refresh in 60s`;
+    // Claude numbers arrive independently; re-render with them once they land.
+    fetchClaude().then(ok => {
+      if (ok && lastCities.length) { grid.innerHTML = lastCities.map(renderCard).join(""); updateJacksonBadges(); }
+    });
   } catch (e) {
     statusEl.textContent = `Error: ${e.message}. Retrying…`;
   }
