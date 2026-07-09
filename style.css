@@ -92,6 +92,12 @@ main {
 .card .pred.low .big { font-size: 22px; }
 .card .big { font-size: 28px; font-weight: 600; color: var(--warm); letter-spacing: -0.02em; }
 .card .big.cool { color: var(--cool); }
+/* HIGH: Bayesian + Claude analog side by side. Claude number in its brand clay/orange. */
+.card .high-duo { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+.card .high-col { display: flex; flex-direction: column; }
+.card .high-col .model-cap { font-size: 10px; letter-spacing: 0.04em; color: var(--muted); margin-top: 1px; }
+.card .big.claude-num { color: #d97757; }
+.card .lock-chip { font-size: 14px; vertical-align: middle; }
 .card .row { display: flex; justify-content: space-between; padding: 2px 0; }
 .card .row span:first-child { color: var(--muted); }
 .card .row span:last-child { font-variant-numeric: tabular-nums; }
