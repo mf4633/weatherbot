@@ -30,7 +30,17 @@ const CITIES = [
   { name: "Seattle",        cli: "SEA", station: "KSEA", lat: 47.4502, lon: -122.3088, tz: "America/Los_Angeles" },
   { name: "Denver",         cli: "DEN", station: "KDEN", lat: 39.8617, lon: -104.6731, tz: "America/Denver" },
   { name: "Washington DC",  cli: "DCA", station: "KDCA", lat: 38.8512, lon: -77.0402, tz: "America/New_York" },
-  { name: "Boston",         cli: "BOS", station: "KBOS", lat: 42.3656, lon: -71.0096, tz: "America/New_York" }
+  { name: "Boston",         cli: "BOS", station: "KBOS", lat: 42.3656, lon: -71.0096, tz: "America/New_York" },
+  // Added 2026-07-09 to complete the requested 20-city set. New cities have no tuned
+  // per-city Kalman params (regime.js) or regime seeds → they fall back to the neutral
+  // global correction, so predictions are valid but untuned until backfilled.
+  { name: "Miami",          cli: "MIA", station: "KMIA", lat: 25.7906, lon: -80.2869, tz: "America/New_York" },
+  { name: "San Francisco",  cli: "SFO", station: "KSFO", lat: 37.6197, lon: -122.3647, tz: "America/Los_Angeles" },
+  { name: "New Orleans",    cli: "MSY", station: "KMSY", lat: 29.9934, lon: -90.2581, tz: "America/Chicago" },
+  { name: "Las Vegas",      cli: "LAS", station: "KLAS", lat: 36.0840, lon: -115.1537, tz: "America/Los_Angeles" },
+  { name: "Oklahoma City",  cli: "OKC", station: "KOKC", lat: 35.3931, lon: -97.6007, tz: "America/Chicago" },
+  { name: "Minneapolis",    cli: "MSP", station: "KMSP", lat: 44.8848, lon: -93.2223, tz: "America/Chicago" },
+  { name: "Atlanta",        cli: "ATL", station: "KATL", lat: 33.6367, lon: -84.4281, tz: "America/New_York" }
 ];
 
 const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";

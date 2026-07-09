@@ -1,6 +1,6 @@
 // Parity test: JS claude_analog.js must reproduce claude_analog.py's worked
 // example (KNYC 2026-07-09 09:51). No network. Run: node test_claude_analog.js
-import { predict, stationConfig, binProbabilities } from "./netlify/functions/lib/claude_analog.js";
+import { predict, stationConfig, binProbabilities, MARINE_SECTORS } from "./netlify/functions/lib/claude_analog.js";
 
 let pass = 0, fail = 0;
 const approx = (a, b, tol = 0.001) => Math.abs(a - b) <= tol;
@@ -57,6 +57,14 @@ ok("KDEN trajectory = 0 (continental)", den.components.A_trajectory === 0);
 const floored = predict({ station: "KDEN", now: { ts: D(7, 9, 16, 0), temp_f: 60 }, max_so_far_f: 88,
   yesterday: [{ ts: D(7, 8, 16, 0), temp_f: 85 }], yesterday_max_f: 86 });
 ok("mu floored at max-so-far (88)", floored.point_f === 88);
+
+// --- all 20 requested cities are configured (coastal → sector, continental → []) ---
+const COASTAL = ["KLAX", "KNYC", "KMIA", "KMDW", "KBOS", "KSEA", "KPHL", "KHOU", "KSFO", "KMSY", "KDCA"];
+const CONTINENTAL = ["KDEN", "KAUS", "KDFW", "KLAS", "KOKC", "KPHX", "KSAT", "KMSP", "KATL"];
+ok("all 20 requested stations present in MARINE_SECTORS",
+   [...COASTAL, ...CONTINENTAL].every(s => s in MARINE_SECTORS));
+ok("coastal stations have a marine sector", COASTAL.every(s => (MARINE_SECTORS[s] || []).length > 0));
+ok("continental stations have no marine sector", CONTINENTAL.every(s => (MARINE_SECTORS[s] || []).length === 0));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
