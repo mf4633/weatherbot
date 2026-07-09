@@ -1,5 +1,5 @@
 // Tests for lib/metar.js (METAR decode + snapshot build). No network.
-import { parseMetar, buildSnapshot } from "./netlify/functions/lib/metar.js";
+import { parseMetar, buildSnapshot, buildSnapshotV2 } from "./netlify/functions/lib/metar.js";
 
 let pass = 0, fail = 0;
 const approx = (a, b, t = 0.05) => a != null && Math.abs(a - b) <= t;
@@ -40,6 +40,28 @@ ok("yesterday has 2 obs", snap.yesterday.length === 2);
 ok("yesterday_max ≈ 84.9°F", approx(snap.yesterday_max_f, 84.92, 0.1));
 ok("max_so_far from bayes (79)", snap.max_so_far_f === 79);
 ok("slp_24h_ago picked (near 081451Z, ~1017.4)", approx(snap.slp_24h_ago_mb, 1017.4, 0.2));
+
+// sky field parse (feeds claude_analog_v2 insolation/sky-cover terms).
+const s1 = parseMetar("KDEN 091353Z 15005KT 10SM FEW100 SCT120 SCT150 19/12 A2984 RMK T01890122", ref);
+ok("sky parses layered cover", s1.sky === "FEW100 SCT120 SCT150");
+const s2 = parseMetar("KDEN 100153Z VRB03KT 10SM CLR M02/M08 A3010 RMK T10171083", ref);
+ok("sky CLR normalized", s2.sky === "CLR");
+
+// buildSnapshotV2: multi-day analog ensemble (3 local days → today + 2 prior analogs).
+const v2lines = [
+  "KDEN 071553Z 20006KT SCT090 21/09 RMK SLP174 T02110094",  // 3 days ago 15:53Z
+  "KDEN 071953Z 22009KT FEW220 36/09 RMK SLP150 T03610094",  // 3 days ago 19:53Z (max ~96.9)
+  "KDEN 081353Z 00000KT SCT090 BKN150 23/09 RMK SLP161 T02330094",  // 2 days ago 13:53Z
+  "KDEN 081953Z 22008KT FEW200 34/08 RMK SLP150 T03440083",  // 2 days ago 19:53Z (max ~93.9)
+  "KDEN 091353Z 15005KT FEW100 SCT120 19/12 RMK SLP140 T01890122",  // today 13:53Z
+  "KDEN 091453Z 15005KT FEW100 20/12 RMK SLP136 T02000122",  // today 14:53Z (now)
+];
+const v2 = buildSnapshotV2({ station: "KDEN", tz: "America/Denver", metarLines: v2lines, refNow: ref });
+ok("v2 now = latest (14:53Z)", v2.now.ts.getUTCHours() === 14);
+ok("v2 two analogs, most-recent-first", v2.analogs.length === 2 && approx(v2.analogs[0].max_f, 93.9, 0.1));
+ok("v2 second analog older day", approx(v2.analogs[1].max_f, 96.9, 0.2));
+ok("v2 analog hourlies carry sky", v2.analogs[0].hourlies.some(h => /SCT090/.test(h.sky)));
+ok("v2 max_so_far from today obs", approx(v2.max_so_far_f, 68, 0.1));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

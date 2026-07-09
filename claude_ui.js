@@ -27,26 +27,37 @@
   }
 
   function cityRow(c) {
-    const b = c.bayes;
+    const cl = c.claude, b = c.bayes;
     const div = c.divergence;
     const flag = div == null ? "" :
       Math.abs(div) >= 2.0 ? `<span class="decision rejected">⚠ ${div > 0 ? "+" : ""}${f1(div)}°F</span>`
                            : `<span class="decision skipped">≈ ${div > 0 ? "+" : ""}${f1(div)}°F</span>`;
-    const comp = Object.entries(c.claude.components || {})
+    const comp = Object.entries(cl.components || {})
       .filter(([k]) => k !== "T_now")
       .map(([k, v]) => `${k.replace("A_", "").replace("R_", "")} ${v >= 0 ? "+" : ""}${(+v).toFixed(1)}`)
       .join("  ");
-    const bins = Object.entries(c.claude.bin_probs || {})
+    const bins = Object.entries(cl.bin_probs || {})
       .sort((a, z) => z[1] - a[1]).slice(0, 3)
       .map(([lbl, p]) => `${lbl} ${(100 * p).toFixed(0)}%`).join("  ");
+    // Convective-truncation mixture: show the dry-ramp mode + P(convection caps it).
+    const conv = cl.p_trunc > 0
+      ? `<div class="ci">mode ${f1(cl.mu)}°F  •  P(convective cap) ${(100 * cl.p_trunc).toFixed(0)}%  •  depth −${f1(cl.depth)}°F</div>`
+      : "";
+    // Market divergence: model mean vs Kalshi book-implied point.
+    const mkt = cl.market_pt != null && !Number.isNaN(cl.market_pt)
+      ? `<div class="ci muted" title="${(cl.divergence_note || "").replace(/"/g, "'")}">market ${f1(cl.market_pt)}°F ${
+          Math.abs(cl.point - cl.market_pt) < 1 ? "≈ model" : (cl.point > cl.market_pt ? "▲ model hotter" : "▼ model colder")}</div>`
+      : "";
     return `<div class="card">
       <h2>${c.city} <span class="cli">${c.station}</span></h2>
-      <div class="row"><span>Claude analog</span><span class="big cool" style="font-size:20px">${f1(c.claude.point)}°F</span></div>
+      <div class="row"><span>Claude analog</span><span class="big cool" style="font-size:20px">${f1(cl.point)}°F</span></div>
       <div class="row"><span>Bayesian</span><span>${b ? f1(b.point) + "°F" : "—"}</span></div>
       <div class="row"><span>divergence</span><span>${flag}</span></div>
-      <div class="ci">σ ${f1(c.claude.sigma)}  •  floor ${f1(c.claude.floor)}  •  CI68 [${f1(c.claude.ci68[0])}, ${f1(c.claude.ci68[1])}]</div>
+      <div class="ci">σ ${f1(cl.sigma)}  •  floor ${f1(cl.floor)}  •  CI68 [${f1(cl.ci68[0])}, ${f1(cl.ci68[1])}]</div>
       <div class="ci">${comp}</div>
+      ${conv}
       ${bins ? `<div class="ci">bins: ${bins}</div>` : ""}
+      ${mkt}
     </div>`;
   }
 
