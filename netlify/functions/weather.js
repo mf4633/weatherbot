@@ -1503,7 +1503,11 @@ export default async (req) => {
     // ramp + Bowen/trajectory/airmass/sky + regime guard); the full logged decision
     // (upstream L1 / market L2 / peak-lock) still lives in claude_log-background.js.
     try {
-      const lines = metarText.split("\n").map(l => l.trim()).filter(l => l.startsWith(c.station + " "));
+      // aviationweather format=raw prefixes lines with "METAR "/"SPECI " — match the
+      // station code immediately before the ddHHMMZ group, prefix or not. (The old
+      // startsWith(station+" ") matched ZERO lines → claudeHigh was always null.)
+      const stRe = new RegExp(`\\b${c.station}\\s+\\d{6}Z`);
+      const lines = metarText.split("\n").map(l => l.trim()).filter(l => stRe.test(l));
       const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: lines, maxSoFarF: result.maxSoFarCli ?? result.maxSoFar });
       if (snap) {
         const card = claudePredict(snap);

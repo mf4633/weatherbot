@@ -26,8 +26,13 @@ async function fetchMetars(ids) {
   if (!r.ok) throw new Error(`METAR fetch ${r.status}`);
   return r.text();
 }
-const stationLines = (text, station) =>
-  text.split("\n").map(l => l.trim()).filter(l => l.startsWith(`${station} `));
+// aviationweather format=raw prefixes lines with "METAR "/"SPECI ". Match the station
+// code immediately before the ddHHMMZ group, prefix or not — the old
+// startsWith(station+" ") matched ZERO lines, so the scoreboard never logged anything.
+export const stationLines = (text, station) => {
+  const re = new RegExp(`\\b${station}\\s+\\d{6}Z`);
+  return text.split("\n").map(l => l.trim()).filter(l => re.test(l));
+};
 
 const labelOf = (lo, hi) =>
   lo === -Infinity || lo == null ? `<=${hi}` :
