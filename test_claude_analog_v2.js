@@ -1,6 +1,6 @@
 // Parity test: lib/claude_analog_v2.js must reproduce claude_analog_v2.py's replay
 // (KNYC / KLAX / KDEN, 2026-07-09). No network. Run: node test_claude_analog_v2.js
-import { predict, checkpoint, STATION_CONFIGS, KALSHI_STATIONS, skyDeficit } from "./netlify/functions/lib/claude_analog_v2.js";
+import { predict, checkpoint, makeMixture, STATION_CONFIGS, KALSHI_STATIONS, skyDeficit } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
 const approx = (a, b, t = 0.05) => a != null && Math.abs(a - b) <= t;
@@ -70,6 +70,16 @@ ok("checkpoint reports hourly rise +4", approx(cp.hourly_rise, 4));
 // ---- coverage: all 20 Kalshi stations have a StationConfig ----
 ok("all 20 Kalshi stations configured", Object.values(KALSHI_STATIONS).every(s => s in STATION_CONFIGS));
 ok("sky parse: FEW100 SCT120 SCT150 deficit > 0", skyDeficit("FEW100 SCT120 SCT150", 150) > 0);
+
+// --- 2026-07-10 KMDW regression: the mean must respect the observed-max floor ---
+// Old shortcut (mu − p·depth) reported 75.5 with 79 already observed. The floored-
+// mixture mean can never sit below the floor, whatever the convective branch does.
+{
+  const d = makeMixture(79, 2.8, 0.87, 4, 2.0, 79);   // mu clamped AT floor, heavy truncation
+  ok("KMDW case: mean ≥ floor (79.3, not 75.5)", d.mean() >= 79 && approx(d.mean(), 79.33, 0.05));
+  const e = makeMixture(90, 3, 0.95, 6, 2.5, 89.5);   // extreme truncation right at the floor
+  ok("extreme truncation: mean still ≥ floor", e.mean() >= 89.5);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
