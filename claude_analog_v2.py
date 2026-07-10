@@ -449,7 +449,19 @@ class MixtureDist:
         return 0.5 * (lo + hi)
 
     def mean(self) -> float:
-        return self.mu - self.p_trunc * self.depth
+        # Mean of the FLOORED mixture, E[max(X, floor)] — closed form per normal
+        # component: f + (m-f)*Phi(z) + s*phi(z), z=(m-f)/s. The old shortcut
+        # (mu - p*depth) ignored the floor, so a hot convective day could report
+        # a "high" BELOW the already-observed max (KMDW 2026-07-10).
+        def comp(m: float, s: float) -> float:
+            if s <= 0:
+                return max(m, self.floor)
+            z = (m - self.floor) / s
+            pdf = math.exp(-0.5 * z * z) / math.sqrt(2 * math.pi)
+            return self.floor + (m - self.floor) * _phi(z) + s * pdf
+        s2 = math.sqrt(self.sigma ** 2 + self.depth_sigma ** 2)
+        return ((1 - self.p_trunc) * comp(self.mu, self.sigma)
+                + self.p_trunc * comp(self.mu - self.depth, s2))
 
     def bin_probs(self, bins: Sequence[tuple[str, float, float]]) -> dict[str, float]:
         out = {}

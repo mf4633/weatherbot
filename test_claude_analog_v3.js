@@ -25,7 +25,7 @@ const UP = {
 
 // ---- 9:51 WITHOUT upstream (v2-equivalent info; L4 still fires on SLP/Td) ----
 const noup = predict(snap951, null, BINS, BOOK);
-ok("NOUP mean 85.58", approx(noup.dist.mean(), 85.58));
+ok("NOUP mean 85.73 (floored-mixture)", approx(noup.dist.mean(), 85.73, 0.02));
 ok("NOUP R_analog(eff) +8.22 (L4 capped from 12)", approx(noup.components["R_analog(eff)"], 8.22));
 ok("NOUP advection_score 0.70", approx(noup.advection_score, 0.70, 0.005));
 ok("NOUP A_upstream 0 (no obs)", noup.components.A_upstream === 0);
@@ -34,18 +34,18 @@ ok("NOUP not locked", noup.peak_locked === false);
 
 // ---- 9:51 WITH upstream (L1 + L4 active) — the shield the market saw ----
 const up = predict(snap951, null, BINS, BOOK, UP);
-ok("UP mean 81.39 (pulled colder by shield)", approx(up.dist.mean(), 81.39, 0.02));
+ok("UP mean 83.32 (pulled colder by shield)", approx(up.dist.mean(), 83.32, 0.02));
 ok("UP A_upstream -2.86", approx(up.components.A_upstream, -2.86, 0.01));
 ok("UP R_analog(eff) +6.89", approx(up.components["R_analog(eff)"], 6.89, 0.01));
 ok("UP advection_score 0.95", approx(up.advection_score, 0.9455, 0.005));
 ok("UP upstream audit KPHL 0.70 / KABE 0.95 / KAVP 0.95",
   up.upstream_audit.length === 3 && approx(up.upstream_audit[0].deficit, 0.70) && approx(up.upstream_audit[1].deficit, 0.95));
 ok("UP bins match py", binsMatch(up.bin_probs, { "<=82": 0.55925, "83-84": 0.10263, "85-86": 0.0918, "87-88": 0.07644, "89-90": 0.05925, ">=91": 0.11063 }));
-ok("UP model now colder than market", /colder/.test(up.divergence_note));
+ok("UP ≈ agreement with market (floored mean 83.3 vs 83.7)", /agreement/.test(up.divergence_note));
 
 // ---- 9:51 + informed-market tilt ON (L2, sizing view) ----
 const tilt = predict(snap951, null, BINS, BOOK, UP, null, true);
-ok("TILT mean 82.42 (44% toward market)", approx(tilt.dist.mean(), 82.42, 0.02));
+ok("TILT mean 84.00 (44% toward market)", approx(tilt.dist.mean(), 84.00, 0.02));
 ok("TILT note reports 44% toward market", /44% toward market/.test(tilt.tilt_note));
 ok("TILT bins match py", binsMatch(tilt.bin_probs, { "<=82": 0.50411, "83-84": 0.1053, "85-86": 0.0978, "87-88": 0.0846, "89-90": 0.06816, ">=91": 0.14002 }));
 
@@ -57,7 +57,7 @@ const snap1305 = { station: "KNYC", tz: TZ, now: ob(7, 9, 13, 5, 79.4, 72, 170, 
 const lock = predict(snap1305, null, BINS, BOOK, null, snap1251);
 ok("LOCK peak_locked true", lock.peak_locked === true);
 ok("LOCK note 'PEAK LOCKED at 82'", /PEAK LOCKED at 82°F/.test(lock.lock_note));
-ok("LOCK mean 82.35 (max ± rounding)", approx(lock.dist.mean(), 82.35));
+ok("LOCK mean 82.44 (floored mean of max+0.35, σ0.55)", approx(lock.dist.mean(), 82.44, 0.02));
 ok("LOCK collapses to <=82 / 83-84 only", approx(lock.bin_probs["<=82"], 0.60747, 0.002) && approx(lock.bin_probs["83-84"], 0.39249, 0.002) && lock.bin_probs["85-86"] < 0.001);
 
 // ---- helper-level parity ----

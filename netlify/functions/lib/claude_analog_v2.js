@@ -160,7 +160,18 @@ export function makeMixture(mu, sigma, pTrunc, depth, depthSigma, floor) {
     for (let i = 0; i < 60; i++) { const mid = 0.5 * (lo + hi); if (cdf(mid) < p) lo = mid; else hi = mid; }
     return 0.5 * (lo + hi);
   };
-  const mean = () => mu - pTrunc * depth;
+  // Mean of the FLOORED mixture, E[max(X, floor)] — closed form per normal
+  // component: f + (m−f)·Φ(z) + s·φ(z), z=(m−f)/s. The old shortcut
+  // (mu − p·depth) ignored the floor, so a hot convective day could report a
+  // "high" BELOW the already-observed max (KMDW 2026-07-10: 75.5 vs obs 79).
+  const npdf = (z) => Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+  const compMean = (m, s) => {
+    if (!(s > 0)) return Math.max(m, floor);
+    const z = (m - floor) / s;
+    return floor + (m - floor) * phi(z) + s * npdf(z);
+  };
+  const mean = () => (1 - pTrunc) * compMean(mu, sigma)
+    + pTrunc * compMean(mu - depth, Math.sqrt(sigma ** 2 + depthSigma ** 2));
   const binProbs = (bins) => {
     const out = {};
     for (const { label, lo, hi } of bins) {
