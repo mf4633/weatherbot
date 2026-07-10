@@ -45,3 +45,19 @@ jobs:
           curl --max-time 30 -sS -u "$BASIC_AUTH" \
             "https://weatherbot-mf.netlify.app/.netlify/functions/claude_log-background" \
             -o /tmp/cl.txt -w "claude-log-bg HTTP %{http_code} (202 = accepted)\n" || true
+      - name: Claude scoreboard diagnostic (status + latest count)
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          # Give this run's background fn time to finish predict+log, then read the
+          # status blob it wrote and the resulting latest-count. Surfaces failures the
+          # background fn hit (fetch/blob) without needing Netlify function logs.
+          sleep 40
+          curl --max-time 30 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/claude?mode=status" \
+            -o /tmp/st.json -w "status HTTP %{http_code}\n" || true
+          echo "--- last_log ---"; cat /tmp/st.json 2>/dev/null || true; echo
+          curl --max-time 30 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/claude?mode=latest" \
+            -o /tmp/lt.json -w "latest HTTP %{http_code}\n" || true
+          jq '{count, asof}' /tmp/lt.json 2>/dev/null || echo "(latest non-JSON)"

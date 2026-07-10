@@ -15,6 +15,14 @@ import { runPredict, runSettle, STORE, round1 } from "./lib/claude_engine.js";
 // Re-export so test_claude.js (and anything else) can import the CLI parser here.
 export { parseCliProduct } from "./lib/claude_engine.js";
 
+// Last background-logger outcome (what it predicted/logged/errored) — for diagnosing
+// why the store might be empty without Netlify function-log access.
+async function runStatus() {
+  const store = getStore(STORE);
+  const st = await store.get("status/last_log.json", { type: "json" }).catch(() => null);
+  return { ok: true, mode: "status", last_log: st };
+}
+
 async function runScoreboard() {
   const store = getStore(STORE);
   const { blobs } = await store.list();
@@ -72,6 +80,7 @@ export default async (req) => {
     if (mode === "scoreboard") return json(await runScoreboard());
     if (mode === "export") return json(await runExport());
     if (mode === "latest") return json(await runLatest());
+    if (mode === "status") return json(await runStatus());
     // Heavy: recompute + (optionally) log. Prefer claude_log-background.js for logging.
     return json(await runPredict(new URL(req.url).searchParams.get("log") !== "0"));
   } catch (e) {
