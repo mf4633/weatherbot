@@ -225,6 +225,25 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   return card;
 }
 
+// --- thin-analog guard (2026-07-10 display hardening) ---------------------------
+// With hours of heating left, a near-zero analog ramp is almost always a data
+// artifact (sparse prior-day hourlies → nearestOb lands far from the current hour),
+// not a real "done warming" call — the KLAX 8:53 AM card read high = current temp
+// with 5.7h to peak. When ≥2h from peak, the ramp credited <1.5°F, and yesterday's
+// realized max sits above the prediction, floor the point at damped persistence
+// (yesterday's max − 1°F). Display/gating hardening only — the scored ledger stays
+// the pure v3 model. Unfitted prior; see EDGE_AUDIT.md.
+export function thinAnalogGuard(point, snap, rampEff, hrsToPeak) {
+  const maxes = (snap.analogs || []).map(a => a.max_f).filter(Number.isFinite);
+  if (!maxes.length) return { point, guarded: false };
+  const persistence = Math.max(...maxes);
+  if (hrsToPeak == null || hrsToPeak < 2) return { point, guarded: false };
+  if ((rampEff ?? 0) >= 1.5) return { point, guarded: false };
+  const floor = persistence - 1;
+  if (floor <= point) return { point, guarded: false };
+  return { point: floor, guarded: true };
+}
+
 // --- local-time helper (2026-07-09 UTC-hours bugfix) ---------------------------
 export function localHourFrac(ts, tz) {
   const parts = new Intl.DateTimeFormat("en-US", {

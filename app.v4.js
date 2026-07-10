@@ -166,6 +166,10 @@ function renderCard(c) {
           <div class="model-cap">Claude analog</div>
         </div>
       </div>
+      ${c.claudeComponents ? `<div class="ci">claude: T_now ${(+c.claudeComponents.T_now).toFixed(1)}  ${
+        Object.entries(c.claudeComponents).filter(([k]) => k !== "T_now" && k !== "R_analog(raw)")
+          .map(([k, v]) => `${k.replace("A_", "").replace("R_", "").replace("(eff)", "")} ${v >= 0 ? "+" : ""}${(+v).toFixed(1)}`)
+          .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}</div>` : ""}
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.std.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci68)}</span></div>
       <div class="row ci"><span>95% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci95)}</span></div>
