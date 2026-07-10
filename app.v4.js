@@ -645,6 +645,48 @@ function renderKalshiRows(bets, tbodyId, colspan) {
   }).join("");
 }
 
+// "Where's the trade?" classifier — encodes the betting doctrine: the best setups
+// are MODEL AGREEMENT + MARKET DISAGREEMENT (two decorrelated engines vs a lagging
+// book). Wide model divergence is a risk gate, not a buy signal — that's a bimodal
+// day where only the corridor bins between the modes are interesting, at small size.
+function classifySetup(c) {
+  const m = c.model || {};
+  const imp = c.impliedHigh && c.impliedHigh.mean != null ? c.impliedHigh.mean : null;
+  if (m.claudeHigh == null || m.highMeanBayes == null || imp == null) return null;
+  const agree = Math.abs(m.highMeanBayes - m.claudeHigh);
+  const div = m.highMean - imp;                      // blend vs market-implied μ
+  let cls = "watch", note = "no setup — models and market roughly aligned";
+  if (agree <= 1.5 && Math.abs(div) >= 2) { cls = "prime"; note = "models agree, market ≥2°F away — the class-1 setup (two decorrelated engines vs a lagging book)"; }
+  else if (agree <= 1.5 && Math.abs(div) >= 1) { cls = "lean"; note = "models agree, market 1–2°F away — small edge, fees bite at mid prices"; }
+  else if (agree >= 3) { cls = "corridor"; note = "models split ≥3°F — bimodal day; own the corridor bins between the modes, shrink size, don't bet direction"; }
+  return { name: c.name, bayes: +m.highMeanBayes, claude: +m.claudeHigh, grade: m.claudeGrade || null,
+           agree, blend: +m.highMean, imp: +imp, div, cls, note };
+}
+
+function renderSetups(cities) {
+  const el = document.getElementById("kalshi-setups");
+  if (!el) return;
+  const rows = (cities || []).map(classifySetup).filter(Boolean);
+  if (!rows.length) { el.innerHTML = `<p class="sub muted">No cities with both models and a market book right now.</p>`; return; }
+  const rank = { prime: 0, lean: 1, corridor: 2, watch: 3 };
+  rows.sort((a, b) => (rank[a.cls] - rank[b.cls]) || (Math.abs(b.div) - Math.abs(a.div)));
+  const chip = (r) =>
+    r.cls === "prime" ? `<span class="setup s-prime" title="${r.note}">PRIME</span>` :
+    r.cls === "lean" ? `<span class="setup s-lean" title="${r.note}">lean</span>` :
+    r.cls === "corridor" ? `<span class="setup s-corridor" title="${r.note}">corridor</span>` :
+    `<span class="setup s-watch" title="${r.note}">—</span>`;
+  el.innerHTML = `<div class="table-scroll"><table class="kalshi-table"><thead><tr>
+    <th>City</th><th>Bayesian</th><th>Claude</th><th>Δ models</th><th>Market μ</th><th>blend − mkt</th><th>Setup</th>
+  </tr></thead><tbody>${rows.map(r => `<tr>
+    <td>${cityLink(r.name)}</td>
+    <td>${r.bayes.toFixed(1)}°</td>
+    <td>${r.claude.toFixed(1)}°${r.grade ? ` <span class="grade g-${r.grade}">${r.grade}</span>` : ""}</td>
+    <td>${r.agree.toFixed(1)}°</td>
+    <td>${r.imp.toFixed(1)}°</td>
+    <td class="${Math.abs(r.div) >= 2 ? "warm" : "muted"}">${r.div >= 0 ? "+" : ""}${r.div.toFixed(1)}°</td>
+    <td>${chip(r)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
 async function loadKalshi() {
   // Pull the latest trader-cycle logs first so renderKalshiRows can annotate
   // each candidate with its actual trader disposition (purchased / skipped / below floor).
@@ -656,6 +698,7 @@ async function loadKalshi() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     renderFreshness(j.freshness);
+    renderSetups(j.cities);
     const top = j.topBets || [];
     const highBets = top.filter(b => b.variable === "high" || !b.variable).slice(0, 15);
     const lowBets = top.filter(b => b.variable === "low").slice(0, 15);

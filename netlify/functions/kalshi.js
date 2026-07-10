@@ -583,6 +583,7 @@ export default async () => {
     const cityRecord = { name: city.name, station: city.station,
                          model: { highMean: highMu, highBasis: city.claudeHigh != null ? "blend" : "bayes",
                                   highMeanBayes: city.mean, claudeHigh: city.claudeHigh ?? null,
+                                  claudeGrade: city.claudeGrade ?? null,
                                   highStd: city.std, maxSoFar: city.maxSoFar,
                                   lowMean: city.lowMean, lowStd: city.lowStd, minSoFar: city.minSoFar,
                                   currentTemp: city.currentTemp },
