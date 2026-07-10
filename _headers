@@ -1,0 +1,16 @@
+# Force the browser to revalidate the HTML and the app scripts on every load, so a
+# code deploy is never masked by a stale cached app.js (the 2026-07-10 "no Claude
+# high" bug: the browser kept running a pre-inline app.js). `no-cache` = revalidate
+# with the ETag before using, not "never cache" — a 304 is cheap when unchanged.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/app.js
+  Cache-Control: no-cache
+/claude_ui.js
+  Cache-Control: no-cache
+/ui_nav.js
+  Cache-Control: no-cache
+/style.css
+  Cache-Control: no-cache
