@@ -1,20 +1,32 @@
 // claude_log-background.js — the RELIABLE logger for the Claude scoreboard.
-// The `-background` suffix makes this a Netlify background function: it returns 202
+// The `-background` suffix makes this a Netlify background function: returns 202
 // immediately and runs up to 15 minutes, so it can finish the heavy predict path
-// (two self-HTTP calls + a 78-station METAR fetch + per-city compute) that the
-// synchronous /api/claude times out on at ~10s — which is why the store was empty.
-// The GitHub cron hits this hourly. Reads only; places no trades.
+// that the synchronous /api/claude times out on at ~10s. Writes a status blob
+// (status/last_log.json) capturing what it did — readable via /api/claude?mode=status
+// — so failures are observable without Netlify log access. The GitHub cron hits this
+// hourly. Reads only; places no trades.
 
-import { runPredict, runSettle } from "./lib/claude_engine.js";
+import { getStore } from "@netlify/blobs";
+import { runPredict, runSettle, STORE } from "./lib/claude_engine.js";
 
 export default async () => {
-  const pred = await runPredict(true).catch(e => ({ ok: false, error: String(e?.message || e) }));
-  const settle = await runSettle().catch(e => ({ ok: false, error: String(e?.message || e) }));
-  // Background responses are ignored by the caller; this line is for the function log.
-  console.log("[claude-log-bg] " + JSON.stringify({
-    predicted: pred.count ?? null, logged: pred.logged ?? null,
-    predictErrors: pred.errors?.length ?? (pred.error ? [pred.error] : 0),
-    settled: settle.settled?.length ?? null, settleError: settle.error ?? null,
-  }));
+  const status = { ranAt: new Date().toISOString() };
+  try {
+    const pred = await runPredict(true);
+    status.predict = { ok: pred.ok, cities: pred.count, logged: pred.logged, errors: (pred.errors || []).slice(0, 5) };
+  } catch (e) {
+    status.predict = { ok: false, error: String(e?.message || e) };
+  }
+  try {
+    const s = await runSettle();
+    status.settle = { ok: s.ok, settled: s.settled?.length ?? 0 };
+  } catch (e) {
+    status.settle = { ok: false, error: String(e?.message || e) };
+  }
+  // Persist the outcome so we can read it back via ?mode=status (Netlify function
+  // logs aren't reachable from the dev environment; a blob is).
+  try { await getStore(STORE).setJSON("status/last_log.json", status); }
+  catch (e) { status.statusWriteError = String(e?.message || e); }
+  console.log("[claude-log-bg] " + JSON.stringify(status));
   return new Response("ok");
 };
