@@ -126,8 +126,10 @@ function renderCard(c) {
   // Collapsed by default: summary shows name + a compact HIGH peek (Bayesian ·
   // Claude, Claude in orange); click to expand the full detail. Open state is
   // preserved across the 60s refresh via `openCards` (see toggle listener + render).
-  const peek = `<span class="high-peek">HIGH <span class="peek-b">${c.mean.toFixed(0)}°</span>${
-    cl && cl.point != null ? ` · <span class="peek-c">${(+cl.point).toFixed(0)}°</span>` : ""}${
+  // Tri-state Claude marker (build v4): orange number if present; muted "n/a" if the
+  // field came back null/absent — so a blank slot can't be confused with stale JS.
+  const peek = `<span class="high-peek">HIGH <span class="peek-b">${c.mean.toFixed(0)}°</span> · ${
+    cl && cl.point != null ? `<span class="peek-c">${(+cl.point).toFixed(0)}°</span>` : `<span class="muted">n/a</span>`}${
     cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</span>`;
   return `<details class="card" id="${cardId}"${openCards.has(cardId) ? " open" : ""}>
     <summary class="card-summary">
@@ -157,10 +159,12 @@ function renderCard(c) {
           <div class="big ${tempColor}">${c.mean.toFixed(1)}°F</div>
           <div class="model-cap">Bayesian</div>
         </div>
-        ${cl && cl.point != null ? `<div class="high-col">
-          <div class="big claude-num">${(+cl.point).toFixed(1)}°F${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>
+        <div class="high-col">
+          ${cl && cl.point != null
+            ? `<div class="big claude-num">${(+cl.point).toFixed(1)}°F${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>`
+            : `<div class="big claude-num" style="opacity:.5">n/a</div>`}
           <div class="model-cap">Claude analog</div>
-        </div>` : ""}
+        </div>
       </div>
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.std.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci68)}</span></div>
