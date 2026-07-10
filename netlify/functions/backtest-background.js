@@ -1,0 +1,128 @@
+// backtest-background.js — historical replay of the Claude analog vs NWS guidance
+// vs persistence, scored on CLI truth. Runs on Netlify (15-min background budget;
+// IEM is reachable from functions — lib/iem.js already uses it). For each of the
+// last ~45 days × 20 Kalshi stations, rebuilds the 72h obs snapshot as of 15Z from
+// IEM's METAR archive, runs the pure v3 analog + thin-analog guard, and pairs it
+// with the day's 12Z GFS-MOS max-temp guidance (NWS stand-in — the Bayesian itself
+// is NWS-anchored and cannot be replayed historically) and yesterday's CLI high
+// (persistence). Truth = IEM's CLI archive. Results → blob; read via
+// /api/claude?mode=backtest. Idempotent: skips if results are <6 days old
+// (?force=1 recomputes). Places no trades.
+
+import { getStore } from "@netlify/blobs";
+import { parseAsosTdf, replayStation, aggregate } from "./lib/backtest_core.js";
+
+const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
+const DAYS = 45;
+
+const STATIONS = [
+  { station: "KNYC", cli: "NYC", tz: "America/New_York" },
+  { station: "KLAX", cli: "LAX", tz: "America/Los_Angeles" },
+  { station: "KMIA", cli: "MIA", tz: "America/New_York" },
+  { station: "KMDW", cli: "MDW", tz: "America/Chicago" },
+  { station: "KBOS", cli: "BOS", tz: "America/New_York" },
+  { station: "KSEA", cli: "SEA", tz: "America/Los_Angeles" },
+  { station: "KDEN", cli: "DEN", tz: "America/Denver" },
+  { station: "KPHL", cli: "PHL", tz: "America/New_York" },
+  { station: "KAUS", cli: "AUS", tz: "America/Chicago" },
+  { station: "KHOU", cli: "HOU", tz: "America/Chicago" },
+  { station: "KSFO", cli: "SFO", tz: "America/Los_Angeles" },
+  { station: "KDFW", cli: "DFW", tz: "America/Chicago" },
+  { station: "KMSY", cli: "MSY", tz: "America/Chicago" },
+  { station: "KLAS", cli: "LAS", tz: "America/Los_Angeles" },
+  { station: "KOKC", cli: "OKC", tz: "America/Chicago" },
+  { station: "KDCA", cli: "DCA", tz: "America/New_York" },
+  { station: "KPHX", cli: "PHX", tz: "America/Phoenix" },
+  { station: "KSAT", cli: "SAT", tz: "America/Chicago" },
+  { station: "KMSP", cli: "MSP", tz: "America/Chicago" },
+  { station: "KATL", cli: "ATL", tz: "America/New_York" },
+];
+
+const iso = (d) => d.toISOString().slice(0, 10);
+
+async function getText(url) {
+  const r = await fetch(url, { headers: { "User-Agent": UA } });
+  if (!r.ok) throw new Error(`${r.status} ${url.split("?")[0]}`);
+  return r.text();
+}
+
+async function fetchObs(sid, start, end) {
+  const [y1, m1, d1] = iso(start).split("-"), [y2, m2, d2] = iso(end).split("-");
+  const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?station=${sid.replace(/^K/, "")}` +
+    `&data=metar&year1=${y1}&month1=${m1}&day1=${d1}&year2=${y2}&month2=${m2}&day2=${d2}` +
+    `&tz=Etc%2FUTC&format=tdf&latlon=no&elev=no&missing=M&trace=T&direct=no&report_type=3&report_type=4`;
+  return parseAsosTdf(await getText(url));
+}
+
+async function fetchCliTruths(cliStation, year) {
+  const url = `https://mesonet.agron.iastate.edu/api/1/cli.json?station=K${cliStation}&year=${year}`;
+  const j = JSON.parse(await getText(url));
+  const rows = j.data || j.results || [];
+  const byDate = {};
+  for (const row of rows) {
+    const date = (row.valid || row.date || "").slice(0, 10);
+    const hi = row.high ?? row.high_temp ?? null;
+    if (date && typeof hi === "number") byDate[date] = hi;
+  }
+  return byDate;
+}
+
+// Best-effort NWS-guidance proxy: 12Z GFS MOS max temp (n_x) for the local afternoon.
+async function fetchMosHighs(station, start, end) {
+  const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py?station=${station}&model=GFS` +
+    `&sts=${iso(start)}T00:00Z&ets=${iso(end)}T23:00Z&format=csv`;
+  const text = await getText(url);
+  const lines = text.split("\n").filter(Boolean);
+  const header = (lines[0] || "").split(",").map(s => s.trim().toLowerCase());
+  const iRun = header.indexOf("runtime"), iFt = header.indexOf("ftime"), iNx = header.indexOf("n_x");
+  if (iRun < 0 || iFt < 0 || iNx < 0) return {};
+  const byDate = {};
+  for (const line of lines.slice(1)) {
+    const cols = line.split(",");
+    const run = (cols[iRun] || "").trim(), ft = (cols[iFt] || "").trim(), nx = parseFloat(cols[iNx]);
+    if (!Number.isFinite(nx) || !run.includes(" 12:00")) continue;
+    const date = run.slice(0, 10);
+    const t = new Date(ft.replace(" ", "T") + "Z");
+    const lo = new Date(`${date}T18:00:00Z`), hi = new Date(`${date}T18:00:00Z`); hi.setUTCHours(hi.getUTCHours() + 16);
+    if (isNaN(t) || t < lo || t > hi) continue;         // afternoon/evening window only
+    if (byDate[date] == null || nx > byDate[date]) byDate[date] = nx;
+  }
+  return byDate;
+}
+
+export default async (req) => {
+  const force = new URL(req.url).searchParams.get("force") === "1";
+  const store = getStore("claude_scoreboard");
+  const existing = await store.get("backtest/results.json", { type: "json" }).catch(() => null);
+  if (existing && !force && Date.now() - new Date(existing.ranAt).getTime() < 6 * 86400e3) {
+    console.log("[backtest] fresh results exist — skipping (force=1 to recompute)");
+    return new Response("ok");
+  }
+  const end = new Date(); end.setUTCDate(end.getUTCDate() - 1);        // through yesterday
+  const start = new Date(end); start.setUTCDate(start.getUTCDate() - DAYS);
+  const results = { ranAt: new Date().toISOString(), params: { days: DAYS, decisionHourUTC: 15, start: iso(start), end: iso(end) },
+                    stations: {}, overall: null, errors: [] };
+  const allRows = [];
+  for (const s of STATIONS) {
+    try {
+      const [obs, truths, mos] = await Promise.all([
+        fetchObs(s.station, start, end),
+        fetchCliTruths(s.cli, end.getUTCFullYear()),
+        fetchMosHighs(s.station, start, end).catch(() => ({})),
+      ]);
+      // keep truths inside the window
+      const truthByDate = Object.fromEntries(Object.entries(truths).filter(([d]) => d >= iso(start) && d <= iso(end)));
+      const rows = replayStation({ station: s.station, tz: s.tz, obs, truthByDate, nwsByDate: mos });
+      allRows.push(...rows);
+      results.stations[s.station] = { rows: rows.length, ...aggregate(rows) };
+      console.log(`[backtest] ${s.station}: ${rows.length} days replayed`);
+    } catch (e) {
+      results.errors.push(`${s.station}: ${String(e?.message || e)}`);
+    }
+  }
+  results.overall = aggregate(allRows);
+  results.totalRows = allRows.length;
+  await store.setJSON("backtest/results.json", results);
+  console.log("[backtest] done: " + JSON.stringify({ totalRows: results.totalRows, overall: results.overall, errors: results.errors.length }));
+  return new Response("ok");
+};

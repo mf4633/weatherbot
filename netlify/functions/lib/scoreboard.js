@@ -108,9 +108,43 @@ const summarize = (s) => s.n === 0 ? { n: 0 } : {
   hit68: s.ciN ? s.in68 / s.ciN : null,
 };
 
-// records: [{type:'decision', station, contract_date, asof, claude, bayes?, market?}]
+// Parse a bin label into inclusive integer bounds (shares binHit's conventions).
+export function labelBounds(label) {
+  label = label.replace(/°/g, "").trim();
+  if (label.startsWith("<=")) return { lo: -Infinity, hi: parseInt(label.slice(2), 10) };
+  if (label.startsWith(">=")) return { lo: parseInt(label.slice(2), 10), hi: Infinity };
+  const r = label.match(/^(-?\d+)-(-?\d+)$/);
+  if (r) return { lo: +r[1], hi: +r[2] };
+  const n = parseInt(label, 10);
+  return Number.isFinite(n) ? { lo: n, hi: n } : null;
+}
+
+// Bin probabilities implied by a floored normal (point, sigma, floor) over the same
+// labels the Claude card used — lets the Bayesian (and the blend) be Brier-scored on
+// identical bins instead of point-error only.
+function derivedBinProbs(labels, mu, sigma, floor) {
+  if (!(sigma > 0)) return null;
+  const out = {};
+  for (const lbl of labels) {
+    const b = labelBounds(lbl);
+    if (!b) return null;
+    const a = b.lo === -Infinity ? -Infinity : b.lo - 0.5;
+    const c = b.hi === Infinity ? Infinity : b.hi + 0.5;
+    const pa = a === -Infinity ? 0 : flooredCdf(a, mu, sigma, floor);
+    const pb = c === Infinity ? 1 : flooredCdf(c, mu, sigma, floor);
+    out[lbl] = Math.max(0, pb - pa);
+  }
+  const s = Object.values(out).reduce((x, y) => x + y, 0);
+  if (s > 0) for (const k of Object.keys(out)) out[k] /= s;
+  return out;
+}
+
+// records: [{type:'decision', station, contract_date, asof, claude, bayes?, market?, nws?}]
 //        ∪ [{type:'settlement', station, contract_date, cli_max}]
 // market cards are {label: yes_price_cents}; scored as implied probs (price/100).
+// Engines scored: claude, bayes, market, nws (raw NWS daily-high point), and
+// blend (equal-weight average of the Claude and Bayesian points + bin probs) —
+// the "is the average better than either alone" question, answered continuously.
 export function score(records, { lastObOnly = false } = {}) {
   const truths = {};
   for (const r of records) if (r.type === "settlement") truths[`${r.station}|${r.contract_date}`] = r.cli_max;
@@ -120,15 +154,30 @@ export function score(records, { lastObOnly = false } = {}) {
     for (const r of decisions) { const k = `${r.station}|${r.contract_date}`; if (!latest[k] || r.asof > latest[k].asof) latest[k] = r; }
     decisions = Object.values(latest);
   }
-  const scores = { claude: newScore(), bayes: newScore(), market: newScore() };
+  const scores = { claude: newScore(), bayes: newScore(), market: newScore(), nws: newScore(), blend: newScore() };
   for (const r of decisions) {
     const truth = truths[`${r.station}|${r.contract_date}`];
+    const labels = r.claude?.bin_probs && Object.keys(r.claude.bin_probs).length ? Object.keys(r.claude.bin_probs) : null;
     if (r.claude) addToScore(scores.claude, r.claude, truth);
-    if (r.bayes) addToScore(scores.bayes, r.bayes, truth);
+    let bayesProbs = null;
+    if (r.bayes) {
+      bayesProbs = labels ? derivedBinProbs(labels, +r.bayes.point, +(r.bayes.sigma || 0), r.bayes.floor != null ? +r.bayes.floor : -Infinity) : null;
+      addToScore(scores.bayes, bayesProbs ? { ...r.bayes, bin_probs: bayesProbs } : r.bayes, truth);
+    }
+    if (r.claude && r.bayes && r.claude.point != null && r.bayes.point != null) {
+      const blend = { point: (+r.claude.point + +r.bayes.point) / 2 };
+      if (labels && bayesProbs) {
+        blend.bin_probs = {};
+        for (const k of labels) blend.bin_probs[k] = ((r.claude.bin_probs[k] || 0) + (bayesProbs[k] || 0)) / 2;
+      }
+      addToScore(scores.blend, blend, truth);
+    }
+    if (r.nws != null && Number.isFinite(+r.nws)) addToScore(scores.nws, { point: +r.nws }, truth);
     if (r.market) {
       const probs = Object.fromEntries(Object.entries(r.market).map(([k, v]) => [k, v / 100]));
       addToScore(scores.market, { point: marketPoint(probs), bin_probs: probs }, truth);
     }
   }
-  return { claude: summarize(scores.claude), bayes: summarize(scores.bayes), market: summarize(scores.market) };
+  return { claude: summarize(scores.claude), bayes: summarize(scores.bayes), market: summarize(scores.market),
+           nws: summarize(scores.nws), blend: summarize(scores.blend) };
 }

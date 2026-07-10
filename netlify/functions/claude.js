@@ -15,6 +15,14 @@ import { runPredict, runSettle, STORE, round1 } from "./lib/claude_engine.js";
 // Re-export so test_claude.js (and anything else) can import the CLI parser here.
 export { parseCliProduct } from "./lib/claude_engine.js";
 
+// Historical backtest results written by backtest-background.js (analog vs NWS
+// guidance vs persistence vs blend, scored on IEM CLI truth).
+async function runBacktest() {
+  const store = getStore(STORE);
+  const results = await store.get("backtest/results.json", { type: "json" }).catch(() => null);
+  return { ok: true, mode: "backtest", results };
+}
+
 // Last background-logger outcome (what it predicted/logged/errored) — for diagnosing
 // why the store might be empty without Netlify function-log access.
 async function runStatus() {
@@ -81,6 +89,7 @@ export default async (req) => {
     if (mode === "export") return json(await runExport());
     if (mode === "latest") return json(await runLatest());
     if (mode === "status") return json(await runStatus());
+    if (mode === "backtest") return json(await runBacktest());
     // Heavy: recompute + (optionally) log. Prefer claude_log-background.js for logging.
     return json(await runPredict(new URL(req.url).searchParams.get("log") !== "0"));
   } catch (e) {

@@ -25,7 +25,7 @@
 
   function scoreTable(sb) {
     if (!sb || !sb.all) return "";
-    const rows = ["claude", "bayes", "market"].map((k) => {
+    const rows = ["claude", "bayes", "blend", "nws", "market"].map((k) => {
       const s = sb.all[k] || {};
       if (!s.n) return "";
       const cls = k === "claude" ? "warm" : k === "market" ? "cool" : "";
