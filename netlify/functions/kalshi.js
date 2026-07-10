@@ -572,8 +572,18 @@ export default async () => {
       cities.push({ name: city.name, station: city.station, kalshi: "no market" });
       continue;
     }
+    // HIGH edges price the BLEND — equal-weight average of the Bayesian mean and the
+    // Claude analog high (2026-07-10). Rationale: the two engines' errors are largely
+    // decorrelated (model-guidance-driven vs pure-obs-driven), and forecast combination
+    // beats components when errors decorrelate. Falls back to pure Bayesian when the
+    // analog is unavailable for a city. LOW stays Bayesian-only (no analog for lows).
+    // The scoreboard's five-engine table (claude/bayes/blend/nws/market) verifies this
+    // choice continuously against settled CLI truth.
+    const highMu = city.claudeHigh != null ? (city.mean + city.claudeHigh) / 2 : city.mean;
     const cityRecord = { name: city.name, station: city.station,
-                         model: { highMean: city.mean, highStd: city.std, maxSoFar: city.maxSoFar,
+                         model: { highMean: highMu, highBasis: city.claudeHigh != null ? "blend" : "bayes",
+                                  highMeanBayes: city.mean, claudeHigh: city.claudeHigh ?? null,
+                                  highStd: city.std, maxSoFar: city.maxSoFar,
                                   lowMean: city.lowMean, lowStd: city.lowStd, minSoFar: city.minSoFar,
                                   currentTemp: city.currentTemp },
                          // Per-source input ages — passthrough from weather.js for downstream
@@ -605,12 +615,12 @@ export default async () => {
       // price-level + walk-forward backtests validated (per-city σ was never validated).
       const sigmaEff = Math.min(SIGMA_HIGH_CAP, Math.max(SIGMA_HIGH_FLOOR,
                                   calibration.sigmaHigh ?? SIGMA_HIGH_PRIOR));
-      const r = await processEvent(city, tickers.high, "high", city.mean, sigmaEff,
+      const r = await processEvent(city, tickers.high, "high", highMu, sigmaEff,
                                     city.maxSoFarCli ?? city.maxSoFar, null, calibration.high.nu);
       if (r) {
         cityRecord.highEvent = r.eventTicker;
         cityRecord.highBuckets = r.buckets;
-        cityRecord.impliedHigh = marketImplied(r.buckets);  // market μ/σ vs model μ=city.mean
+        cityRecord.impliedHigh = marketImplied(r.buckets);  // market μ/σ vs model μ=highMu (blend)
         allBets.push(...r.eventBets);
       } else {
         cityRecord.highEvent = "not found";
