@@ -7,7 +7,7 @@ import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2 } from "./lib/metar.js";
-import { predict as claudePredict } from "./lib/claude_analog_v3.js";
+import { predict as claudePredict, thinAnalogGuard } from "./lib/claude_analog_v3.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -334,8 +334,9 @@ function hoursToTrough(tz, now = new Date()) {
 
 async function fetchMetars() {
   const ids = CITIES.map(c => c.station).join(",");
-  // 48h (was 24h) so the inline Claude analog has a prior-day analog to ramp from.
-  const url = `https://aviationweather.gov/api/data/metar?ids=${ids}&hours=48&format=raw`;
+  // 72h (was 48h) so the inline Claude analog gets TWO full prior local days as
+  // analogs — one thin day can no longer collapse the ramp to zero.
+  const url = `https://aviationweather.gov/api/data/metar?ids=${ids}&hours=72&format=raw`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   if (!r.ok) throw new Error(`METAR fetch failed: ${r.status}`);
   return await r.text();
@@ -1511,8 +1512,16 @@ export default async (req) => {
       const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: lines, maxSoFarF: result.maxSoFarCli ?? result.maxSoFar });
       if (snap) {
         const card = claudePredict(snap);
-        result.claudeHigh = Math.round(card.dist.mean() * 10) / 10;
+        // Thin-analog guard: never predict "done warming" hours before peak just
+        // because the analog was too sparse to yield a ramp (KLAX 8:53 AM read
+        // high = current temp). Floors at damped persistence; flagged on the card.
+        const g = thinAnalogGuard(card.dist.mean(), snap, card.components["R_analog(eff)"], result.hrsToPeak);
+        result.claudeHigh = Math.round(g.point * 10) / 10;
+        result.claudeGuarded = g.guarded;
         result.claudePeakLocked = !!card.peak_locked;
+        // Expose the component breakdown so the card can answer "why this number".
+        result.claudeComponents = Object.fromEntries(
+          Object.entries(card.components).map(([k, v]) => [k, Math.round((+v) * 10) / 10]));
       } else {
         result.claudeHigh = null;
       }

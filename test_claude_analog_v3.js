@@ -1,7 +1,7 @@
 // Parity test: lib/claude_analog_v3.js must reproduce claude_analog_v3.py's
 // 2026-07-09 KNYC post-mortem replay (L1 upstream / L2 tilt / L3 lock / L4 guard).
 // No network. Run: node test_claude_analog_v3.js
-import { predict, upstreamAdvection, detectPeakLock, UPSTREAM_STATIONS } from "./netlify/functions/lib/claude_analog_v3.js";
+import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, UPSTREAM_STATIONS } from "./netlify/functions/lib/claude_analog_v3.js";
 import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
@@ -83,6 +83,17 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   ok("TZ missing-tz fail-safe refuses lock", detectPeakLock(null, noTz).locked === false);
 }
 
+
+// --- thin-analog guard (2026-07-10: KLAX "high = current temp at 8:53 AM") ------
+{
+  const snapLAX = { analogs: [{ max_f: 74 }] };
+  const g1 = thinAnalogGuard(68, snapLAX, 0.1, 5.7);
+  ok("guard floors degenerate LAX 68 → 73 (persistence 74 − 1)", g1.guarded === true && approx(g1.point, 73));
+  ok("guard off when ramp healthy (+8.7)", thinAnalogGuard(75.2, snapLAX, 8.7, 5.7).guarded === false);
+  ok("guard off near peak (1h left — flat trace is real)", thinAnalogGuard(68, snapLAX, 0.1, 1.0).guarded === false);
+  ok("guard off when point already ≥ persistence−1", thinAnalogGuard(73.5, snapLAX, 0.1, 5.7).guarded === false);
+  ok("guard off with no analogs", thinAnalogGuard(68, { analogs: [] }, 0.1, 5.7).guarded === false);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
