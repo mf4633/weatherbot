@@ -39,11 +39,17 @@ const STATIONS = [
 ];
 
 const iso = (d) => d.toISOString().slice(0, 10);
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
+// Polite fetch: IEM rate-limits bursts (we saw 429s on the first run). One retry
+// after a 6s pause; callers also space stations out sequentially.
 async function getText(url) {
-  const r = await fetch(url, { headers: { "User-Agent": UA } });
-  if (!r.ok) throw new Error(`${r.status} ${url.split("?")[0]}`);
-  return r.text();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(url, { headers: { "User-Agent": UA } });
+    if (r.ok) return r.text();
+    if (r.status === 429 && attempt === 0) { await sleep(6000); continue; }
+    throw new Error(`${r.status} ${url.split("?")[0]}`);
+  }
 }
 
 async function fetchObs(sid, start, end) {
@@ -55,9 +61,11 @@ async function fetchObs(sid, start, end) {
 }
 
 async function fetchCliTruths(cliStation, year) {
-  const url = `https://mesonet.agron.iastate.edu/api/1/cli.json?station=K${cliStation}&year=${year}`;
+  // IEM's documented CLI archive service is /json/cli.py (the /api/1/cli.json guess
+  // 404'd on the first run). Returns { results: [{ valid, high, low, ... }] }.
+  const url = `https://mesonet.agron.iastate.edu/json/cli.py?station=K${cliStation}&year=${year}`;
   const j = JSON.parse(await getText(url));
-  const rows = j.data || j.results || [];
+  const rows = j.results || j.data || [];
   const byDate = {};
   for (const row of rows) {
     const date = (row.valid || row.date || "").slice(0, 10);
@@ -94,7 +102,9 @@ export default async (req) => {
   const force = new URL(req.url).searchParams.get("force") === "1";
   const store = getStore("claude_scoreboard");
   const existing = await store.get("backtest/results.json", { type: "json" }).catch(() => null);
-  if (existing && !force && Date.now() - new Date(existing.ranAt).getTime() < 6 * 86400e3) {
+  // A 0-row result is a failed run, not a result — never let it block a recompute.
+  if (existing && (existing.totalRows || 0) > 0 && !force &&
+      Date.now() - new Date(existing.ranAt).getTime() < 6 * 86400e3) {
     console.log("[backtest] fresh results exist — skipping (force=1 to recompute)");
     return new Response("ok");
   }
@@ -105,11 +115,13 @@ export default async (req) => {
   const allRows = [];
   for (const s of STATIONS) {
     try {
-      const [obs, truths, mos] = await Promise.all([
-        fetchObs(s.station, start, end),
-        fetchCliTruths(s.cli, end.getUTCFullYear()),
-        fetchMosHighs(s.station, start, end).catch(() => ({})),
-      ]);
+      // Sequential, spaced fetches — parallel bursts got 429'd by IEM on run #1.
+      const obs = await fetchObs(s.station, start, end);
+      await sleep(1200);
+      const truths = await fetchCliTruths(s.cli, end.getUTCFullYear());
+      await sleep(1200);
+      const mos = await fetchMosHighs(s.station, start, end).catch(() => ({}));
+      await sleep(1200);
       // keep truths inside the window
       const truthByDate = Object.fromEntries(Object.entries(truths).filter(([d]) => d >= iso(start) && d <= iso(end)));
       const rows = replayStation({ station: s.station, tz: s.tz, obs, truthByDate, nwsByDate: mos });
