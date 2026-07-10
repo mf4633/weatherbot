@@ -7,7 +7,7 @@ import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2 } from "./lib/metar.js";
-import { predict as claudePredict, thinAnalogGuard } from "./lib/claude_analog_v3.js";
+import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief } from "./lib/claude_analog_v3.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -1519,6 +1519,9 @@ export default async (req) => {
         result.claudeHigh = Math.round(g.point * 10) / 10;
         result.claudeGuarded = g.guarded;
         result.claudePeakLocked = !!card.peak_locked;
+        const gr = gradeAnalogBelief(card, { guarded: g.guarded, hrsToPeak: result.hrsToPeak });
+        result.claudeGrade = gr.grade;
+        result.claudeGradeWhy = gr.why;
         // Expose the component breakdown so the card can answer "why this number".
         result.claudeComponents = Object.fromEntries(
           Object.entries(card.components).map(([k, v]) => [k, Math.round((+v) * 10) / 10]));

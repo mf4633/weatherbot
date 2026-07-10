@@ -244,6 +244,36 @@ export function thinAnalogGuard(point, snap, rampEff, hrsToPeak) {
   return { point: floor, guarded: true };
 }
 
+// --- belief grade (2026-07-10) ---------------------------------------------------
+// How much the analog believes its own number, A (strongest) … F, from the same
+// signals used to argue a call: peak-lock (max physically in → A), persistence
+// fallback (not a belief at all → D cap), distribution tightness, out-of-regime
+// advection, analog match weight, convective coin-flips, and hours to peak.
+// Displayed next to the card's number and logged with each ledger decision so the
+// grade itself gets scored against truth (do A-days verify better than D-days?).
+export function gradeAnalogBelief(card, { guarded = false, hrsToPeak = null } = {}) {
+  if (card.peak_locked) return { grade: "A", why: "peak locked — max is physically in" };
+  if (guarded) return { grade: "D", why: "thin analog — persistence fallback, not a model belief" };
+  let s = 3;                                    // C baseline
+  const why = [];
+  const sigma = card.dist.sigma;
+  if (sigma <= 1.5) { s += 1; why.push(`tight σ ${sigma.toFixed(1)}`); }
+  else if (sigma >= 3.5) { s -= 1; why.push(`wide σ ${sigma.toFixed(1)}`); }
+  const adv = card.advection_score || 0;
+  if (adv > 0.5) { s -= 2; why.push(`out-of-regime (advection ${adv.toFixed(2)})`); }
+  else if (adv > 0.25) { s -= 1; why.push(`advection ${adv.toFixed(2)}`); }
+  const wsum = (card.analog_audit || []).reduce((a, x) => a + (x.weight || 0), 0);
+  if (wsum >= 0.8) { s += 1; why.push("strong analog match"); }
+  else if (wsum < 0.2) { s -= 1; why.push("weak analog match"); }
+  if ((card.dist.pTrunc || 0) > 0.5) { s -= 1; why.push(`convective coin-flip (p ${(card.dist.pTrunc).toFixed(2)})`); }
+  if (hrsToPeak != null) {
+    if (hrsToPeak <= 2) { s += 1; why.push("near peak"); }
+    else if (hrsToPeak >= 7) { s -= 1; why.push(`${Math.round(hrsToPeak)}h to peak`); }
+  }
+  const grade = s >= 5 ? "A" : s >= 4 ? "B" : s >= 3 ? "C" : s >= 2 ? "D" : "F";
+  return { grade, why: why.join(", ") || "baseline evidence" };
+}
+
 // --- local-time helper (2026-07-09 UTC-hours bugfix) ---------------------------
 export function localHourFrac(ts, tz) {
   const parts = new Intl.DateTimeFormat("en-US", {

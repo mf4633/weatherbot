@@ -1,7 +1,7 @@
 // Parity test: lib/claude_analog_v3.js must reproduce claude_analog_v3.py's
 // 2026-07-09 KNYC post-mortem replay (L1 upstream / L2 tilt / L3 lock / L4 guard).
 // No network. Run: node test_claude_analog_v3.js
-import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, UPSTREAM_STATIONS } from "./netlify/functions/lib/claude_analog_v3.js";
+import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS } from "./netlify/functions/lib/claude_analog_v3.js";
 import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
@@ -93,6 +93,24 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   ok("guard off near peak (1h left — flat trace is real)", thinAnalogGuard(68, snapLAX, 0.1, 1.0).guarded === false);
   ok("guard off when point already ≥ persistence−1", thinAnalogGuard(73.5, snapLAX, 0.1, 5.7).guarded === false);
   ok("guard off with no analogs", thinAnalogGuard(68, { analogs: [] }, 0.1, 5.7).guarded === false);
+}
+
+// --- belief grade (A strongest … F) ---------------------------------------------
+{
+  ok("grade: peak-locked day → A", gradeAnalogBelief(lock).grade === "A");
+  ok("grade: persistence fallback → D", gradeAnalogBelief(noup, { guarded: true }).grade === "D");
+  // the 9:51 KNYC morning call (wide σ 4.6, advection 0.70, weak-ish analog) — the
+  // call that verified 4°F hot — must grade near the bottom.
+  const gNoup = gradeAnalogBelief(noup);
+  ok("grade: out-of-regime wide-σ morning call → F", gNoup.grade === "F" && /out-of-regime/.test(gNoup.why));
+  // strong conditions: tight σ, in-regime, strong analog match, near peak → A
+  const strong = { peak_locked: false, dist: { sigma: 1.2, pTrunc: 0 }, advection_score: 0.1,
+                   analog_audit: [{ weight: 0.9 }] };
+  ok("grade: tight-σ in-regime near-peak → A", gradeAnalogBelief(strong, { hrsToPeak: 1.5 }).grade === "A");
+  // convective coin-flip drags a middling day down
+  const conv = { peak_locked: false, dist: { sigma: 2.5, pTrunc: 0.6 }, advection_score: 0,
+                 analog_audit: [{ weight: 0.5 }] };
+  ok("grade: convective coin-flip → D", gradeAnalogBelief(conv).grade === "D");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
