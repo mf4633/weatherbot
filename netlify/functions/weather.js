@@ -6,6 +6,8 @@ import { fetch1MinObs, getTodayMaxMin, coverageCrossCheck } from "./lib/asos1min
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
+import { buildSnapshotV2 } from "./lib/metar.js";
+import { predict as claudePredict } from "./lib/claude_analog_v3.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -332,7 +334,8 @@ function hoursToTrough(tz, now = new Date()) {
 
 async function fetchMetars() {
   const ids = CITIES.map(c => c.station).join(",");
-  const url = `https://aviationweather.gov/api/data/metar?ids=${ids}&hours=24&format=raw`;
+  // 48h (was 24h) so the inline Claude analog has a prior-day analog to ramp from.
+  const url = `https://aviationweather.gov/api/data/metar?ids=${ids}&hours=48&format=raw`;
   const r = await fetch(url, { headers: { "User-Agent": UA } });
   if (!r.ok) throw new Error(`METAR fetch failed: ${r.status}`);
   return await r.text();
@@ -1493,7 +1496,27 @@ export default async (req) => {
     const oneMin = getTodayMaxMin(oneMinByStation, c.station, c.tz);
     const iem = iemByStation?.[c.station] ?? null;
     const dsm = dsmByStation?.[c.station] ?? null;
-    return computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem, dsm, oneMinByStation);
+    const result = computePrediction(c, metars, forecasts[i], ensembles[i], clis[i], regimeBlob, oneMin, iem, dsm, oneMinByStation);
+    // Inline Claude analog high for the dashboard card. Computed right here off the
+    // METARs we already fetched — no separate /api/claude call, no blob store, no cron,
+    // so it can't be blocked by the logging pipeline. This is the core v3 model (analog
+    // ramp + Bowen/trajectory/airmass/sky + regime guard); the full logged decision
+    // (upstream L1 / market L2 / peak-lock) still lives in claude_log-background.js.
+    try {
+      const lines = metarText.split("\n").map(l => l.trim()).filter(l => l.startsWith(c.station + " "));
+      const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: lines, maxSoFarF: result.maxSoFarCli ?? result.maxSoFar });
+      if (snap) {
+        const card = claudePredict(snap);
+        result.claudeHigh = Math.round(card.dist.mean() * 10) / 10;
+        result.claudePeakLocked = !!card.peak_locked;
+      } else {
+        result.claudeHigh = null;
+      }
+    } catch (e) {
+      result.claudeHigh = null;
+      console.log(`[claude-inline] ${c.station}: ${String(e?.message || e)}`);
+    }
+    return result;
   });
 
   CACHE = { ts: now, data: cities };
