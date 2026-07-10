@@ -67,5 +67,25 @@ ok("signed bins: marketPoint -1-0 & 1-2 = 0.5", Math.abs(marketPoint({ "-1-0": 5
   ok("signed bins: Brier 0 when truth -4 hits certain -5--4", score(recs).claude.brier === 0);
 }
 
+// ---- nws + blend engines (2026-07-10: "are we more accurate than NWS?") ----
+{
+  const recs = [
+    { type: "decision", station: "KX", contract_date: "d", asof: "t",
+      claude: { point: 80, sigma: 2, floor: 70, ci68: [78, 82], bin_probs: { "<=79": 0.4, "80-81": 0.4, ">=82": 0.2 } },
+      bayes: { point: 84, sigma: 2, floor: 70, ci68: [82, 86] }, nws: 86 },
+    { type: "settlement", station: "KX", contract_date: "d", cli_max: 82 },
+  ];
+  const s = score(recs);
+  ok("nws scored as point engine (MAE 4)", s.nws.n === 1 && approx(s.nws.mae, 4));
+  ok("blend point = avg(80,84)=82 → MAE 0", s.blend.n === 1 && approx(s.blend.mae, 0));
+  ok("bayes gains a derived Brier (floored normal over claude bins)", s.bayes.brier != null);
+  ok("blend gains a Brier (avg probs)", s.blend.brier != null);
+  // decision without nws/bayes contributes nothing to those engines
+  const s2 = score([{ type: "decision", station: "KX", contract_date: "d", asof: "t",
+    claude: { point: 80, sigma: 2, floor: 70, bin_probs: { "<=81": 0.6, ">=82": 0.4 } } },
+    { type: "settlement", station: "KX", contract_date: "d", cli_max: 82 }]);
+  ok("no bayes/nws → engines stay n=0", s2.nws.n === 0 && s2.blend.n === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

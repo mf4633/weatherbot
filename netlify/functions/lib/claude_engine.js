@@ -126,7 +126,8 @@ export async function runPredict(doLog) {
       // exactly what let the store sit empty without any signal.
       try {
         await store.setJSON(`dec/${c.station}/${date}/${String(localHour(c.tz)).padStart(2, "0")}.json`,
-          { type: "decision", city: c.name, station: c.station, cli: c.cli || null, contract_date: date, asof: now, claude, bayes, market });
+          { type: "decision", city: c.name, station: c.station, cli: c.cli || null, contract_date: date, asof: now,
+            claude, bayes, market, nws: c.forecastHighF ?? c.nwsHighF ?? null });
         logged++;
       } catch (e) {
         errors.push(`${c.station}: ${String(e?.message || e)}`);
