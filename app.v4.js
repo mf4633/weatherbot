@@ -126,10 +126,14 @@ function renderCard(c) {
   // Collapsed by default: summary shows name + a compact HIGH peek (Bayesian ·
   // Claude, Claude in orange); click to expand the full detail. Open state is
   // preserved across the 60s refresh via `openCards` (see toggle listener + render).
+  // Belief grade A (strongest) … F — how much the analog trusts its own number,
+  // from regime fit / analog match / σ / peak proximity. Hover for the reasons.
+  const gradeChip = c.claudeGrade
+    ? ` <span class="grade g-${c.claudeGrade}" title="${(c.claudeGradeWhy || "").replace(/"/g, "'")}">${c.claudeGrade}</span>` : "";
   // Tri-state Claude marker (build v4): orange number if present; muted "n/a" if the
   // field came back null/absent — so a blank slot can't be confused with stale JS.
   const peek = `<span class="high-peek">HIGH <span class="peek-b">${c.mean.toFixed(0)}°</span> · ${
-    cl && cl.point != null ? `<span class="peek-c">${(+cl.point).toFixed(0)}°</span>` : `<span class="muted">n/a</span>`}${
+    cl && cl.point != null ? `<span class="peek-c">${(+cl.point).toFixed(0)}°</span>${gradeChip}` : `<span class="muted">n/a</span>`}${
     cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</span>`;
   return `<details class="card" id="${cardId}"${openCards.has(cardId) ? " open" : ""}>
     <summary class="card-summary">
@@ -161,9 +165,9 @@ function renderCard(c) {
         </div>
         <div class="high-col">
           ${cl && cl.point != null
-            ? `<div class="big claude-num">${(+cl.point).toFixed(1)}°F${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>`
+            ? `<div class="big claude-num">${(+cl.point).toFixed(1)}°F${gradeChip}${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>`
             : `<div class="big claude-num" style="opacity:.5">n/a</div>`}
-          <div class="model-cap">Claude analog</div>
+          <div class="model-cap">Claude analog${c.claudeGrade ? ` · belief ${c.claudeGrade}` : ""}</div>
         </div>
       </div>
       ${c.claudeComponents ? `<div class="ci">claude: T_now ${(+c.claudeComponents.T_now).toFixed(1)}  ${

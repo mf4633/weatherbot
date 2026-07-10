@@ -7,7 +7,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./metar.js";
-import { predict, UPSTREAM_STATIONS } from "./claude_analog_v3.js";
+import { predict, UPSTREAM_STATIONS, gradeAnalogBelief } from "./claude_analog_v3.js";
 
 export const SITE = "https://weatherbot-mf.netlify.app";
 export const AUTH = "Basic " + btoa("internal:hydro");
@@ -113,6 +113,7 @@ export async function runPredict(doLog) {
       bin_probs: card.bin_probs, market_pt: round1(card.market_pt), divergence_note: card.divergence_note,
       // v3 signals (not scored — context for reading the card / sizing)
       advection_score: round1(card.advection_score),
+      grade: gradeAnalogBelief(card).grade,   // logged so grade-vs-error calibration is checkable
       peak_locked: card.peak_locked, lock_note: card.lock_note || null,
       upstream: card.upstream_audit && card.upstream_audit.length
         ? card.upstream_audit.map(a => ({ station: a.station, deficit: a.deficit })) : null,
