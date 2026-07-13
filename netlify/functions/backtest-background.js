@@ -76,25 +76,34 @@ async function fetchCliTruths(cliStation, year) {
 }
 
 // Best-effort NWS-guidance proxy: 12Z GFS MOS max temp (n_x) for the local afternoon.
-async function fetchMosHighs(station, start, end) {
+// dbg (optional array) collects WHY a station parsed to zero rows — the 2026-07-10
+// run returned nws.n=0 across all 20 stations with errors:[] because every parse
+// failure here was silent, leaving nothing to diagnose from the cron logs.
+async function fetchMosHighs(station, start, end, dbg = null) {
   const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py?station=${station}&model=GFS` +
     `&sts=${iso(start)}T00:00Z&ets=${iso(end)}T23:00Z&format=csv`;
   const text = await getText(url);
   const lines = text.split("\n").filter(Boolean);
-  const header = (lines[0] || "").split(",").map(s => s.trim().toLowerCase());
+  const unq = (s) => (s || "").replace(/"/g, "").trim();
+  const header = (lines[0] || "").split(",").map(s => unq(s).toLowerCase());
   const iRun = header.indexOf("runtime"), iFt = header.indexOf("ftime"), iNx = header.indexOf("n_x");
-  if (iRun < 0 || iFt < 0 || iNx < 0) return {};
+  if (iRun < 0 || iFt < 0 || iNx < 0) {
+    if (dbg) dbg.push(`${station}: MOS header unrecognized (${lines.length} lines): ${(lines[0] || "(empty)").slice(0, 150)}`);
+    return {};
+  }
   const byDate = {};
   for (const line of lines.slice(1)) {
     const cols = line.split(",");
-    const run = (cols[iRun] || "").trim(), ft = (cols[iFt] || "").trim(), nx = parseFloat(cols[iNx]);
-    if (!Number.isFinite(nx) || !run.includes(" 12:00")) continue;
+    const run = unq(cols[iRun]), ft = unq(cols[iFt]), nx = parseFloat(unq(cols[iNx]));
+    if (!Number.isFinite(nx) || !/12:00/.test(run)) continue;   // 12Z runs only
     const date = run.slice(0, 10);
-    const t = new Date(ft.replace(" ", "T") + "Z");
+    const t = new Date(ft.replace(" ", "T") + (ft.endsWith("Z") ? "" : "Z"));
     const lo = new Date(`${date}T18:00:00Z`), hi = new Date(`${date}T18:00:00Z`); hi.setUTCHours(hi.getUTCHours() + 16);
     if (isNaN(t) || t < lo || t > hi) continue;         // afternoon/evening window only
     if (byDate[date] == null || nx > byDate[date]) byDate[date] = nx;
   }
+  if (dbg && !Object.keys(byDate).length)
+    dbg.push(`${station}: MOS parsed 0 highs from ${lines.length - 1} data lines; sample: ${(lines[1] || "(none)").slice(0, 150)}`);
   return byDate;
 }
 
@@ -103,8 +112,11 @@ export default async (req) => {
   const store = getStore("claude_scoreboard");
   const existing = await store.get("backtest/results.json", { type: "json" }).catch(() => null);
   // A 0-row result is a failed run, not a result — never let it block a recompute.
+  // A result with NO NWS/MOS comparison (nws.n=0, like the 2026-07-10 run) is
+  // incomplete: keep it for reading but retry in 6h instead of sitting for 6 days.
+  const ttlMs = existing?.overall?.nws?.n > 0 ? 6 * 86400e3 : 6 * 3600e3;
   if (existing && (existing.totalRows || 0) > 0 && !force &&
-      Date.now() - new Date(existing.ranAt).getTime() < 6 * 86400e3) {
+      Date.now() - new Date(existing.ranAt).getTime() < ttlMs) {
     console.log("[backtest] fresh results exist — skipping (force=1 to recompute)");
     return new Response("ok");
   }
@@ -120,7 +132,8 @@ export default async (req) => {
       await sleep(1200);
       const truths = await fetchCliTruths(s.cli, end.getUTCFullYear());
       await sleep(1200);
-      const mos = await fetchMosHighs(s.station, start, end).catch(() => ({}));
+      const mos = await fetchMosHighs(s.station, start, end, results.errors)
+        .catch(e => { results.errors.push(`${s.station}: MOS fetch ${String(e?.message || e)}`); return {}; });
       await sleep(1200);
       // keep truths inside the window
       const truthByDate = Object.fromEntries(Object.entries(truths).filter(([d]) => d >= iso(start) && d <= iso(end)));
