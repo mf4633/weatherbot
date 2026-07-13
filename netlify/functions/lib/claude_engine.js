@@ -166,7 +166,9 @@ export function parseCliProduct(html) {
   }
   const isPartial = /VALID\s+(AS\s+OF|TODAY|THROUGH)/i.test(text);
   const m = text.match(/^\s*MAXIMUM\s+(-?\d+)/im);
-  return { coversDate, isPartial, maxF: m ? parseInt(m[1], 10) : null };
+  const mn = text.match(/^\s*MINIMUM\s+(-?\d+)/im);
+  return { coversDate, isPartial, maxF: m ? parseInt(m[1], 10) : null,
+           minF: mn ? parseInt(mn[1], 10) : null };
 }
 
 async function fetchCliMaxFor(cli, targetDate) {
