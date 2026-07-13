@@ -120,7 +120,11 @@ export async function runPredict(doLog) {
       bin_probs: card.bin_probs, market_pt: round1(card.market_pt), divergence_note: card.divergence_note,
       // v3 signals (not scored — context for reading the card / sizing)
       advection_score: round1(card.advection_score),
-      grade: gradeAnalogBelief(card).grade,   // logged so grade-vs-error calibration is checkable
+      // Grade with the SAME opts the dashboard passes (weather.js) — omitting them
+      // let guarded/far-from-peak morning cards grade B in the ledger: 2026-07-13
+      // calibration on 539 settled decisions found grade B MAE 9.4°F (all 11 were
+      // pre-guard degenerate mornings) vs A 0.8, C 2.7, D 4.6, F 6.3.
+      grade: gradeAnalogBelief(card, { guarded: guard.guarded, hrsToPeak }).grade,
       peak_locked: card.peak_locked, lock_note: card.lock_note || null,
       upstream: card.upstream_audit && card.upstream_audit.length
         ? card.upstream_audit.map(a => ({ station: a.station, deficit: a.deficit })) : null,
