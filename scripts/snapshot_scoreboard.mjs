@@ -63,6 +63,21 @@ async function main() {
   writeFileSync(LATEST, payload);
   writeFileSync(`${DIR}/${todayUTC()}.json`, payload);
 
+  // Also land the market-book dataset (for eval_strategy.mjs / edge research) and the
+  // latest backtest results in git — the dev environment can't reach the site, so git
+  // is the transport. Failures here must not sink the scoreboard snapshot.
+  const auth = process.env.BASIC_AUTH || "";
+  const hdrs = auth ? { authorization: "Basic " + Buffer.from(auth).toString("base64") } : {};
+  mkdirSync("data/exports", { recursive: true });
+  for (const [name, path] of [["market", "/api/market_logger?mode=export"], ["backtest", "/api/claude?mode=backtest"]]) {
+    try {
+      const r = await fetch(`${SITE}${path}`, { headers: hdrs, signal: AbortSignal.timeout(120000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      writeFileSync(`data/exports/${name}.json`, await r.text());
+      console.log(`exports/${name}.json written`);
+    } catch (e) { console.error(`export ${name} skipped: ${e.message}`); }
+  }
+
   const g = exp.gate || {};
   console.log(`snapshot: ${exp.count} records (${exp.decisions} decisions, ${exp.settlements} settlements)`);
   console.log(`gate: n=${g.n}/${g.nMin} passed=${g.passed} — ${g.verdict}`);
