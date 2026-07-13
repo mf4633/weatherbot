@@ -230,3 +230,45 @@ Retro Brier on the 32 locked-with-book cards: 0.575 → 0.548 — modest, becaus
 Kalshi bins absorb most off-by-1s and the catastrophic misses land bins away.
 Detector surgery (the real fix for false locks) deferred until more than 7
 failure samples exist.
+
+---
+
+# 2026-07-13 (afternoon): gate matured; first lock-in eval — INCONCLUSIVE on data quality
+
+Gate at maturity (n=39 ≥ 30, pre-registered): **definitive HOLD in both windows.**
+Last-decision: v3 Brier 0.578 vs market 0.001. First-decision (tradeable): 1.544 vs
+0.685. Doctrine recheck at 84 settlements strengthened the earlier read: betting the
+blend against the market loses −55% to −72% ROI (n=24–26); model-split days are a
+model-health warning (claude MAE 9.77 in the split bucket); grade ladder still
+calibrates (A 0.84 / C 3.40 / D 5.15 / F 6.67; B poisoned pre-fix, self-heals as new
+decisions log post-PR#34).
+
+## Obs-lock-in on real books: VERDICT WITHHELD — three data poisons found
+
+Raw eval: 37 bets, 59.5% realized win rate (15 "certain" locks lost), +1.3% ROI.
+After repairing observations (cummax/cummin of currentTemp): 17 bets, 47% win rate.
+Every loss traced to input rot, not physics:
+
+1. **Stale floors in recorded snapshots** (the PR#37 bug, live in every snapshot
+   recorded before 2026-07-13 ~14:10Z): San Antonio "locked high [79,93]" on a day
+   its METAR read 93.9 and CLI settled 95.
+2. **Coverage gaps**: snapshots landed every 1.5–4h (both schedulers throttled vs
+   the 15-min design), so dawn lows were never observed (Texas "minSoFar 91" =
+   afternoon start) and midday peaks fell between samples.
+3. **One wrong settle**: Houston 07-10 settled 88 vs real CLI 92 —
+   market_logger's fetchCLI lacked the date/partial/anchoring guards (fixed +
+   legacy values re-verify, PR#40). 38/39 other high settles matched the ledger.
+
+The 1–8¢ asks the "wins" were bought at are stale/thin book prints, not fillable
+liquidity — the +ROI is not real either. **Nothing about the strategy is proven or
+disproven yet.** Post-PR#37 snapshots carry trustworthy maxSoFarCli (which tracks
+continuous settlement-grade data BETWEEN snapshots, making sparse cadence
+acceptable on the high side). Decision rule unchanged; re-evaluate on ~48h of
+clean recordings (2026-07-15+), high-side only until low-side coverage spans dawn.
+
+## 45-day backtest: analog < persistence; MOS comparison unblocked
+
+904 station-days: analog MAE 4.7 vs persistence 3.5; analog beats persistence only
+32% of days. NWS/MOS column was empty because IEM's model=GFS (MAV) archive rows
+carry an EMPTY n_x field — fetcher now tries MEX → NBS → GFS (deployed; next run
+within 6h fills the table).

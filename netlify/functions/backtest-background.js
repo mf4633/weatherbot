@@ -79,8 +79,20 @@ async function fetchCliTruths(cliStation, year) {
 // dbg (optional array) collects WHY a station parsed to zero rows — the 2026-07-10
 // run returned nws.n=0 across all 20 stations with errors:[] because every parse
 // failure here was silent, leaving nothing to diagnose from the cron logs.
+// 2026-07-13 diagnostics showed IEM's model=GFS (MAV) rows carry an EMPTY n_x
+// field (3864 lines/station, header ok, 0 usable highs) — the max-temp guidance
+// in IEM's archive lives in the extended MOS (MEX) and the National Blend (NBS).
+// Try those first, keep GFS as a last resort.
 async function fetchMosHighs(station, start, end, dbg = null) {
-  const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py?station=${station}&model=GFS` +
+  for (const model of ["MEX", "NBS", "GFS"]) {
+    const got = await fetchMosHighsModel(station, model, start, end, dbg).catch(() => ({}));
+    if (Object.keys(got).length) return got;
+  }
+  return {};
+}
+
+async function fetchMosHighsModel(station, model, start, end, dbg = null) {
+  const url = `https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py?station=${station}&model=${model}` +
     `&sts=${iso(start)}T00:00Z&ets=${iso(end)}T23:00Z&format=csv`;
   const text = await getText(url);
   const lines = text.split("\n").filter(Boolean);
@@ -88,7 +100,7 @@ async function fetchMosHighs(station, start, end, dbg = null) {
   const header = (lines[0] || "").split(",").map(s => unq(s).toLowerCase());
   const iRun = header.indexOf("runtime"), iFt = header.indexOf("ftime"), iNx = header.indexOf("n_x");
   if (iRun < 0 || iFt < 0 || iNx < 0) {
-    if (dbg) dbg.push(`${station}: MOS header unrecognized (${lines.length} lines): ${(lines[0] || "(empty)").slice(0, 150)}`);
+    if (dbg) dbg.push(`${station}/${model}: MOS header unrecognized (${lines.length} lines): ${(lines[0] || "(empty)").slice(0, 150)}`);
     return {};
   }
   const byDate = {};
@@ -102,8 +114,13 @@ async function fetchMosHighs(station, start, end, dbg = null) {
     if (isNaN(t) || t < lo || t > hi) continue;         // afternoon/evening window only
     if (byDate[date] == null || nx > byDate[date]) byDate[date] = nx;
   }
-  if (dbg && !Object.keys(byDate).length)
-    dbg.push(`${station}: MOS parsed 0 highs from ${lines.length - 1} data lines; sample: ${(lines[1] || "(none)").slice(0, 150)}`);
+  if (dbg && !Object.keys(byDate).length) {
+    // show a row that actually HAS an n_x value if any exists — the GFS/MAV case
+    // was every row's n_x being empty, which a random sample line can't reveal.
+    const withNx = lines.slice(1).find(l => (l.split(",")[iNx] || "").trim() !== "");
+    dbg.push(`${station}/${model}: MOS parsed 0 highs from ${lines.length - 1} lines; ` +
+             (withNx ? `n_x row sample: ${withNx.slice(0, 150)}` : `n_x EMPTY in all rows`));
+  }
   return byDate;
 }
 
