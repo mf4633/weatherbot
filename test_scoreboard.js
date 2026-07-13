@@ -85,6 +85,13 @@ ok("signed bins: marketPoint -1-0 & 1-2 = 0.5", Math.abs(marketPoint({ "-1-0": 5
     claude: { point: 80, sigma: 2, floor: 70, bin_probs: { "<=81": 0.6, ">=82": 0.4 } } },
     { type: "settlement", station: "KX", contract_date: "d", cli_max: 82 }]);
   ok("no bayes/nws → engines stay n=0", s2.nws.n === 0 && s2.blend.n === 0);
+  // blend prefers the thin-analog-guarded point when present: pure 70 (degenerate),
+  // guarded 80 → blend avg(80, 84) = 82 = truth → MAE 0.
+  const s3 = score([{ type: "decision", station: "KX", contract_date: "d", asof: "t",
+    claude: { point: 70, guarded_point: 80, guarded: true, sigma: 2, floor: 68 },
+    bayes: { point: 84, sigma: 2, floor: 68 } },
+    { type: "settlement", station: "KX", contract_date: "d", cli_max: 82 }]);
+  ok("blend uses guarded_point (MAE 0, not 5)", s3.blend.n === 1 && approx(s3.blend.mae, 0));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

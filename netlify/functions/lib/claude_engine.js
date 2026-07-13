@@ -7,7 +7,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./metar.js";
-import { predict, UPSTREAM_STATIONS, gradeAnalogBelief } from "./claude_analog_v3.js";
+import { predict, UPSTREAM_STATIONS, gradeAnalogBelief, thinAnalogGuard } from "./claude_analog_v3.js";
 
 export const SITE = "https://weatherbot-mf.netlify.app";
 export const AUTH = "Basic " + btoa("internal:hydro");
@@ -105,8 +105,15 @@ export async function runPredict(doLog) {
     const d = card.dist;
     const bayes = bayesCard(c);
     // point = mixture mean (convection-aware); floor/ci68/bin_probs scored by scoreboard.js.
+    // Guarded point alongside the pure one. Retro-validation on 2026-07-10/11
+    // ledger: morning blend MAE 4.45 → 2.07 when the blend uses the guarded point
+    // (the zero-ramp degeneracy poisoned pure-model mornings, MAE 9.2). `point`
+    // stays the PURE model for continuity; scoreboard's blend prefers guarded_point.
+    const hrsToPeak = Math.max(0, 16 - localHour(c.tz));
+    const guard = thinAnalogGuard(d.mean(), snap, card.components["R_analog(eff)"], hrsToPeak);
     const claude = {
       point: round1(d.mean()), mu: round1(d.mu), sigma: round1(d.sigma), floor: round1(d.floor),
+      guarded_point: round1(guard.point), guarded: guard.guarded,
       ci68: [round1(d.quantile(0.16)), round1(d.quantile(0.84))],
       p_trunc: round1(d.pTrunc), depth: round1(d.depth),
       components: Object.fromEntries(Object.entries(card.components).map(([k, v]) => [k, round1(v)])),
