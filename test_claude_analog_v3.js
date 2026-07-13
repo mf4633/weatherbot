@@ -57,8 +57,8 @@ const snap1305 = { station: "KNYC", tz: TZ, now: ob(7, 9, 13, 5, 79.4, 72, 170, 
 const lock = predict(snap1305, null, BINS, BOOK, null, snap1251);
 ok("LOCK peak_locked true", lock.peak_locked === true);
 ok("LOCK note 'PEAK LOCKED at 82'", /PEAK LOCKED at 82°F/.test(lock.lock_note));
-ok("LOCK mean 82.44 (floored mean of max+0.35, σ0.55)", approx(lock.dist.mean(), 82.44, 0.02));
-ok("LOCK collapses to <=82 / 83-84 only", approx(lock.bin_probs["<=82"], 0.60747, 0.002) && approx(lock.bin_probs["83-84"], 0.39249, 0.002) && lock.bin_probs["85-86"] < 0.001);
+ok("LOCK mean 82.70 (88% at max+0.35 σ0.55 + 12% lock-failure tail at +2.55)", approx(lock.dist.mean(), 82.70, 0.02));
+ok("LOCK mass mostly <=82 / 83-84 with failure tail above (P(>=85) ~6%)", approx(lock.bin_probs["<=82"], 0.5496, 0.002) && approx(lock.bin_probs["83-84"], 0.3890, 0.002) && approx(1 - lock.bin_probs["<=82"] - lock.bin_probs["83-84"], 0.0614, 0.005));
 
 // ---- helper-level parity ----
 const uh = upstreamAdvection("KNYC", UP, 225, getConfig("KNYC"));

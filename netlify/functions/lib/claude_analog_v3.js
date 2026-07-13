@@ -142,10 +142,14 @@ export function detectPeakLock(snapPrev, snapNow, cfg = null) {
   return { locked: false, note: "falling but no visible cap — could be transient (outflow)" };
 }
 
-// rounding/5-min-record uncertainty only: CLI may read up to ~1°F above the hourly
-// running max (intra-hour spikes), rarely below.
+// rounding/5-min-record uncertainty PLUS a lock-failure tail. First 68 settled
+// locked decisions (2026-07-10/11): truth − floor = {0: 38, +1: 23, +2: 5, +6: 1,
+// +9: 1} — never negative, mean +0.71, and 10% of locks failed by ≥2°F (re-warming
+// after a transient dip, mostly Gulf-coast marine caps). The 12% second component
+// at floor+2.55 (σ 1.79) reproduces that outcome distribution: P(floor) 0.55,
+// P(+1) 0.35, P(≥+2) 0.10, mean +0.70.
 export function lockedDistribution(maxSoFar) {
-  return makeMixture(maxSoFar + 0.35, 0.55, 0, 0, 0, maxSoFar);
+  return makeMixture(maxSoFar + 0.35, 0.55, 0.12, -2.2, 1.7, maxSoFar);
 }
 
 // --- v3 predict ----------------------------------------------------------------
