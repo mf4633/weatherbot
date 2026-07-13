@@ -25,18 +25,23 @@ let CACHE = { ts: 0, byStation: null };
 const CACHE_MS = 5 * 60 * 1000;
 
 // Parse a single station's DSM data line. Returns { dailyMaxF, dailyMinF,
-// maxTimeLocal, minTimeLocal } or null if unparseable.
-function parseDsmLine(line) {
+// maxTimeLocal, minTimeLocal, coversMonthDay } or null if unparseable.
+// coversMonthDay is the MM/DD the summary is FOR — a DSM issued around local
+// midnight summarizes the PRIOR day, and folding yesterday's max into today's
+// running max poisoned the model floor (KSAT 2026-07-11 01h: floor 95 =
+// yesterday's CLI max, actual day settled 86).
+export function parseDsmLine(line) {
   // Anchor on "STID DS " then look for two consecutive groups of digits +
   // 4-digit time, separated by space and "/". Tolerant of leading whitespace
   // around values.
-  const m = line.match(/DS\s+\d{4}\s+\d{2}\/\d{2}\s+(\d{2,3})(\d{4})\/\s+(\d{2,3})(\d{4})\/\//);
+  const m = line.match(/DS\s+\d{4}\s+(\d{2}\/\d{2})\s+(\d{2,3})(\d{4})\/\s+(\d{2,3})(\d{4})\/\//);
   if (!m) return null;
   return {
-    dailyMaxF: parseInt(m[1], 10),
-    maxTimeLocal: m[2],  // "1434" = 14:34 local
-    dailyMinF: parseInt(m[3], 10),
-    minTimeLocal: m[4],
+    coversMonthDay: m[1], // "07/05" — which local day this DSM summarizes
+    dailyMaxF: parseInt(m[2], 10),
+    maxTimeLocal: m[3],  // "1434" = 14:34 local
+    dailyMinF: parseInt(m[4], 10),
+    minTimeLocal: m[5],
   };
 }
 
