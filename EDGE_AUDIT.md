@@ -138,3 +138,76 @@ they are an anecdote-fit, not an out-of-sample fit. **Do not size on the L4 path
 the pre-registered gate (`evaluateGate`) clears and these are re-fit against settled
 advection days.** The scored ledger is pure (tilt off), so the gate measures the model
 unaided regardless.
+
+---
+
+# Edge audit addendum — 2026-07-13: doctrine validation on the first real ledger
+
+First out-of-sample check of the betting doctrine ("best bets are where our models
+agree with each other and disagree with the market") against the settled ledger:
+56 settled city-days (2026-07-10/11, 28 cities), 26 of them with a full Kalshi book.
+Script: scratchpad `doctrine_check.mjs`, data `data/scoreboard-snapshots/latest.json`.
+Small n — treat everything below as directional, not conclusive.
+
+## Q1 — first-decision (tradeable-window) gate: market wins the morning too
+
+| window | n | v3 Brier | market Brier | edge |
+|---|---|---|---|---|
+| last decision (governs) | 26 | 0.371 | **0.001** | −0.370 |
+| first decision (tradeable) | 26 | 1.434 | **0.661** | −0.773 |
+
+The hope was that the last-decision comparison was unfair (book already ~99¢ on the
+winner) and a morning edge might exist. It doesn't: the market's **morning** book
+(Brier 0.661) is still less than half our morning Brier (1.434). The market is
+genuinely better at 9am, not just at 4pm.
+
+## Q2 — divergence buckets contradict the doctrine as stated
+
+Per settled city-day at the FIRST decision, bucketed by |bayes − claude(guarded)|:
+
+| bucket | n | blend MAE | market MAE | bayes MAE | claude MAE |
+|---|---|---|---|---|---|
+| agree ≤1.5°F | 7 | 2.36 | **1.34** | 2.40 | 2.37 |
+| mid 1.5–3°F | 3 | **0.55** | 0.86 | 0.73 | 1.83 |
+| split ≥3°F | 16 | 4.67 | **1.69** | 1.61 | 8.61 |
+
+- Model agreement does NOT mark spots where we beat the market — the market beats
+  the blend in the agree bucket too (1.34 vs 2.36).
+- Model *split* days are dominated by claude's residual morning degeneracy (8.61
+  MAE) — split is a **model-health warning**, not a bimodal-value signal. The
+  "corridor / long-vol" leg of the doctrine has no support here.
+- The mid bucket's blend win is n=3 noise.
+
+## Q3 — PRIME setup simulation loses money
+
+Buy the blend's bin at ask whenever the market's implied point is ≥Δ°F away
+(fees 0.07·P·(1−P)): with the agreement filter only 1 bet qualifies (lost); without
+it, 13–15 bets, ROI −26% to −45%. When our blend disagrees with the market by 2°F+,
+**the market is the one that's right**. Distance-from-market is currently a
+fade-us signal, not an edge signal.
+
+## Q4 — belief grades ARE calibrated (with one bug, now fixed)
+
+| grade | n | MAE °F | median |
+|---|---|---|---|
+| A | 67 | **0.76** | 0.40 |
+| B | 11 | 9.42 ⚠ | 10.00 |
+| C | 123 | 2.66 | 0.60 |
+| D | 187 | 4.63 | 3.00 |
+| F | 151 | 6.30 | 4.60 |
+
+A→C→D→F orders correctly — the grade ladder carries real information. The grade-B
+anomaly was a bug: `claude_engine.js` called `gradeAnalogBelief(card)` without the
+`{guarded, hrsToPeak}` opts (the dashboard passes them), so degenerate pre-dawn
+cards escaped the guard cap and the far-from-peak penalty. All 11 B-graded settled
+decisions were exactly those cards. Fixed 2026-07-13 (grade opts now match the
+dashboard); ledger grades from here on are honest.
+
+## Standing verdict
+
+No tradeable edge demonstrated in any window or bucket. The honest live candidates
+remain (a) the obs-lock-in strategy — evaluate with `eval_strategy.mjs` once
+`data/exports/market.json` lands, and (b) trusting grade-A cards specifically:
+A-grade MAE 0.76°F is sharper than the market's morning book implies — the next
+analysis should Brier-score A-grade city-days alone against the morning market.
+Trading stays OFF; the pre-registered gate still governs.
