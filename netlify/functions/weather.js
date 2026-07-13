@@ -831,7 +831,16 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // for settlement; fold into maxSoFar/minSoFar so the prediction model and the
   // trader's bucket-margin checks use it directly. KNYC 2026-05-07 incident: DSM
   // showed max=64°F at 14:34 EDT while every METAR/SPECI/Synoptic/IEM ob said 63°F.
-  if (dsm) {
+  //
+  // 2026-07-13 guard: the DSM issued around local midnight summarizes YESTERDAY —
+  // folding it in gave KSAT a floor of 95 (yesterday's CLI max) at 1am on a day
+  // that settled 86. Only fold a DSM whose own MM/DD stamp is today (local).
+  const todayMonthDay = new Intl.DateTimeFormat("en-US",
+    { timeZone: city.tz, month: "2-digit", day: "2-digit" }).format(now).replace(/\//, "/");
+  const dsmCoversToday = dsm?.coversMonthDay == null || dsm.coversMonthDay === todayMonthDay;
+  if (dsm && !dsmCoversToday)
+    console.log(`[dsm-stale] ${city.station}: DSM covers ${dsm.coversMonthDay}, today is ${todayMonthDay} — ignored`);
+  if (dsm && dsmCoversToday) {
     if (dsm.dailyMaxF != null && (maxSoFar == null || dsm.dailyMaxF > maxSoFar)) {
       const dsmGain = maxSoFar != null ? dsm.dailyMaxF - maxSoFar : 0;
       console.log(`[dsm-fold] ${city.station}: maxSoFar ${maxSoFar?.toFixed(1) ?? "null"} -> ${dsm.dailyMaxF} (+${dsmGain.toFixed(1)}F at ${dsm.maxTimeLocal} local, issued ${dsm.issuedAt})`);
@@ -1166,11 +1175,20 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // probability mass instead of being zeroed out. The bigger win is the 1-min-spike
   // case: raw 88.2°F + 5-min weighted 87.4°F → old floor 88, new floor 87, matches
   // CLI's actual settlement basis.
+  // 2026-07-13 guards: (a) a stale DSM (covers yesterday) must not float the floor;
+  // (b) a stale 1-min feed (KSAT 07-10: max5MinSoFar 80 from a morning-only window
+  // while the live METAR read 93.9) must not DRAG the floor below settlement-grade
+  // reality — the legitimate 5-min-vs-raw smoothing discount is ~1°F, so clamp the
+  // CLI floor basis to ≥ maxSoFar − 1.
   const cliMaxCandidates = [
     oneMin?.max5MinSoFar,
-    dsm?.dailyMaxF
+    dsmCoversToday ? dsm?.dailyMaxF : null
   ].filter(v => v != null);
-  const cliMaxObs = cliMaxCandidates.length ? Math.max(...cliMaxCandidates) : maxSoFar;
+  let cliMaxObs = cliMaxCandidates.length ? Math.max(...cliMaxCandidates) : maxSoFar;
+  if (cliMaxObs != null && maxSoFar != null && cliMaxObs < maxSoFar - 1) {
+    console.log(`[cli-floor-clamp] ${city.station}: 5-min/DSM basis ${cliMaxObs.toFixed(1)} < maxSoFar-1 (${(maxSoFar - 1).toFixed(1)}) — stale feed, clamping`);
+    cliMaxObs = maxSoFar - 1;
+  }
   const maxSoFarCli = cliMaxObs != null ? Math.floor(cliMaxObs) : null;
   const lowerFloor = maxSoFarCli != null ? maxSoFarCli : -Infinity;
   const ci68 = [Math.max(lowerFloor, mean - std), mean + std];
@@ -1309,9 +1327,16 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // (which can dip below CLI's actual min on a sub-minute 1-min ASOS undershoot).
   const cliMinCandidates = [
     oneMin?.min5MinSoFar,
-    dsm?.dailyMinF
+    dsmCoversToday ? dsm?.dailyMinF : null
   ].filter(v => v != null);
-  const cliMinObs = cliMinCandidates.length ? Math.min(...cliMinCandidates) : minSoFar;
+  let cliMinObs = cliMinCandidates.length ? Math.min(...cliMinCandidates) : minSoFar;
+  // Mirror of the max-side stale-feed clamp: don't let a partial 1-min window
+  // float the LOW ceiling above settlement-grade reality by more than the ~1°F
+  // smoothing discount.
+  if (cliMinObs != null && minSoFar != null && cliMinObs > minSoFar + 1) {
+    console.log(`[cli-ceil-clamp] ${city.station}: 5-min/DSM basis ${cliMinObs.toFixed(1)} > minSoFar+1 (${(minSoFar + 1).toFixed(1)}) — stale feed, clamping`);
+    cliMinObs = minSoFar + 1;
+  }
   const minSoFarCli = cliMinObs != null ? Math.ceil(cliMinObs) : null;
   const upperFloor = minSoFarCli != null ? minSoFarCli : Infinity;
   const lowCi68 = lowMean != null
