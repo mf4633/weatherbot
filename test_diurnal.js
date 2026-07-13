@@ -7,21 +7,28 @@ const ok = (name, cond) => { if (cond) { pass++; console.log(`  ✓ ${name}`); }
                              else { fail++; console.log(`  ✗ ${name}`); } };
 
 // --- bounds ---
-const b5pm = extremumBounds("high", { maxSoFar: 94, localHour: 17 }); // rise(17)=2, margin 1
-ok("5pm high bounds ≈ [93, 97]", b5pm && b5pm.floor === 93 && b5pm.ceil === 97);
+// 2026-07-13: RISE loosened from ledger violations — 5pm (rise 4) no longer locks
+// tightly; 7pm (rise(19)=1, margin 1) is where the high is genuinely in.
+const b7pm = extremumBounds("high", { maxSoFar: 94, localHour: 19 }); // rise(19)=1, margin 1
+ok("7pm high bounds ≈ [93, 96]", b7pm && b7pm.floor === 93 && b7pm.ceil === 96);
+const b5pm = extremumBounds("high", { maxSoFar: 94, localHour: 17 }); // rise(17)=4, margin 1
+ok("5pm ceil widened to 99 (real +3–4 late rises observed)", b5pm && b5pm.ceil === 99);
 const b9am = extremumBounds("high", { maxSoFar: 70, localHour: 9 });  // rise(9)=40
 ok("9am high bounds wide (ceil ≥ 110)", b9am && b9am.ceil >= 110);
-ok("no obs → null bounds", extremumBounds("high", { maxSoFar: null, localHour: 17 }) === null);
+ok("no obs → null bounds", extremumBounds("high", { maxSoFar: null, localHour: 19 }) === null);
 
-// --- lock-in decisions (5pm, high already 94, final in [93,97]) ---
+// --- lock-in decisions (7pm, high already 94, final in [93,96]) ---
 // "≥93" YES (loInt=93): high is already 94 → certain WIN
-ok("≥93 YES = certain win", lockinDecision("YES", 93, null, b5pm).certain === "win");
+ok("≥93 YES = certain win", lockinDecision("YES", 93, null, b7pm).certain === "win");
 // "≥98" YES: unreachable → YES loss; NO = certain WIN
-ok("≥98 NO = certain win (can't reach 98)", lockinDecision("NO", 98, null, b5pm).certain === "win");
-ok("≥98 YES = certain loss", lockinDecision("YES", 98, null, b5pm).certain === "loss");
-// exact bucket [94,94]: could settle 94..97 → uncertain, must ABSTAIN
-ok("B[94,94] YES = abstain (null)", lockinDecision("YES", 94, 94, b5pm).certain === null);
-ok("B[94,94] NO = abstain (null)", lockinDecision("NO", 94, 94, b5pm).certain === null);
+ok("≥98 NO = certain win (can't reach 98)", lockinDecision("NO", 98, null, b7pm).certain === "win");
+ok("≥98 YES = certain loss", lockinDecision("YES", 98, null, b7pm).certain === "loss");
+// exact bucket [94,94]: could settle 94..96 → uncertain, must ABSTAIN
+ok("B[94,94] YES = abstain (null)", lockinDecision("YES", 94, 94, b7pm).certain === null);
+ok("B[94,94] NO = abstain (null)", lockinDecision("NO", 94, 94, b7pm).certain === null);
+// 5pm "≥98 NO" is NO LONGER certain (ceil 99 ≥ 98) — the old table called this
+// locked; KCMH-class late rises say otherwise. Must abstain now.
+ok("5pm ≥98 NO = abstain under loosened table", lockinDecision("NO", 98, null, b5pm).certain === null);
 
 // --- low, 2pm, minSoFar 52, final in [43,53] ---
 const bLow = extremumBounds("low", { minSoFar: 52, localHour: 14 }); // fall(14)=8
@@ -34,7 +41,7 @@ ok("9am high: every decision abstains", ["YES","NO"].every(s =>
   lockinDecision(s, 80, null, b9am).certain === null));
 
 // --- strategy: realistic fill + edge gate ---
-const snap = { variable: "high", obs: { maxSoFar: 94, localHour: 17 }, buckets: [
+const snap = { variable: "high", obs: { maxSoFar: 94, localHour: 19 }, buckets: [
   { ticker: "KXHIGHX-T92", loInt: 93, hiInt: null, yes_ask: 0.85, no_ask: 0.14 }, // ≥93 locked YES, underpriced
   { ticker: "KXHIGHX-T97", loInt: 98, hiInt: null, yes_ask: 0.06, no_ask: 0.93 }, // ≥98 locked NO, underpriced
   { ticker: "KXHIGHX-T90", loInt: 91, hiInt: null, yes_ask: 0.99, no_ask: 0.02 }, // ≥91 locked YES but fairly priced (0.99)
