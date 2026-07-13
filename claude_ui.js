@@ -63,7 +63,9 @@
       .sort((a, z) => z[1] - a[1]).slice(0, 3)
       .map(([lbl, p]) => `${lbl} ${(100 * p).toFixed(0)}%`).join("  ");
     // Convective-truncation mixture: show the dry-ramp mode + P(convection caps it).
-    const conv = cl.p_trunc > 0
+    // On a locked card the mixture's second component is the lock-FAILURE tail
+    // (re-warming), not convection — don't caption it as a convective cap.
+    const conv = cl.p_trunc > 0 && !cl.peak_locked
       ? `<div class="ci">mode ${f1(cl.mu)}°F  •  P(convective cap) ${(100 * cl.p_trunc).toFixed(0)}%  •  depth −${f1(cl.depth)}°F</div>`
       : "";
     // Market divergence: model mean vs Kalshi book-implied point.

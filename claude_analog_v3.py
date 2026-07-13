@@ -250,10 +250,13 @@ def detect_peak_lock(
 
 
 def locked_distribution(max_so_far: float) -> MixtureDist:
-    """Rounding/5-min-record uncertainty only: the CLI may read up to ~1°F
-    above the hourly running max (intra-hour spikes), rarely below."""
-    return MixtureDist(mu=max_so_far + 0.35, sigma=0.55, p_trunc=0.0,
-                       depth=0.0, depth_sigma=0.0, floor=max_so_far)
+    """Rounding/5-min-record uncertainty PLUS a lock-failure tail. First 68
+    settled locked decisions (2026-07-10/11): truth - floor was {0: 38, +1: 23,
+    +2: 5, +6: 1, +9: 1} - never negative, mean +0.71, 10% of locks failed by
+    >=2F (re-warming after a transient dip). The 12% component at floor+2.55
+    (sigma 1.79) reproduces that: P(floor) 0.55, P(+1) 0.35, P(>=+2) 0.10."""
+    return MixtureDist(mu=max_so_far + 0.35, sigma=0.55, p_trunc=0.12,
+                       depth=-2.2, depth_sigma=1.7, floor=max_so_far)
 
 
 # ---------------------------------------------------------------------------

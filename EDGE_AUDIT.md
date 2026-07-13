@@ -211,3 +211,22 @@ remain (a) the obs-lock-in strategy — evaluate with `eval_strategy.mjs` once
 A-grade MAE 0.76°F is sharper than the market's morning book implies — the next
 analysis should Brier-score A-grade city-days alone against the morning market.
 Trading stays OFF; the pre-registered gate still governs.
+
+### Follow-up (same day): the A-grade "bright spot" dissolves; lock tail re-priced
+
+Brier-scoring each grade against the *contemporaneous* market book: A-grade cards
+are all peak-locked (32/32 with a book) and the market there is Brier **0.019** —
+the book already knows the max is in. Claude's own locked-card Brier was 0.575.
+No pocket of edge anywhere on the grade ladder (market beats every grade's cards).
+
+The locked-card Brier leak decomposed on 68 settled locked decisions:
+truth − floor = {0: 38, +1: 23, +2: 5, +6: 1, +9: 1} — never negative, mean +0.71,
+and **10% of locks failed by ≥2°F** (re-warming after a transient dip; KHOU ×3,
+mostly Gulf marine caps, plus one 14h-local overcast that cleared, KCMH +9).
+Fix shipped: `lockedDistribution` is now an 88/12 mixture with a failure tail at
+floor+2.55 (σ 1.79), reproducing the empirical outcome distribution exactly
+(P(floor) 0.55/0.56, P(+1) 0.35/0.34, P(≥+2) 0.103/0.103, mean +0.70/+0.71).
+Retro Brier on the 32 locked-with-book cards: 0.575 → 0.548 — modest, because 2°F
+Kalshi bins absorb most off-by-1s and the catastrophic misses land bins away.
+Detector surgery (the real fix for false locks) deferred until more than 7
+failure samples exist.
