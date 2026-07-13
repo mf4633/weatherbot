@@ -2,7 +2,7 @@
   "ok": true,
   "mode": "backtest",
   "results": {
-    "ranAt": "2026-07-13T14:43:30.900Z",
+    "ranAt": "2026-07-13T21:00:47.449Z",
     "params": {
       "days": 45,
       "decisionHourUTC": 15,
@@ -136,38 +136,6 @@
         "analog_vs_persistence": {
           "n": 45,
           "winPct": 42
-        }
-      },
-      "KBOS": {
-        "rows": 45,
-        "analog": {
-          "n": 45,
-          "mae": 4,
-          "rmse": 5.7
-        },
-        "persistence": {
-          "n": 45,
-          "mae": 5.8,
-          "rmse": 7.4
-        },
-        "nws": {
-          "n": 0
-        },
-        "blend": {
-          "n": 0
-        },
-        "analog_vs_nws": {
-          "n": 0
-        },
-        "blend_vs_nws": {
-          "n": 0
-        },
-        "blend_vs_analog": {
-          "n": 0
-        },
-        "analog_vs_persistence": {
-          "n": 45,
-          "winPct": 62
         }
       },
       "KSEA": {
@@ -653,14 +621,14 @@
     },
     "overall": {
       "analog": {
-        "n": 904,
-        "mae": 4.7,
+        "n": 859,
+        "mae": 4.8,
         "rmse": 5.7
       },
       "persistence": {
-        "n": 900,
-        "mae": 3.5,
-        "rmse": 4.9
+        "n": 855,
+        "mae": 3.3,
+        "rmse": 4.8
       },
       "nws": {
         "n": 0
@@ -678,32 +646,70 @@
         "n": 0
       },
       "analog_vs_persistence": {
-        "n": 900,
-        "winPct": 32
+        "n": 855,
+        "winPct": 30
       }
     },
     "errors": [
-      "KNYC: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,73,60,BK,310,4,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KNYC,,",
-      "KLAX: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,59,50,BK,250,11,,,,,0.0,,,,6,7,N ,0.0,0.0,R ,KLAX,,",
-      "KMIA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,82,75,BK,130,8,,,,,6.0,,,,6,7,N ,0.0,0.0,R ,KMIA,,",
-      "KMDW: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,62,48,FW,20,6,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KMDW,,",
-      "KBOS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,54,OV,360,9,,,,,0.0,,,,,7,7,N ,0.0,0.0,R ,KBOS,,",
-      "KSEA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,64,51,SC,20,6,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KSEA,,",
-      "KDEN: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,55,50,OV,170,9,,,,,4.0,,,,,7,7,N ,0.0,4.0,R ,KDEN,,",
-      "KPHL: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,62,OV,290,7,,,,,7.0,,,,,7,7,N ,0.0,0.0,R ,KPHL,,",
-      "KAUS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,67,65,SC,140,1,,,,,11.0,,,,8,7,N ,0.0,0.0,R ,KAUS,,",
-      "KHOU: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,69,BK,30,1,,,,,9.0,,,,,7,7,N ,0.0,0.0,R ,KHOU,,",
-      "KSFO: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,54,47,OV,280,7,,,,,0.0,,,,7,7,N ,0.0,0.0,R ,KSFO,,",
-      "KDFW: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,66,BK,210,5,,,,,28.0,,,,,8,7,N ,0.0,0.0,R ,KDFW,,",
-      "KMSY: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,78,74,OV,140,4,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KMSY,,",
-      "KLAS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,71,25,SC,210,10,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KLAS,,",
-      "KOKC: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,68,65,OV,30,5,,,,,39.0,,,,,4,7,N ,0.0,0.0,R ,KOKC,,",
-      "KDCA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,74,64,OV,290,6,,,,,11.0,,,,,7,7,N ,0.0,0.0,R ,KDCA,,",
-      "KPHX: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,81,32,FW,250,8,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KPHX,,",
-      "KSAT: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,65,SC,130,4,,,,,9.0,,,,,8,7,N ,0.0,0.0,R ,KSAT,,",
-      "KMSP: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,53,CL,70,10,,,,,8.0,,,,,8,7,N ,0.0,0.0,R ,KMSP,,",
-      "KATL: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,74,70,OV,240,4,,,,,17.0,,,,,8,7,N ,0.0,0.0,R ,KATL,,"
+      "KNYC/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,78,69,45,PC,11,7,0.0,9,4,,R ,0.0,KNYC,,,,0.0,0.0,9/4",
+      "KNYC/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KNYC/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,78.0,69,45,FW,330,9,0.0,7.0,0.0,0.0,2.0,5.0,,,,8,7,N ,0.0,0.0,R ,KNYC,2/5,",
+      "KLAX/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,68,65,51,PC,12,24,0.0,0,3,R ,4.0,KLAX,,,,0.0,0.0,0/3",
+      "KLAX/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KLAX/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,68.0,65,51,BK,250,12,0.0,24.0,0.0,0.0,0.0,0.0,,,7,7,N ,0.0,0.0,R ,KLAX,0/0,",
+      "KMIA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,87,80,74,OV,10,77,4.0,56,72,R ,0.0,KMIA,,,,0.0,0.0,56/72",
+      "KMIA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KMIA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,87.0,80,74,OV,170,3,61.0,77.0,4.0,4.0,69.0,0.0,,,6,7,N ,0.0,0.0,R ,KMIA,69/0,",
+      "KMDW/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,74,67,43,CL,14,1,0.0,20,0,,R ,0.0,KMDW,,,,0.0,0.0,20/0",
+      "KMDW/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KMDW/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,74.0,67,43,FW,50,11,0.0,1.0,0.0,0.0,0.0,0.0,,,,8,7,N ,0.0,0.0,R ,KMDW,0/0,",
+      "KBOS: 503 https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py",
+      "KSEA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,77,75,55,PC,9,4,0.0,3,2,,R ,0.0,KSEA,,,,0.0,0.0,3/2",
+      "KSEA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KSEA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,77.0,75,55,SC,270,9,4.0,4.0,0.0,0.0,2.0,0.0,,,,8,7,N ,0.0,0.0,R ,KSEA,2/0,",
+      "KDEN/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,76,71,49,OV,15,30,0.0,28,45,,R ,3.0,KDEN,,,,0.0,7.0,28/45",
+      "KDEN/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KDEN/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,76.0,71,49,BK,100,15,19.0,30.0,0.0,0.0,45.0,14.0,,,,7,7,N ,0.0,0.0,R ,KDEN,45/14,",
+      "KPHL/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,78,70,45,PC,17,1,0.0,10,1,,R ,0.0,KPHL,,,,0.0,0.0,10/1",
+      "KPHL/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KPHL/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,78.0,70,45,FW,350,15,0.0,1.0,0.0,0.0,1.0,8.0,,,,8,7,N ,0.0,0.0,R ,KPHL,1/8,",
+      "KAUS/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,92,89,68,PC,5,1,0.0,25,11,R ,0.0,KAUS,,,,0.0,0.0,25/11",
+      "KAUS/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KAUS/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,92.0,89,68,FW,120,5,0.0,1.0,0.0,0.0,11.0,8.0,,,8,7,N ,2.0,0.0,R ,KAUS,11/8,",
+      "KHOU/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,88,85,68,PC,7,4,0.0,31,9,,R ,0.0,KHOU,,,,0.0,0.0,31/9",
+      "KHOU/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KHOU/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,88.0,85,68,SC,140,7,1.0,4.0,0.0,0.0,9.0,8.0,,,,8,7,N ,2.0,0.0,R ,KHOU,9/8,",
+      "KSFO/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,70,67,49,OV,7,87,2.0,0,10,R ,4.0,KSFO,,,,0.0,0.0,0/10",
+      "KSFO/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KSFO/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,70.0,67,49,BK,200,7,29.0,87.0,0.0,2.0,0.0,0.0,,,8,7,N ,0.0,2.0,R ,KSFO,0/0,",
+      "KDFW/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,88,85,67,PC,7,18,0.0,22,19,,R ,0.0,KDFW,,,,0.0,0.0,22/19",
+      "KDFW/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KDFW/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,88.0,85,67,BK,350,6,8.0,18.0,0.0,0.0,19.0,14.0,,,,8,7,N ,0.0,0.0,R ,KDFW,19/14,",
+      "KMSY/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,87,81,74,OV,9,62,2.0,40,33,,R ,0.0,KMSY,,,,0.0,0.0,40/33",
+      "KMSY/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KMSY/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,87.0,81,74,BK,180,7,25.0,62.0,0.0,2.0,27.0,3.0,,,,8,7,N ,2.0,0.0,R ,KMSY,27/3,",
+      "KLAS/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,81,79,22,PC,12,0,0.0,2,0,,R ,0.0,KLAS,,,,2.0,3.0,2/0",
+      "KLAS/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KLAS/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,81.0,79,22,BK,200,12,0.0,0.0,0.0,0.0,0.0,3.0,,,,8,7,N ,0.0,0.0,R ,KLAS,0/3,",
+      "KOKC/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,80,78,64,OV,9,36,1.0,24,18,,R ,0.0,KOKC,,,,0.0,0.0,24/18",
+      "KOKC/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KOKC/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,80.0,78,64,BK,350,7,14.0,36.0,0.0,1.0,18.0,6.0,,,,8,7,N ,1.0,0.0,R ,KOKC,18/6,",
+      "KDCA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,83,74,46,PC,17,1,0.0,17,0,,R ,0.0,KDCA,,,,0.0,0.0,17/0",
+      "KDCA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KDCA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,83.0,74,46,CL,10,16,0.0,1.0,0.0,0.0,0.0,17.0,,,,8,7,N ,0.0,0.0,R ,KDCA,0/17,",
+      "KPHX/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,92,90,33,CL,12,0,0.0,1,0,,R ,2.0,KPHX,,,,0.0,0.0,1/0",
+      "KPHX/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KPHX/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,92.0,90,33,FW,250,12,0.0,0.0,0.0,0.0,0.0,3.0,,,,8,7,N ,0.0,0.0,R ,KPHX,0/3,",
+      "KSAT/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,90,87,64,PC,7,1,0.0,25,5,,R ,0.0,KSAT,,,,0.0,0.0,25/5",
+      "KSAT/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KSAT/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,90.0,87,64,FW,120,7,0.0,1.0,0.0,0.0,5.0,8.0,,,,8,7,N ,2.0,0.0,R ,KSAT,5/8,",
+      "KMSP/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,83,81,58,CL,9,1,0.0,16,0,,R ,0.0,KMSP,,,,0.0,0.0,16/0",
+      "KMSP/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KMSP/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,83.0,81,58,SC,130,8,0.0,1.0,0.0,0.0,0.0,2.0,,,,8,7,N ,0.0,0.0,R ,KMSP,0/2,",
+      "KATL/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,MEX,86,79,68,OV,5,63,2.0,29,58,,R ,0.0,KATL,,,,0.0,0.0,29/58",
+      "KATL/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
+      "KATL/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-28 00:00:00,2026-05-29 00:00:00,GFS,86.0,79,68,OV,220,4,53.0,63.0,1.0,2.0,58.0,11.0,,,,7,7,N ,0.0,0.0,R ,KATL,58/11,"
     ],
-    "totalRows": 904
+    "totalRows": 859
   }
 }
