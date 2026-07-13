@@ -165,7 +165,10 @@ export function score(records, { lastObOnly = false } = {}) {
       addToScore(scores.bayes, bayesProbs ? { ...r.bayes, bin_probs: bayesProbs } : r.bayes, truth);
     }
     if (r.claude && r.bayes && r.claude.point != null && r.bayes.point != null) {
-      const blend = { point: (+r.claude.point + +r.bayes.point) / 2 };
+      // Blend uses the thin-analog-guarded point when logged — the zero-ramp
+      // degeneracy made pure-model mornings unusable (retro: blend MAE 4.45→2.07).
+      const cPoint = r.claude.guarded_point != null ? +r.claude.guarded_point : +r.claude.point;
+      const blend = { point: (cPoint + +r.bayes.point) / 2 };
       if (labels && bayesProbs) {
         blend.bin_probs = {};
         for (const k of labels) blend.bin_probs[k] = ((r.claude.bin_probs[k] || 0) + (bayesProbs[k] || 0)) / 2;
