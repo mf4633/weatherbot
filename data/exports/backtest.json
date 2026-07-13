@@ -1,0 +1,709 @@
+{
+  "ok": true,
+  "mode": "backtest",
+  "results": {
+    "ranAt": "2026-07-13T14:43:30.900Z",
+    "params": {
+      "days": 45,
+      "decisionHourUTC": 15,
+      "start": "2026-05-28",
+      "end": "2026-07-12"
+    },
+    "stations": {
+      "KNYC": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 3.2,
+          "rmse": 3.9
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 4.7,
+          "rmse": 6
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 67
+        }
+      },
+      "KLAX": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 3.5,
+          "rmse": 3.8
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 1.1,
+          "rmse": 1.5
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 4
+        }
+      },
+      "KMIA": {
+        "rows": 46,
+        "analog": {
+          "n": 46,
+          "mae": 3.5,
+          "rmse": 3.9
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 1.6,
+          "rmse": 2.5
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 11
+        }
+      },
+      "KMDW": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.5,
+          "rmse": 5.2
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 4.4,
+          "rmse": 5.7
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 42
+        }
+      },
+      "KBOS": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4,
+          "rmse": 5.7
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 5.8,
+          "rmse": 7.4
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 62
+        }
+      },
+      "KSEA": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 5.5,
+          "rmse": 6.8
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 5.6,
+          "rmse": 7.5
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 42
+        }
+      },
+      "KDEN": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 6.8,
+          "rmse": 8.2
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 5,
+          "rmse": 6.3
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 42
+        }
+      },
+      "KPHL": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.1,
+          "rmse": 5.1
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 4.8,
+          "rmse": 6.1
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 49
+        }
+      },
+      "KAUS": {
+        "rows": 46,
+        "analog": {
+          "n": 46,
+          "mae": 6.8,
+          "rmse": 7.5
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 2.3,
+          "rmse": 3.2
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 9
+        }
+      },
+      "KHOU": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.8,
+          "rmse": 5.2
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 1.8,
+          "rmse": 2.7
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 20
+        }
+      },
+      "KSFO": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.1,
+          "rmse": 5
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 3.4,
+          "rmse": 4.9
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 33
+        }
+      },
+      "KDFW": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 5.4,
+          "rmse": 6.2
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 2.6,
+          "rmse": 3.5
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 11
+        }
+      },
+      "KMSY": {
+        "rows": 46,
+        "analog": {
+          "n": 46,
+          "mae": 3.8,
+          "rmse": 4.4
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 1.9,
+          "rmse": 2.5
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 22
+        }
+      },
+      "KLAS": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 3.3,
+          "rmse": 4.1
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 3,
+          "rmse": 4.1
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 38
+        }
+      },
+      "KOKC": {
+        "rows": 46,
+        "analog": {
+          "n": 46,
+          "mae": 6.8,
+          "rmse": 7.9
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 4.2,
+          "rmse": 5.7
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 29
+        }
+      },
+      "KDCA": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.8,
+          "rmse": 5.5
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 5.4,
+          "rmse": 7
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 42
+        }
+      },
+      "KPHX": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.1,
+          "rmse": 4.9
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 2.4,
+          "rmse": 3.1
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 31
+        }
+      },
+      "KSAT": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 6.3,
+          "rmse": 6.8
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 2.3,
+          "rmse": 3.4
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 11
+        }
+      },
+      "KMSP": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.8,
+          "rmse": 5.9
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 4,
+          "rmse": 5.4
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 40
+        }
+      },
+      "KATL": {
+        "rows": 45,
+        "analog": {
+          "n": 45,
+          "mae": 4.2,
+          "rmse": 5
+        },
+        "persistence": {
+          "n": 45,
+          "mae": 3.1,
+          "rmse": 4.3
+        },
+        "nws": {
+          "n": 0
+        },
+        "blend": {
+          "n": 0
+        },
+        "analog_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_nws": {
+          "n": 0
+        },
+        "blend_vs_analog": {
+          "n": 0
+        },
+        "analog_vs_persistence": {
+          "n": 45,
+          "winPct": 24
+        }
+      }
+    },
+    "overall": {
+      "analog": {
+        "n": 904,
+        "mae": 4.7,
+        "rmse": 5.7
+      },
+      "persistence": {
+        "n": 900,
+        "mae": 3.5,
+        "rmse": 4.9
+      },
+      "nws": {
+        "n": 0
+      },
+      "blend": {
+        "n": 0
+      },
+      "analog_vs_nws": {
+        "n": 0
+      },
+      "blend_vs_nws": {
+        "n": 0
+      },
+      "blend_vs_analog": {
+        "n": 0
+      },
+      "analog_vs_persistence": {
+        "n": 900,
+        "winPct": 32
+      }
+    },
+    "errors": [
+      "KNYC: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,73,60,BK,310,4,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KNYC,,",
+      "KLAX: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,59,50,BK,250,11,,,,,0.0,,,,6,7,N ,0.0,0.0,R ,KLAX,,",
+      "KMIA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,82,75,BK,130,8,,,,,6.0,,,,6,7,N ,0.0,0.0,R ,KMIA,,",
+      "KMDW: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,62,48,FW,20,6,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KMDW,,",
+      "KBOS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,54,OV,360,9,,,,,0.0,,,,,7,7,N ,0.0,0.0,R ,KBOS,,",
+      "KSEA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,64,51,SC,20,6,,,,,0.0,,,,,8,7,N ,0.0,0.0,R ,KSEA,,",
+      "KDEN: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,55,50,OV,170,9,,,,,4.0,,,,,7,7,N ,0.0,4.0,R ,KDEN,,",
+      "KPHL: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,62,OV,290,7,,,,,7.0,,,,,7,7,N ,0.0,0.0,R ,KPHL,,",
+      "KAUS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,67,65,SC,140,1,,,,,11.0,,,,8,7,N ,0.0,0.0,R ,KAUS,,",
+      "KHOU: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,69,BK,30,1,,,,,9.0,,,,,7,7,N ,0.0,0.0,R ,KHOU,,",
+      "KSFO: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,54,47,OV,280,7,,,,,0.0,,,,7,7,N ,0.0,0.0,R ,KSFO,,",
+      "KDFW: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,66,BK,210,5,,,,,28.0,,,,,8,7,N ,0.0,0.0,R ,KDFW,,",
+      "KMSY: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,78,74,OV,140,4,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KMSY,,",
+      "KLAS: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,71,25,SC,210,10,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KLAS,,",
+      "KOKC: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,68,65,OV,30,5,,,,,39.0,,,,,4,7,N ,0.0,0.0,R ,KOKC,,",
+      "KDCA: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,74,64,OV,290,6,,,,,11.0,,,,,7,7,N ,0.0,0.0,R ,KDCA,,",
+      "KPHX: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,81,32,FW,250,8,,,,,5.0,,,,,8,7,N ,0.0,0.0,R ,KPHX,,",
+      "KSAT: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,70,65,SC,130,4,,,,,9.0,,,,,8,7,N ,0.0,0.0,R ,KSAT,,",
+      "KMSP: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,72,53,CL,70,10,,,,,8.0,,,,,8,7,N ,0.0,0.0,R ,KMSP,,",
+      "KATL: MOS parsed 0 highs from 3864 data lines; sample: 2026-05-28 00:00:00,2026-05-28 06:00:00,GFS,,74,70,OV,240,4,,,,,17.0,,,,,8,7,N ,0.0,0.0,R ,KATL,,"
+    ],
+    "totalRows": 904
+  }
+}
