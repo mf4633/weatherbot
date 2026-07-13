@@ -37,7 +37,7 @@ async function runScoreboard() {
   const records = (await Promise.all((blobs || []).map(b => store.get(b.key, { type: "json" }).catch(() => null)))).filter(Boolean);
   return { ok: true, mode: "scoreboard", n_records: records.length,
            all: score(records), lastObOnly: score(records, { lastObOnly: true }),
-           gate: evaluateGate(records) };
+           gate: evaluateGate(records), gateFirst: evaluateGate(records, { pick: "first" }) };
 }
 
 // Fast read for the dashboard cards: newest logged decision per station, straight
@@ -76,7 +76,7 @@ async function runExport() {
   const settlements = records.filter(r => r.type === "settlement").length;
   return { ok: true, mode: "export", exported_at: new Date().toISOString(),
            count: records.length, decisions, settlements,
-           gate: evaluateGate(records), records };
+           gate: evaluateGate(records), gateFirst: evaluateGate(records, { pick: "first" }), records };
 }
 
 const json = (o, s = 200) => new Response(JSON.stringify(o, null, 2), { status: s, headers: { "content-type": "application/json", "cache-control": "no-store" } });

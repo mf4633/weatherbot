@@ -55,6 +55,22 @@ const gBad = evaluateGate([].concat(...Array.from({ length: 30 }, (_, i) => gday
 ok("gate HOLD when claude no better than market", gBad.passed === false && gBad.n === 30);
 ok("gate excludes days with no market book", evaluateGate([].concat(...Array.from({ length: 40 }, (_, i) => gday(i, 83, bins2, null)))).n === 0);
 
+// pick:"first" scores the FIRST logged decision per city-day (tradeable window),
+// pick:"last" (default) the last. Two decisions on one city-day: the early one is
+// sharp+right, the late one flat — so the two windows disagree on claude's Brier.
+{
+  const sharp = { "<=82": 0.0, "83-84": 1.0, "85-86": 0.0 };
+  const recs = [
+    { type: "decision", station: "KF", contract_date: "d", asof: "2026-07-01T09:00", claude: { bin_probs: sharp }, market: mktSoft },
+    { type: "decision", station: "KF", contract_date: "d", asof: "2026-07-01T15:00", claude: { bin_probs: flat }, market: mktSoft },
+    { type: "settlement", station: "KF", contract_date: "d", cli_max: 83 },
+  ];
+  const gF = evaluateGate(recs, { pick: "first" }), gL = evaluateGate(recs);
+  ok("pick:first uses earliest decision (Brier 0)", gF.n === 1 && approx(gF.claudeBrier, 0));
+  ok("default pick:last uses latest decision (flat Brier)", gL.n === 1 && gL.claudeBrier > 0.5);
+  ok("gateFirst tagged with pick + window verdict", gF.pick === "first" && /first-decision/.test(gF.verdict));
+}
+
 // ---- bugsweep FIX 2: signed winter bins (regression) ----
 ok("signed bins: marketPoint -5--4 = -4.5", Math.abs(marketPoint({ "-5--4": 100 }) + 4.5) < 1e-9);
 ok("signed bins: marketPoint -1-0 & 1-2 = 0.5", Math.abs(marketPoint({ "-1-0": 50, "1-2": 50 }) - 0.5) < 1e-9);
