@@ -2,7 +2,7 @@
   "ok": true,
   "mode": "backtest",
   "results": {
-    "ranAt": "2026-07-14T12:17:42.192Z",
+    "ranAt": "2026-07-14T20:16:00.653Z",
     "params": {
       "days": 45,
       "decisionHourUTC": 15,
@@ -23,19 +23,26 @@
           "rmse": 6
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.3,
+          "rmse": 2.9
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 1.7,
+          "rmse": 2.2
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 36
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 62
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 73
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -55,19 +62,26 @@
           "rmse": 1.5
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.1,
+          "rmse": 1.3
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.1,
+          "rmse": 2.3
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 11
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 91
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -87,19 +101,26 @@
           "rmse": 2.3
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.4,
+          "rmse": 1.7
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.2,
+          "rmse": 2.6
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 11
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 89
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -119,19 +140,26 @@
           "rmse": 5.5
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.5,
+          "rmse": 3.3
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 1.7,
+          "rmse": 2.1
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 29
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 56
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 89
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -151,19 +179,26 @@
           "rmse": 7.5
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.3,
+          "rmse": 2.8
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.7,
+          "rmse": 3.5
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 38
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 47
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 71
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -183,19 +218,26 @@
           "rmse": 6.8
         },
         "nws": {
-          "n": 0
+          "n": 46,
+          "mae": 1.9,
+          "rmse": 2.4
         },
         "blend": {
-          "n": 0
+          "n": 46,
+          "mae": 2.7,
+          "rmse": 3.4
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 46,
+          "winPct": 26
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 46,
+          "winPct": 48
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 46,
+          "winPct": 87
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -215,19 +257,26 @@
           "rmse": 6.2
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.9,
+          "rmse": 3.4
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.7,
+          "rmse": 3.6
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 56
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 89
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -247,19 +296,26 @@
           "rmse": 6.1
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.8,
+          "rmse": 2.4
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.7,
+          "rmse": 3.2
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 33
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 78
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -279,19 +335,26 @@
           "rmse": 3.2
         },
         "nws": {
-          "n": 0
+          "n": 46,
+          "mae": 1.8,
+          "rmse": 2.1
         },
         "blend": {
-          "n": 0
+          "n": 46,
+          "mae": 2.8,
+          "rmse": 3.3
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 46,
+          "winPct": 7
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 46,
+          "winPct": 35
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 46,
+          "winPct": 98
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -311,19 +374,26 @@
           "rmse": 3
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.8,
+          "rmse": 2.2
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.5,
+          "rmse": 2.8
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 13
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 36
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 91
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -343,19 +413,26 @@
           "rmse": 4.9
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.2,
+          "rmse": 3
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.4,
+          "rmse": 3.2
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 33
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 49
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 82
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -375,19 +452,26 @@
           "rmse": 3.6
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2,
+          "rmse": 2.6
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.9,
+          "rmse": 3.5
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 16
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 33
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 96
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -407,19 +491,26 @@
           "rmse": 2.6
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.1,
+          "rmse": 2.5
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 1.5,
+          "rmse": 1.9
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 18
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 64
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 91
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -439,19 +530,26 @@
           "rmse": 4.1
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1,
+          "rmse": 1.5
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 1.9,
+          "rmse": 2.4
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 18
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 27
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 87
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -471,19 +569,26 @@
           "rmse": 5.6
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.4,
+          "rmse": 3.2
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 4,
+          "rmse": 4.6
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 16
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 87
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -503,19 +608,26 @@
           "rmse": 7
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.7,
+          "rmse": 2.3
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.6,
+          "rmse": 3.2
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 13
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 29
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 91
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -535,19 +647,26 @@
           "rmse": 3
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 0.9,
+          "rmse": 1.7
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2,
+          "rmse": 2.5
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 13
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 22
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 93
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -567,19 +686,26 @@
           "rmse": 3.4
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.6,
+          "rmse": 3.3
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.4,
+          "rmse": 2.9
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 13
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 51
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 96
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -599,19 +725,26 @@
           "rmse": 5.3
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 2.2,
+          "rmse": 2.9
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.4,
+          "rmse": 3.1
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 27
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 47
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 87
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -631,19 +764,26 @@
           "rmse": 4.5
         },
         "nws": {
-          "n": 0
+          "n": 45,
+          "mae": 1.7,
+          "rmse": 2.4
         },
         "blend": {
-          "n": 0
+          "n": 45,
+          "mae": 2.8,
+          "rmse": 3.2
         },
         "analog_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 18
         },
         "blend_vs_nws": {
-          "n": 0
+          "n": 45,
+          "winPct": 27
         },
         "blend_vs_analog": {
-          "n": 0
+          "n": 45,
+          "winPct": 82
         },
         "analog_vs_persistence": {
           "n": 45,
@@ -663,87 +803,33 @@
         "rmse": 4.9
       },
       "nws": {
-        "n": 0
+        "n": 902,
+        "mae": 1.9,
+        "rmse": 2.6
       },
       "blend": {
-        "n": 0
+        "n": 902,
+        "mae": 2.4,
+        "rmse": 3
       },
       "analog_vs_nws": {
-        "n": 0
+        "n": 902,
+        "winPct": 20
       },
       "blend_vs_nws": {
-        "n": 0
+        "n": 902,
+        "winPct": 39
       },
       "blend_vs_analog": {
-        "n": 0
+        "n": 902,
+        "winPct": 87
       },
       "analog_vs_persistence": {
         "n": 900,
         "winPct": 31
       }
     },
-    "errors": [
-      "KNYC/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,78,72,45,PC,6,5,0.0,16,7,,R ,0.0,KNYC,,,,0.0,0.0,16/7",
-      "KNYC/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KNYC/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,78.0,72,45,OV,280,5,0.0,5.0,0.0,0.0,7.0,19.0,,,,7,7,N ,0.0,0.0,R ,KNYC,7/19,",
-      "KLAX/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,68,65,53,PC,15,16,0.0,0,0,R ,0.0,KLAX,,,,0.0,0.0,0/0",
-      "KLAX/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KLAX/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,68.0,65,53,SC,260,15,0.0,16.0,0.0,0.0,0.0,0.0,,,8,7,N ,0.0,0.0,R ,KLAX,0/0,",
-      "KMIA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,91,82,73,OV,8,63,2.0,55,68,R ,0.0,KMIA,,,,0.0,0.0,55/68",
-      "KMIA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KMIA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,91.0,82,73,OV,230,4,60.0,63.0,3.0,2.0,68.0,0.0,,,7,7,N ,0.0,0.0,R ,KMIA,68/0,",
-      "KMDW/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,83,78,49,CL,9,1,0.0,19,0,,R ,0.0,KMDW,,,,0.0,0.0,19/0",
-      "KMDW/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KMDW/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,83.0,78,49,FW,90,9,0.0,1.0,0.0,0.0,0.0,0.0,,,,8,7,N ,0.0,0.0,R ,KMDW,0/0,",
-      "KBOS/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,69,62,48,OV,11,33,0.0,12,5,,R ,0.0,KBOS,,,,0.0,0.0,12/5",
-      "KBOS/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KBOS/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,69.0,62,48,OV,210,8,29.0,33.0,0.0,0.0,5.0,19.0,,,,7,7,N ,0.0,0.0,R ,KBOS,5/19,",
-      "KSEA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,61,58,45,OV,14,55,1.0,3,5,,R ,0.0,KSEA,,,,0.0,0.0,3/5",
-      "KSEA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KSEA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,61.0,58,45,SC,280,10,25.0,55.0,0.0,1.0,0.0,0.0,,,,8,7,N ,0.0,0.0,R ,KSEA,0/0,",
-      "KDEN/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,81,77,42,PC,18,16,0.0,30,38,,R ,1.0,KDEN,,,,0.0,6.0,30/38",
-      "KDEN/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KDEN/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,81.0,77,42,BK,180,18,14.0,16.0,0.0,0.0,38.0,10.0,,,,8,7,N ,0.0,0.0,R ,KDEN,38/10,",
-      "KPHL/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,80,75,47,PC,15,0,0.0,12,7,,R ,0.0,KPHL,,,,0.0,0.0,12/7",
-      "KPHL/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KPHL/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,80.0,75,47,SC,240,10,0.0,0.0,0.0,0.0,6.0,7.0,,,,8,7,N ,0.0,0.0,R ,KPHL,6/7,",
-      "KAUS/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,93,90,69,PC,8,1,0.0,20,8,R ,0.0,KAUS,,,,0.0,0.0,20/8",
-      "KAUS/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KAUS/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,93.0,90,69,SC,150,7,1.0,1.0,0.0,0.0,8.0,0.0,,,8,7,N ,2.0,0.0,R ,KAUS,8/0,",
-      "KHOU/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,92,86,71,PC,9,6,0.0,31,3,,R ,0.0,KHOU,,,,0.0,0.0,31/3",
-      "KHOU/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KHOU/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,92.0,86,71,SC,170,9,0.0,6.0,0.0,0.0,3.0,4.0,,,,8,7,N ,2.0,0.0,R ,KHOU,3/4,",
-      "KSFO/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,67,64,50,OV,15,16,0.0,0,0,R ,0.0,KSFO,,,,0.0,0.0,0/0",
-      "KSFO/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KSFO/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,67.0,64,50,BK,260,15,0.0,16.0,0.0,0.0,0.0,0.0,,,7,7,N ,0.0,0.0,R ,KSFO,0/0,",
-      "KDFW/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,93,90,68,PC,9,7,0.0,20,16,,R ,0.0,KDFW,,,,0.0,0.0,20/16",
-      "KDFW/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KDFW/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,93.0,90,68,BK,180,9,1.0,7.0,0.0,0.0,16.0,18.0,,,,8,7,N ,2.0,0.0,R ,KDFW,16/18,",
-      "KMSY/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,91,85,72,PC,8,16,0.0,41,22,,R ,0.0,KMSY,,,,0.0,0.0,41/22",
-      "KMSY/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KMSY/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,91.0,85,72,BK,210,7,14.0,16.0,0.0,0.0,22.0,2.0,,,,8,7,N ,2.0,0.0,R ,KMSY,22/2,",
-      "KLAS/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,80,78,34,PC,9,1,0.0,2,0,,R ,0.0,KLAS,,,,2.0,3.0,2/0",
-      "KLAS/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KLAS/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,80.0,78,34,SC,250,9,1.0,1.0,0.0,0.0,0.0,0.0,,,,8,7,N ,0.0,0.0,R ,KLAS,0/0,",
-      "KOKC/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,88,84,66,PC,10,14,0.0,28,29,,R ,0.0,KOKC,,,,0.0,0.0,28/29",
-      "KOKC/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KOKC/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,88.0,84,66,BK,170,10,4.0,14.0,0.0,0.0,19.0,34.0,,,,8,7,N ,2.0,0.0,R ,KOKC,19/34,",
-      "KDCA/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,82,76,51,CL,8,0,0.0,14,3,,R ,0.0,KDCA,,,,0.0,0.0,14/3",
-      "KDCA/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KDCA/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,82.0,76,51,FW,230,8,0.0,0.0,0.0,0.0,3.0,11.0,,,,8,7,N ,0.0,0.0,R ,KDCA,3/11,",
-      "KPHX/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,89,87,34,CL,12,0,0.0,1,0,,R ,2.0,KPHX,,,,0.0,0.0,1/0",
-      "KPHX/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KPHX/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,89.0,87,34,CL,270,12,0.0,0.0,0.0,0.0,0.0,0.0,,,,8,7,N ,0.0,0.0,R ,KPHX,0/0,",
-      "KSAT/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,92,89,67,PC,10,1,0.0,22,5,,R ,0.0,KSAT,,,,0.0,0.0,22/5",
-      "KSAT/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KSAT/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,92.0,89,67,SC,140,10,1.0,1.0,0.0,0.0,5.0,0.0,,,,8,7,N ,2.0,0.0,R ,KSAT,5/0,",
-      "KMSP/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,89,85,55,PC,8,1,0.0,19,0,,R ,0.0,KMSP,,,,0.0,0.0,19/0",
-      "KMSP/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KMSP/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,89.0,85,55,SC,140,8,0.0,1.0,0.0,0.0,0.0,3.0,,,,8,7,N ,0.0,0.0,R ,KMSP,0/3,",
-      "KATL/MEX: MOS parsed 0 highs from 1380 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,MEX,82,73,67,OV,8,76,4.0,31,52,,R ,0.0,KATL,,,,0.0,0.0,31/52",
-      "KATL/NBS: MOS header unrecognized (4233 lines): runtime,ftime,model,tmp,dpt,wdr,wsp,p06,p12,q06,q12,t06_1,t06_2,t12_1,t12_2,cig,vis,sky,gst,t03,pzr,psn,ppl,pra,s06,slv,i06,lcb,station,dur,mht,twd,tw",
-      "KATL/GFS: MOS parsed 0 highs from 3864 lines; n_x row sample: 2026-05-29 00:00:00,2026-05-30 00:00:00,GFS,82.0,73,67,OV,170,4,66.0,76.0,3.0,4.0,52.0,0.0,,,,6,7,N ,0.0,0.0,R ,KATL,52/0,"
-    ],
+    "errors": [],
     "totalRows": 902
   }
 }
