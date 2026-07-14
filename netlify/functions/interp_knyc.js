@@ -28,6 +28,7 @@ const CITIES = {
   NYC: { official: "KNYC", tz: "America/New_York", pinned: PWS_STATIONS },
   DEN: { official: "KDEN", tz: "America/Denver", geocode: "39.8561,-104.6737" },
   LAX: { official: "KLAX", tz: "America/Los_Angeles", geocode: "33.9382,-118.3866" },
+  PHX: { official: "KPHX", tz: "America/Phoenix", geocode: "33.4278,-112.0038" },
 };
 
 async function getJson(url) {

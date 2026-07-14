@@ -1394,6 +1394,7 @@ const INTERP_CITIES = [
   { key: "NYC", cardId: "card-new-york" },
   { key: "DEN", cardId: "card-denver" },
   { key: "LAX", cardId: "card-los-angeles" },
+  { key: "PHX", cardId: "card-phoenix" },
 ];
 const interpLast = {};
 function applyInterp() {
