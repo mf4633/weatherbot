@@ -130,5 +130,17 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   ok("selectStations falls back when all filtered", selectStations([mk("A", 0.3, 9), mk("B", 0.2, 9)], 6).length === 2);
 }
 
+// --- ramp floor: never below a fresh anchor while the trace is rising ---
+{
+  const nowMs = Date.now();
+  const freshAnchor = { tempF: 82, tsMs: nowMs - 10 * 60e3 };
+  const low = blendNowEstimate(80.7, freshAnchor, 81.5, nowMs, true);
+  ok("ramp floor: rising + fresh anchor → est >= anchor", low >= 82);
+  const noFloor = blendNowEstimate(80.7, freshAnchor, 81.5, nowMs, false);
+  ok("ramp floor: not rising → original blend (below anchor ok)", noFloor < 82);
+  const staleAnchor = { tempF: 82, tsMs: nowMs - 40 * 60e3 };
+  ok("ramp floor: stale anchor (>20min) not floored", blendNowEstimate(80.7, staleAnchor, 81.5, nowMs, true) < 82);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

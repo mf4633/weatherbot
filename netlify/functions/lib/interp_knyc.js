@@ -156,8 +156,15 @@ export function selectStations(statsList, max = 6) {
   return weighted.sort((a, b) => b.weight - a.weight).slice(0, max).map(s => s.station);
 }
 
-// Final three-way blend (upload's documented weights).
-export function blendNowEstimate(pwsWeighted, officialLatest, delta, nowMs) {
+// Final three-way blend (upload's documented weights), plus a ramp floor the
+// upload doesn't have (2026-07-14, first live day): the compressed regression
+// slopes (~0.6, learned from afternoon PWS overheating) trail the trace during
+// fast synchronized warm-ups, and the anchor IS the past — so mid-ramp the blend
+// read 81 against a minutes-old official 82. When the official trace is RISING
+// and the anchor is fresh (<=20 min), temperature is near-monotone: never
+// estimate below the anchor. rising: pass true when the last two official obs
+// climbed (caller computes); null/false leaves the blend untouched.
+export function blendNowEstimate(pwsWeighted, officialLatest, delta, nowMs, rising = false) {
   const parts = [pwsWeighted], weights = [1.0];
   if (delta != null) { parts.push(delta); weights.push(0.85); }
   if (officialLatest != null) {
@@ -165,5 +172,8 @@ export function blendNowEstimate(pwsWeighted, officialLatest, delta, nowMs) {
     if (ageH <= 2) { parts.push(officialLatest.tempF); weights.push(ageH <= 1 ? 1.2 : 0.7); }
   }
   const ws = weights.reduce((a, b) => a + b, 0);
-  return parts.reduce((a, p, i) => a + p * (weights[i] / ws), 0);
+  let est = parts.reduce((a, p, i) => a + p * (weights[i] / ws), 0);
+  if (rising && officialLatest != null && (nowMs - officialLatest.tsMs) <= 20 * 60e3)
+    est = Math.max(est, officialLatest.tempF);
+  return est;
 }
