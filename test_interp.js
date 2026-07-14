@@ -113,5 +113,22 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   ok("regression estimate leans to the better station", Math.abs(r.estimate - estA) < Math.abs(r.estimate - estB));
 }
 
+// --- selectStations: quality gate + top-N by combination weight ---
+{
+  const { selectStations } = await import("./netlify/functions/lib/interp_knyc.js");
+  const mk = (station, r, rmse) => ({ station, r, rmse, slope: 1, intercept: 0, n: 10 });
+  const stats = [
+    mk("GOOD1", 0.98, 0.6), mk("GOOD2", 0.95, 1.0), mk("OK", 0.85, 2.0),
+    mk("NOISY", 0.9, 5.0),      // rmse > 4 → filtered
+    mk("UNCORR", 0.4, 1.0),     // r² < 0.5 → filtered
+    mk("G3", 0.92, 1.2), mk("G4", 0.9, 1.5), mk("G5", 0.88, 1.8), mk("G6", 0.87, 1.9),
+  ];
+  const sel = selectStations(stats, 6);
+  ok("selectStations keeps 6", sel.length === 6);
+  ok("selectStations drops noisy + uncorrelated", !sel.includes("NOISY") && !sel.includes("UNCORR"));
+  ok("selectStations best station first", sel[0] === "GOOD1");
+  ok("selectStations falls back when all filtered", selectStations([mk("A", 0.3, 9), mk("B", 0.2, 9)], 6).length === 2);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -1390,36 +1390,49 @@ document.addEventListener("click", (e) => {
 // Live interpolated KNYC temp (6 Manhattan PWS -> Central Park ASOS regression;
 // /api/interp_knyc, ported from the user's interpolatornyc pipeline). Injected
 // into the New York card so the between-METAR trace is visible where the bets are.
-let interpKnycLast = null;
-function applyInterpKnyc() {
-  const j = interpKnycLast;
-  if (!j || !j.ok) return;
-  const card = document.getElementById("card-new-york");
-  const body = card && card.querySelector(".card-body");
-  if (!body) return;
-  let row = document.getElementById("interp-knyc-row");
-  if (!row) {
-    row = document.createElement("div");
-    row.id = "interp-knyc-row";
-    row.className = "row";
-    body.insertBefore(row, body.querySelector(".pred") || null);
+const INTERP_CITIES = [
+  { key: "NYC", cardId: "card-new-york" },
+  { key: "DEN", cardId: "card-denver" },
+  { key: "LAX", cardId: "card-los-angeles" },
+];
+const interpLast = {};
+function applyInterp() {
+  for (const { key, cardId } of INTERP_CITIES) {
+    const j = interpLast[key];
+    if (!j || !j.ok) continue;
+    const card = document.getElementById(cardId);
+    const body = card && card.querySelector(".card-body");
+    if (!body) continue;
+    let row = document.getElementById(`interp-row-${key}`);
+    if (!row) {
+      row = document.createElement("div");
+      row.id = `interp-row-${key}`;
+      row.className = "row";
+      body.insertBefore(row, body.querySelector(".pred") || null);
+    }
+    const c = j.components || {};
+    const half = (((j.spread?.[1] ?? 0) - (j.spread?.[0] ?? 0)) / 2).toFixed(1);
+    row.title = `PWS regression ${c.pws_regression}° · delta nowcast ${c.delta_nowcast}° · ` +
+      `official anchor ${c.official_anchor}° (${c.anchor_age_min}m old) · station spread [${(j.spread || []).join(", ")}]°` +
+      (j.discovered ? " · stations auto-discovered + weighted by r²/rmse²" : "");
+    row.innerHTML = `<span>live interp <span class="tag">PWS×${(j.stations || []).length}${j.discovered ? " auto" : ""}</span></span>` +
+      `<span><b>${j.estimate}°F</b> <span class="muted small">±${half}° · ${new Date(j.asof).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></span>`;
   }
-  const c = j.components || {};
-  const half = (((j.spread?.[1] ?? 0) - (j.spread?.[0] ?? 0)) / 2).toFixed(1);
-  row.title = `PWS regression ${c.pws_regression}° · delta nowcast ${c.delta_nowcast}° · ` +
-    `official anchor ${c.official_anchor}° (${c.anchor_age_min}m old) · station spread [${(j.spread || []).join(", ")}]°`;
-  row.innerHTML = `<span>live interp <span class="tag">PWS×${(j.stations || []).length}</span></span>` +
-    `<span><b>${j.estimate}°F</b> <span class="muted small">±${half}° · ${new Date(j.asof).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></span>`;
 }
 async function loadInterpKnyc() {
-  try {
-    const j = await fetch("/api/interp_knyc").then(r => r.json());
-    if (j && j.ok) { interpKnycLast = j; applyInterpKnyc(); }
-  } catch { /* card line is best-effort */ }
+  // Sequential, not parallel: DEN/LAX discovery runs ~30 upstream fetches on a
+  // cold cache and the PWS API rate-limits bursts.
+  for (const { key } of INTERP_CITIES) {
+    try {
+      const j = await fetch(`/api/interp_knyc?city=${key}`).then(r => r.json());
+      if (j && j.ok) { interpLast[key] = j; }
+    } catch { /* card line is best-effort */ }
+  }
+  applyInterp();
 }
 // load() re-renders the whole grid every 60s, which drops injected rows — re-apply
 // from the cached payload shortly after each render instead of refetching.
-setInterval(applyInterpKnyc, 10_000);
+setInterval(applyInterp, 10_000);
 
 load();
 loadKalshi();

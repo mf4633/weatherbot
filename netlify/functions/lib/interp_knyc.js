@@ -146,6 +146,16 @@ export function deltaNowcast(officialTempF, anchors, currents, statsList) {
   return officialTempF + acc / wsum;
 }
 
+// Candidate selection for cities WITHOUT a hand-validated station list (DEN, LAX):
+// evaluate every discovered PWS with stationStats, keep those that actually track
+// the official sensor (r^2 >= 0.5, rmse <= 4F), rank by the same combination
+// weight used everywhere, and keep the top `max`. The weighting IS the selection.
+export function selectStations(statsList, max = 6) {
+  const good = statsList.filter(s => s && s.r * s.r >= 0.5 && s.rmse <= 4);
+  const weighted = stationWeights(good.length ? good : statsList.filter(Boolean));
+  return weighted.sort((a, b) => b.weight - a.weight).slice(0, max).map(s => s.station);
+}
+
 // Final three-way blend (upload's documented weights).
 export function blendNowEstimate(pwsWeighted, officialLatest, delta, nowMs) {
   const parts = [pwsWeighted], weights = [1.0];
