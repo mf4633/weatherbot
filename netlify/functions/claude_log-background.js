@@ -13,7 +13,7 @@ export default async () => {
   const status = { ranAt: new Date().toISOString() };
   try {
     const pred = await runPredict(true);
-    status.predict = { ok: pred.ok, cities: pred.count, logged: pred.logged, errors: (pred.errors || []).slice(0, 5) };
+    status.predict = { ok: pred.ok, cities: pred.count, logged: pred.logged, errors: (pred.errors || []).slice(0, 5), analog_starved: pred.analog_starved || [] };
   } catch (e) {
     status.predict = { ok: false, error: String(e?.message || e) };
   }
