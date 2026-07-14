@@ -191,6 +191,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/interp"
+  to = "/.netlify/functions/interp_knyc"
+  status = 200
+
+[[redirects]]
   from = "/api/market_logger"
   to = "/.netlify/functions/market_logger"
   status = 200
