@@ -148,7 +148,10 @@ async function compute(cityKey) {
     if (inWin.length) anchors[s] = Math.max(...inWin.map(p => p.tempF));
   }
   const delta = deltaNowcast(anchor.tempF, anchors, currents, statsList);
-  const estimate = blendNowEstimate(reg.estimate, { tempF: anchor.tempF, tsMs: anchor.tsMs }, delta, nowMs);
+  // Ramp detection for the blend's anchor floor: the last two official obs rising.
+  const prev = officialObs[officialObs.length - 2];
+  const rising = prev != null && anchor.tempF > prev.tempF + 0.2;
+  const estimate = blendNowEstimate(reg.estimate, { tempF: anchor.tempF, tsMs: anchor.tsMs }, delta, nowMs, rising);
 
   const round1 = (x) => x == null ? null : Math.round(x * 10) / 10;
   return {
