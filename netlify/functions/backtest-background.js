@@ -107,7 +107,7 @@ async function fetchMosHighsModel(station, model, start, end, dbg = null) {
   for (const line of lines.slice(1)) {
     const cols = line.split(",");
     const run = unq(cols[iRun]), ft = unq(cols[iFt]), nx = parseFloat(unq(cols[iNx]));
-    if (!Number.isFinite(nx) || !/12:00/.test(run)) continue;   // 12Z runs only
+    if (!Number.isFinite(nx) || !/(00|12):00:00/.test(run.slice(11))) continue; // 00Z + 12Z runs (n_x rows ride 00Z runs in the IEM archive)
     const date = run.slice(0, 10);
     const t = new Date(ft.replace(" ", "T") + (ft.endsWith("Z") ? "" : "Z"));
     const lo = new Date(`${date}T18:00:00Z`), hi = new Date(`${date}T18:00:00Z`); hi.setUTCHours(hi.getUTCHours() + 16);
