@@ -20,11 +20,23 @@ async function getJSON(path) {
   return r.json();
 }
 
+// CHUNKED: one 78-station × 72h request comes back truncated (recent-first), so
+// prior local days vanish and every analog collapses — R_analog(eff) was 0 on 807
+// of 884 logged decisions and the thin-analog guard NEVER fired in production
+// (guarded_point == point on all 1008). Pre-dawn decisions (06-08Z) still had
+// nonzero ramps because "yesterday" was only minutes away. Smaller batches keep
+// each station's full 72h window.
 async function fetchMetars(ids) {
-  const url = `https://aviationweather.gov/api/data/metar?ids=${ids.join(",")}&hours=72&format=raw`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`METAR fetch ${r.status}`);
-  return r.text();
+  const CHUNK = 15;
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+  const texts = await Promise.all(chunks.map(async (c) => {
+    const url = `https://aviationweather.gov/api/data/metar?ids=${c.join(",")}&hours=72&format=raw`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`METAR fetch ${r.status}`);
+    return r.text();
+  }));
+  return texts.join("\n");
 }
 // aviationweather format=raw prefixes lines with "METAR "/"SPECI ". Match the station
 // code immediately before the ddHHMMZ group, prefix or not — the old
@@ -82,12 +94,15 @@ export async function runPredict(doLog) {
   const store = doLog ? getStore(STORE) : null;
   const now = refNow.toISOString();
   const out = [];
-  let logged = 0; const errors = [];
+  let logged = 0; const errors = []; const analogStarved = [];
   for (const c of cities) {
     const kc = ksByName[c.name];
     const { bins, market } = binsAndMarket(kc?.highBuckets);
     const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: stationLines(metarText, c.station), maxSoFarF: c.maxSoFarCli ?? c.maxSoFar });
     if (!snap) continue;
+    // Truncated-fetch canary: a station with NO prior-day analogs means its METAR
+    // window collapsed — the analog ramp reads 0 and the guard can't fire.
+    if (!snap.analogs || !snap.analogs.length) analogStarved.push(c.station);
     // L1: current ob at each upstream neighbor. L3: previous ob (falling-trace check).
     const upstreamObs = {};
     for (const u of (UPSTREAM_STATIONS[c.station] || [])) {
@@ -147,7 +162,9 @@ export async function runPredict(doLog) {
     }
   }
   if (errors.length) console.log(`[claude-predict] ${errors.length} write errors: ${errors.slice(0, 3).join("; ")}`);
-  return { ok: true, mode: "predict", asof: now, count: out.length, logged, errors, cities: out };
+  if (analogStarved.length) console.log(`[claude-predict] ${analogStarved.length} stations with NO prior-day analogs: ${analogStarved.join(",")}`);
+  return { ok: true, mode: "predict", asof: now, count: out.length, logged, errors,
+           analog_starved: analogStarved, cities: out };
 }
 
 // 2026-07-09 bugsweep FIX 1: parse the CLI product's own date, skip VALID-AS-OF

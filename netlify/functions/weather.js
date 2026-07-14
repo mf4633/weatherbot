@@ -333,13 +333,22 @@ function hoursToTrough(tz, now = new Date()) {
 }
 
 async function fetchMetars() {
-  const ids = CITIES.map(c => c.station).join(",");
   // 72h (was 48h) so the inline Claude analog gets TWO full prior local days as
   // analogs — one thin day can no longer collapse the ramp to zero.
-  const url = `https://aviationweather.gov/api/data/metar?ids=${ids}&hours=72&format=raw`;
-  const r = await fetch(url, { headers: { "User-Agent": UA } });
-  if (!r.ok) throw new Error(`METAR fetch failed: ${r.status}`);
-  return await r.text();
+  // CHUNKED (2026-07-13): a single all-station request is truncated recent-first
+  // by the API, silently dropping the prior days the analogs need (see
+  // claude_engine.js fetchMetars for the ledger evidence).
+  const CHUNK = 15;
+  const stations = CITIES.map(c => c.station);
+  const chunks = [];
+  for (let i = 0; i < stations.length; i += CHUNK) chunks.push(stations.slice(i, i + CHUNK));
+  const texts = await Promise.all(chunks.map(async (ids) => {
+    const url = `https://aviationweather.gov/api/data/metar?ids=${ids.join(",")}&hours=72&format=raw`;
+    const r = await fetch(url, { headers: { "User-Agent": UA } });
+    if (!r.ok) throw new Error(`METAR fetch failed: ${r.status}`);
+    return await r.text();
+  }));
+  return texts.join("\n");
 }
 
 // Returns { dailyHigh, hourly: [{ts, tempF}, ...] } from NWS API.
