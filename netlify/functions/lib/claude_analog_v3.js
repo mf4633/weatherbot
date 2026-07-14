@@ -192,7 +192,15 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   // L4
   const adv = advectionRegimeScore(snap, incoming, analogTd);
   const rampCredit = 1.0 - adv * (1.0 - RAMP_CAP_AT_FULL_ADVECTION);
-  const rampEff = ramp * rampCredit;
+  // Physical ramp ceiling (2026-07-14): a wrong-hour analog match handed the 20:16Z
+  // PHX card R_analog(eff)=+25 at 13:00 local — raw Bayesian 119°F, belief C,
+  // unguarded; only the NWS blend kept the served point sane. Remaining same-day
+  // climb is clock-bounded: ~3.5°F/hr until peak_hour plus 2°F spike headroom.
+  // Legitimate pre-dawn ramps (+25 on an 82→108 day) sit far below their ceiling.
+  const hRamp = snap.tz ? localHourFrac(snap.now.ts, snap.tz) : cfg.morning_hour;
+  const rampCeil = Math.max(0, cfg.peak_hour - hRamp) * 3.5 + 2;
+  const rampClamped = ramp * rampCredit > rampCeil;
+  const rampEff = rampClamped ? rampCeil : ramp * rampCredit;
 
   let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp;
   mu = Math.max(mu, snap.max_so_far_f);
@@ -221,6 +229,7 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
     components: { T_now: snap.now.temp_f, "R_analog(eff)": rampEff, "R_analog(raw)": ramp,
       A_bowen: aBowen, A_trajectory: aTraj, A_airmass: aAir, A_sky: aSky, A_upstream: aUp },
     analog_audit: audits, upstream_audit: upAudit, advection_score: adv,
+    ramp_clamped: rampClamped,
     peak_locked: false, lock_note: "", tilt_note: tiltNote,
     bin_probs: {}, market_pt: null, divergence_note: "",
   };
@@ -258,6 +267,7 @@ export function thinAnalogGuard(point, snap, rampEff, hrsToPeak) {
 export function gradeAnalogBelief(card, { guarded = false, hrsToPeak = null } = {}) {
   if (card.peak_locked) return { grade: "A", why: "peak locked — max is physically in" };
   if (guarded) return { grade: "D", why: "thin analog — persistence fallback, not a model belief" };
+  if (card.ramp_clamped) return { grade: "D", why: "ramp clamped — analog climb exceeded the clock's physical ceiling" };
   let s = 3;                                    // C baseline
   const why = [];
   const sigma = card.dist.sigma;

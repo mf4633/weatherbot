@@ -113,5 +113,21 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   ok("grade: convective coin-flip → D", gradeAnalogBelief(conv).grade === "D");
 }
 
+// ---- physical ramp ceiling (2026-07-14 PHX R_analog(eff)=+25 at 13:00 local) ----
+{
+  // 13:00 local, analogs claim a +25 remaining climb — must clamp to (16-13)*3.5+2
+  const hot = { station: "KPHX", tz: TZ, now: ob(7, 9, 13, 0, 98, 63, 270, 5, 1010.5, "CLR"), max_so_far_f: 102,
+    analogs: [{ hourlies: [ob(7, 8, 13, 0, 73, 63, null, 0, 1010.5, "CLR")], max_f: 98 }], slp_24h_ago_mb: 1010.5 };
+  const card = predict(hot, null, null, null);
+  ok("ramp ceiling: eff clamped to clock bound", card.components["R_analog(eff)"] <= (16 - 13) * 3.5 + 2 + 0.01);
+  ok("ramp ceiling: raw preserved for audit", card.components["R_analog(raw)"] > 20);
+  ok("ramp ceiling: card flagged", card.ramp_clamped === true);
+  ok("ramp ceiling: belief capped at D", gradeAnalogBelief(card, { hrsToPeak: 3 }).grade === "D");
+  // pre-dawn +25 is legitimate: ceiling at 05:00 is (16-5)*3.5+2 = 40.5 — no clamp
+  const dawn = { ...hot, now: ob(7, 9, 5, 0, 82, 63, 90, 5, 1011.2, "CLR"), max_so_far_f: 82 };
+  const card2 = predict(dawn, null, null, null);
+  ok("ramp ceiling: pre-dawn +25 passes unclamped", card2.ramp_clamped === false && card2.components["R_analog(eff)"] > 20);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
