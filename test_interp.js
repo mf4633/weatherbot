@@ -5,7 +5,7 @@ import {
   weightedPolyfit, recencyWeight, mergeKnycPws, stationStats, stationWeights,
   fitPeakBias, peakBiasFactor, applyPeakBias, pwsRegressionEstimate,
   deltaNowcast, blendNowEstimate, assessSpread,
-  fitRampBias, weightedMedian, replayInterp, scoreReplay,
+  fitRampBias, weightedMedian, replayInterp, scoreReplay, detectPuddle, selectStationsDiverse,
 } from "./netlify/functions/lib/interp_knyc.js";
 
 let pass = 0, fail = 0;
@@ -197,6 +197,21 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   // ramp variant must not hurt the perfect proxy (bias fits ≈0 when there is no undercount)
   const repR = replayInterp({ officialObs, rows, stations: ["P1"], ramp: true, robust: true });
   ok("replay: ramp/robust on unbiased data ≈ unchanged", Math.abs(scoreReplay(repR).all.mae - sc.all.mae) < 0.3);
+}
+
+// --- puddle detector + azimuthal diversity (2026-07-15 KDEN) ---
+{
+  const now = 1000 * 3600e3;
+  const p = detectPuddle(94.5, { tempF: 90, tsMs: now - 30 * 60e3 }, now);
+  ok("puddle: network 4.5F above fresh anchor -> flagged cold", p && p.divergence_f === 4.5 && /COLD/.test(p.note));
+  ok("puddle: small divergence -> null", detectPuddle(92, { tempF: 90, tsMs: now - 30 * 60e3 }, now) === null);
+  ok("puddle: stale anchor -> null", detectPuddle(96, { tempF: 90, tsMs: now - 2 * 3600e3 }, now) === null);
+  const mk = (st, w) => ({ station: st, r: 0.9, rmse: 1 + (1 - w), slope: 1, intercept: 0 });
+  const stats = [mk("W1", .9), mk("W2", .8), mk("W3", .7), mk("E1", .5), mk("N1", .4), mk("S1", .3)];
+  const bearings = { W1: 270, W2: 280, W3: 260, E1: 90, N1: 10, S1: 180 };
+  const sel = selectStationsDiverse(stats, bearings, 4);
+  ok("diversity: one station per quadrant first", ["N1","E1","S1"].every(s => sel.includes(s)));
+  ok("diversity: best western fills the rest", sel.includes("W1") && sel.length === 4);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

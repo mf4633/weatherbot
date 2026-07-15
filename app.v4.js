@@ -1465,7 +1465,7 @@ function applyInterp() {
       (split ? ` · ⚠ ${j.reliability.note}` : "") +
       (j.discovered ? " · stations auto-discovered + weighted by r²/rmse²" : "");
     row.innerHTML = `<span>live interp <span class="tag">PWS×${(j.stations || []).length}${j.discovered ? " auto" : ""}</span>` +
-      `${split ? ' <span class="tag" style="color:var(--red,#e5534b)">⚠ split</span>' : ""}</span>` +
+      `${split ? ' <span class="tag" style="color:var(--red,#e5534b)">⚠ split</span>' : ""}${j.puddle ? ` <span class=\"tag\" title=\"${j.puddle.note}\">🧊 puddle ${j.puddle.divergence_f > 0 ? "+" : ""}${j.puddle.divergence_f}°</span>` : ""}</span>` +
       `<span><b>${j.estimate}°F</b> <span class="muted small">±${half}° · ${new Date(j.asof).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></span>`;
   }
 }

@@ -14,7 +14,7 @@ import { parseMetar } from "./lib/metar.js";
 import { stationLines } from "./lib/claude_engine.js";
 import {
   PWS_STATIONS, mergeKnycPws, stationStats, stationWeights, fitPeakBias,
-  pwsRegressionEstimate, deltaNowcast, blendNowEstimate, selectStations, assessSpread,
+  pwsRegressionEstimate, deltaNowcast, blendNowEstimate, selectStations, assessSpread, detectPuddle,
 } from "./lib/interp_knyc.js";
 
 // Weather.com's public frontend key (shipped in the user's upload). Override via env.
@@ -156,6 +156,7 @@ async function compute(cityKey) {
 
   const round1 = (x) => x == null ? null : Math.round(x * 10) / 10;
   const rel = assessSpread(reg.perStation);
+  const puddle = detectPuddle(reg.estimate, { tempF: anchor.tempF, tsMs: anchor.tsMs }, nowMs);
   return {
     ok: true, city: cityKey, official: cfg.official, asof: now.toISOString(),
     discovered: resolved.discovered,
@@ -169,6 +170,7 @@ async function compute(cityKey) {
     },
     spread: [round1(Math.min(...reg.perStation.map(p => p.est))), round1(Math.max(...reg.perStation.map(p => p.est)))],
     reliability: { reliable: rel.reliable, width: round1(rel.width), note: rel.note },
+    puddle,
     stations: weighted.map(s => ({
       station: s.station, name: resolved.names[s.station] || s.station,
       r: round1(s.r), rmse: round1(s.rmse), slope: Math.round(s.slope * 1000) / 1000,

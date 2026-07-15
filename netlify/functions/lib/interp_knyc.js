@@ -286,6 +286,43 @@ export function assessSpread(perStation) {
     `sensors diverging; estimate unreliable, wait for the official :51 print` };
 }
 
+// Microclimate divergence — the "puddle" detector (2026-07-15 KDEN: a 5-mile cold
+// pool sat on the settlement sensor all afternoon while the calibrated PWS ring read
+// 4-6°F warmer; every airmass model was right about the basin and wrong about the
+// contract). When the network's calibrated estimate diverges >= PUDDLE_F from a
+// FRESH official anchor, the sensor is decoupled from the basin: distrust airmass
+// models, trade the microclimate.
+export const PUDDLE_F = 3.5;
+export function detectPuddle(regEstimate, anchor, nowMs) {
+  if (regEstimate == null || anchor == null || (nowMs - anchor.tsMs) > 75 * 60e3) return null;
+  const div = +(regEstimate - anchor.tempF).toFixed(1);
+  if (Math.abs(div) < PUDDLE_F) return null;
+  return { divergence_f: div, note: div > 0
+    ? `official sensor running ${div}°F COLD vs calibrated network — cold-pool/convergence microclimate; airmass models overshoot here`
+    : `official sensor running ${-div}°F HOT vs calibrated network — localized heating; airmass models undershoot here` };
+}
+
+// Azimuthally diverse discovery (2026-07-15: all five DEN stations sat WEST of the
+// airport, so the DCVZ put every proxy in different air than the official at once —
+// correlated failure by geometry). Guarantee the best quality-passing station in
+// each compass quadrant around the official first, then fill by combination weight.
+export function selectStationsDiverse(statsList, bearings, max = 6) {
+  const good = statsList.filter(s => s && s.r * s.r >= 0.5 && s.rmse <= 4);
+  const pool = stationWeights(good.length ? good : statsList.filter(Boolean));
+  const quadrant = (deg) => Math.floor((((deg % 360) + 360) % 360) / 90);
+  const picked = [], taken = new Set();
+  for (let q = 0; q < 4; q++) {
+    const inQ = pool.filter(s => bearings[s.station] != null && quadrant(bearings[s.station]) === q)
+      .sort((a, b) => b.weight - a.weight);
+    if (inQ.length) { picked.push(inQ[0].station); taken.add(inQ[0].station); }
+  }
+  for (const s of pool.sort((a, b) => b.weight - a.weight)) {
+    if (picked.length >= max) break;
+    if (!taken.has(s.station)) { picked.push(s.station); taken.add(s.station); }
+  }
+  return picked.slice(0, max);
+}
+
 // Final three-way blend (upload's documented weights), plus a ramp floor the
 // upload doesn't have (2026-07-14, first live day): the compressed regression
 // slopes (~0.6, learned from afternoon PWS overheating) trail the trace during
