@@ -156,6 +156,24 @@ export function selectStations(statsList, max = 6) {
   return weighted.sort((a, b) => b.weight - a.weight).slice(0, max).map(s => s.station);
 }
 
+// Spread reliability (2026-07-15, first big-heat late morning): the per-station
+// estimate band blew out to ±6°F at 11:25 AM — rooftop PWS in full sun screaming
+// mid-90s while shaded units read upper 80s — and a transient 92 nearly triggered
+// a panic trade against a position the 11:51 official then vindicated. When the
+// network splits like this the weighted mean is a coin toss between siting
+// regimes, not a measurement: label it so no one (human or bot) trades on it.
+export const SPREAD_SPLIT_F = 6.0;
+
+export function assessSpread(perStation) {
+  const ests = (perStation || []).map(p => p.est).filter(Number.isFinite);
+  if (ests.length < 2) return { width: null, reliable: true, note: "" };
+  const width = Math.max(...ests) - Math.min(...ests);
+  if (width < SPREAD_SPLIT_F) return { width, reliable: true, note: "" };
+  return { width, reliable: false, note:
+    `PWS network split (${width.toFixed(1)}°F across stations) — sun-exposed vs shaded ` +
+    `sensors diverging; estimate unreliable, wait for the official :51 print` };
+}
+
 // Final three-way blend (upload's documented weights), plus a ramp floor the
 // upload doesn't have (2026-07-14, first live day): the compressed regression
 // slopes (~0.6, learned from afternoon PWS overheating) trail the trace during

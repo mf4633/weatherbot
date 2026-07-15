@@ -1,6 +1,7 @@
 // metar.js — minimal METAR decoder to build an ObsSnapshot for claude_analog.js
 // from aviationweather.gov raw METAR text. Parses temp/dewpoint (prefers the RMK
-// tenths T-group), wind dir/speed, and sea-level pressure (SLP group, else altimeter).
+// tenths T-group), wind dir/speed, sea-level pressure (SLP group, else altimeter),
+// visibility (statute miles), and obstruction codes (HZ/FU/BR/FG/DU/SA).
 
 // Resolve a METAR's "ddHHMMZ" to a full Date using a reference "now" (handles month
 // rollover: a day-of-month greater than now's rolls to the previous month).
@@ -21,6 +22,25 @@ function slpFrom(line) {
   const a = line.match(/\bA(\d{4})\b/);          // altimeter inHg*100 → hPa
   if (a) return +a[1] / 100 * 33.8639;
   return null;
+}
+
+// Visibility in statute miles: "10SM", "4SM", "1/2SM", "1 1/2SM", "M1/4SM".
+// Returns null when the group is absent (some non-US or truncated reports).
+function visibilityFrom(line) {
+  const m = line.match(/\bM?(?:(\d{1,2})\s+)?(\d{1,2})(?:\/(\d{1,2}))?SM\b/);
+  if (!m) return null;
+  const whole = m[1] ? +m[1] : 0;
+  const frac = m[3] ? +m[2] / +m[3] : +m[2];
+  return whole + frac;
+}
+
+// Obstruction / obscuration codes relevant to insolation (2026-07-15 KNYC: 4SM HZ
+// under CLR sky was a real ~1°F cut the sky group can't see). Body only — stop at
+// RMK so remark text can't false-match.
+function wxFrom(line) {
+  const body = line.split(/\bRMK\b/)[0];
+  return (body.match(/(?:^|\s)(?:[+-]|VC)?(HZ|FU|BR|FG|DU|SA)(?=\s|$)/g) || [])
+    .map(s => s.trim().replace(/^[+-]|^VC/, "")).join(" ");
 }
 
 export function parseMetar(line, refNow) {
@@ -45,6 +65,8 @@ export function parseMetar(line, refNow) {
     wind_speed_kt: w ? +w[2] : 0,
     slp_mb: slpFrom(line),
     sky,
+    visibility_mi: visibilityFrom(line),
+    wx: wxFrom(line),
   };
 }
 
@@ -76,7 +98,9 @@ export function buildSnapshot({ station, tz, metarLines, refNow = new Date(), ma
 // buildSnapshotV2 — snapshot for claude_analog_v2's multi-day analog ensemble.
 // Buckets all obs by station-local day, then hands the engine the N most-recent prior
 // local days as analogs (most-recent-first), each with its own hourly obs + observed max.
-// Shape: { station, now, max_so_far_f, analogs:[{hourlies, max_f}], slp_24h_ago_mb }.
+// today_hourlies carries the day's own trace so v3 can read intraday trends (the
+// 2026-07-15 mixing-breakout signal needs the morning dewpoint history, not just now).
+// Shape: { station, now, max_so_far_f, today_hourlies, analogs:[{hourlies, max_f}], slp_24h_ago_mb }.
 export function buildSnapshotV2({ station, tz, metarLines, refNow = new Date(), maxSoFarF = null, nAnalogs = 2 }) {
   const obs = (metarLines || []).map(l => parseMetar(l, refNow)).filter(Boolean)
     .sort((a, b) => a.ts - b.ts);
@@ -102,5 +126,5 @@ export function buildSnapshotV2({ station, tz, metarLines, refNow = new Date(), 
   const target = now.ts.getTime() - 86400000;
   let slp_24h_ago_mb = null, best = Infinity;
   for (const o of obs) if (o.slp_mb != null) { const d = Math.abs(o.ts.getTime() - target); if (d < best) { best = d; slp_24h_ago_mb = o.slp_mb; } }
-  return { station, tz: tz || null, now, max_so_far_f, analogs, slp_24h_ago_mb };
+  return { station, tz: tz || null, now, max_so_far_f, today_hourlies: todayObs, analogs, slp_24h_ago_mb };
 }

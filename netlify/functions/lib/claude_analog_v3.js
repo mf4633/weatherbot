@@ -96,6 +96,70 @@ export function advectionRegimeScore(snap, upstreamIncoming, analogTd) {
   return Math.min(1.0, s);
 }
 
+// --- A_haze: aerosol insolation discount (2026-07-15 KNYC) ----------------------
+// The sky group is blind to haze/smoke: KNYC 10:51 printed "4SM HZ" under CLR while
+// the column moistened aloft — a real insolation cut the k_sky term scored as zero.
+// Discount only when an obstruction code is present (low vis in rain/fog is a
+// different mechanism already covered by the deck) and phases in below 7 miles.
+export const HAZE_VIS_CEILING_MI = 7.0;
+export const K_HAZE = 2.5;
+
+export function hazeDiscount(snap) {
+  const ob = snap.now;
+  if (ob.visibility_mi == null || !/\b(HZ|FU)\b/.test(ob.wx || "")) return 0;
+  const deficit = Math.max(0, Math.min(1, (HAZE_VIS_CEILING_MI - ob.visibility_mi) / HAZE_VIS_CEILING_MI));
+  return -K_HAZE * deficit;
+}
+
+// --- mixing signal (2026-07-15 KNYC session) ------------------------------------
+// The morning dewpoint TREND against the climb rate, read from today's own trace.
+// Two regimes the static Bowen term (level vs analog) cannot distinguish:
+//   dry_mixing_breakout — dewpoint breaks ≥2°F below its trailing-3h peak while the
+//     temp climbs ≥3°F/hr: deep mixing is tapping drier air aloft, the humid cap is
+//     being dismantled, and the Bowen penalty (priced off the dp LEVEL) overstates
+//     the drag. KNYC 10:51: 85→90 (+5/hr) as dp fell 72→69 — the print that flipped
+//     the day from "capped at 94" to "96-97 live". Positive kick + σ inflation
+//     (a regime transition is exactly when the analogs stop binding).
+//   moistening_climb — dewpoint ≥2°F above its ~2h-ago value while still climbing:
+//     moisture is winning against mixing (KNYC 8:51-9:51: dp 69→72), corroborating
+//     the Bowen cap. No mu change (the level term already prices it) — flagged so
+//     the grade and the card narrate it.
+export const K_BREAKOUT = 2.0;
+export const BREAKOUT_SIGMA_INFL = 1.3;
+
+export function mixingSignal(snap, cfg) {
+  const none = { kick: 0, sigmaMult: 1, flag: null };
+  const hrs = snap.today_hourlies || [];
+  if (snap.now.dewpoint_f == null || !snap.tz) return none;
+  const h = localHourFrac(snap.now.ts, snap.tz);
+  // Morning-to-midday climb only: pre-dawn dp wiggles are radiational, and by peak
+  // the ramp is spent so re-crediting it would double-count.
+  if (h < cfg.morning_hour + 1 || h > cfg.peak_hour - 1) return none;
+  const nowMs = snap.now.ts.getTime();
+  const window = hrs.filter(o => o.ts.getTime() < nowMs && nowMs - o.ts.getTime() <= 3 * 3600e3
+    && o.dewpoint_f != null && o.temp_f != null);
+  if (window.length < 2) return none;
+  // Climb rate vs the ob nearest one hour back; dp trend vs the trailing peak
+  // (breakout) and the ~2h-ago level (moistening).
+  const nearest = (targetMs) => window.reduce((a, o) =>
+    Math.abs(o.ts.getTime() - targetMs) < Math.abs(a.ts.getTime() - targetMs) ? o : a);
+  const refRate = nearest(nowMs - 3600e3);
+  const dtH = (nowMs - refRate.ts.getTime()) / 3600e3;
+  if (dtH < 0.5) return none;
+  const climbRate = (snap.now.temp_f - refRate.temp_f) / dtH;
+  const tdPeak = Math.max(...window.map(o => o.dewpoint_f));
+  const tdDrop = tdPeak - snap.now.dewpoint_f;
+  if (tdDrop >= 2 && climbRate >= 3) {
+    return { kick: K_BREAKOUT * Math.min(1, tdDrop / 4), sigmaMult: BREAKOUT_SIGMA_INFL,
+             flag: "dry_mixing_breakout" };
+  }
+  const refOld = nearest(nowMs - 2 * 3600e3);
+  if (snap.now.dewpoint_f - refOld.dewpoint_f >= 2 && climbRate >= 1) {
+    return { kick: 0, sigmaMult: 1, flag: "moistening_climb" };
+  }
+  return none;
+}
+
 // --- L2: informed-market tilt --------------------------------------------------
 // weight toward market grows with divergence: w = |d|/(|d|+3). Residual (what the
 // tilt does NOT close) becomes added-in-quadrature sigma.
@@ -202,7 +266,11 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   const rampClamped = ramp * rampCredit > rampCeil;
   const rampEff = rampClamped ? rampCeil : ramp * rampCredit;
 
-  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp;
+  // 2026-07-15 session signals: haze insolation cut + intraday mixing regime.
+  const aHaze = hazeDiscount(snap);
+  const mix = mixingSignal(snap, cfg);
+
+  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp + aHaze + mix.kick;
   mu = Math.max(mu, snap.max_so_far_f);
 
   // 2026-07-09 bugfix: sigma schedule runs on LOCAL hours (UTC shrank eastern
@@ -212,7 +280,7 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   if (h <= cfg.morning_hour) sigma = cfg.sigma_open;
   else if (h >= cfg.peak_hour) sigma = cfg.sigma_peak;
   else sigma = cfg.sigma_open + ((h - cfg.morning_hour) / (cfg.peak_hour - cfg.morning_hour)) * (cfg.sigma_peak - cfg.sigma_open);
-  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv);
+  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv) * mix.sigmaMult;
 
   // L2 (post-hoc on the mean; sigma addition in quadrature)
   let tiltNote = "", extraSigma = 0;
@@ -227,9 +295,10 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   const card = {
     station: snap.station, asof: snap.now.ts, dist,
     components: { T_now: snap.now.temp_f, "R_analog(eff)": rampEff, "R_analog(raw)": ramp,
-      A_bowen: aBowen, A_trajectory: aTraj, A_airmass: aAir, A_sky: aSky, A_upstream: aUp },
+      A_bowen: aBowen, A_trajectory: aTraj, A_airmass: aAir, A_sky: aSky, A_upstream: aUp,
+      A_haze: aHaze, A_mixing: mix.kick },
     analog_audit: audits, upstream_audit: upAudit, advection_score: adv,
-    ramp_clamped: rampClamped,
+    ramp_clamped: rampClamped, mixing_flag: mix.flag,
     peak_locked: false, lock_note: "", tilt_note: tiltNote,
     bin_probs: {}, market_pt: null, divergence_note: "",
   };
@@ -276,6 +345,8 @@ export function gradeAnalogBelief(card, { guarded = false, hrsToPeak = null } = 
   const adv = card.advection_score || 0;
   if (adv > 0.5) { s -= 2; why.push(`out-of-regime (advection ${adv.toFixed(2)})`); }
   else if (adv > 0.25) { s -= 1; why.push(`advection ${adv.toFixed(2)}`); }
+  if (card.mixing_flag === "dry_mixing_breakout") { s -= 1; why.push("dry mixing breakout — humid-cap regime dismantling mid-climb"); }
+  else if (card.mixing_flag === "moistening_climb") { why.push("moistening climb — Bowen cap corroborated by the trend"); }
   const wsum = (card.analog_audit || []).reduce((a, x) => a + (x.weight || 0), 0);
   if (wsum >= 0.8) { s += 1; why.push("strong analog match"); }
   else if (wsum < 0.2) { s -= 1; why.push("weak analog match"); }

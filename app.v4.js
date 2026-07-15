@@ -1413,10 +1413,15 @@ function applyInterp() {
     }
     const c = j.components || {};
     const half = (((j.spread?.[1] ?? 0) - (j.spread?.[0] ?? 0)) / 2).toFixed(1);
+    // 2026-07-15: when the PWS network splits (sun-exposed vs shaded), the blend is
+    // a siting coin-toss, not a measurement — badge it so nobody trades the number.
+    const split = j.reliability && j.reliability.reliable === false;
     row.title = `PWS regression ${c.pws_regression}° · delta nowcast ${c.delta_nowcast}° · ` +
       `official anchor ${c.official_anchor}° (${c.anchor_age_min}m old) · station spread [${(j.spread || []).join(", ")}]°` +
+      (split ? ` · ⚠ ${j.reliability.note}` : "") +
       (j.discovered ? " · stations auto-discovered + weighted by r²/rmse²" : "");
-    row.innerHTML = `<span>live interp <span class="tag">PWS×${(j.stations || []).length}${j.discovered ? " auto" : ""}</span></span>` +
+    row.innerHTML = `<span>live interp <span class="tag">PWS×${(j.stations || []).length}${j.discovered ? " auto" : ""}</span>` +
+      `${split ? ' <span class="tag" style="color:var(--red,#e5534b)">⚠ split</span>' : ""}</span>` +
       `<span><b>${j.estimate}°F</b> <span class="muted small">±${half}° · ${new Date(j.asof).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></span>`;
   }
 }
