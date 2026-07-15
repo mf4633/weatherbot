@@ -227,9 +227,20 @@ function renderSensorAlert(cities) {
   if (!bar) {
     bar = document.createElement("div");
     bar.id = "sensor-alert";
-    bar.style.cssText = "background:#7a1f1f;color:#fff;padding:10px 14px;border-radius:8px;" +
-      "margin:0 0 12px;font-weight:600;line-height:1.4";
-    grid.parentNode.insertBefore(bar, grid);
+    // Prominent by design (2026-07-15 follow-up): sticky at the very top of the page,
+    // full-width, oversized, pulsing — a dark day-long feed outage should be the first
+    // thing (and for a moment the only thing) the eye lands on.
+    bar.style.cssText = "position:sticky;top:0;z-index:1000;background:#a11212;color:#fff;" +
+      "padding:14px 18px;margin:0 0 14px;border-radius:10px;font-weight:700;font-size:1.15em;" +
+      "line-height:1.45;box-shadow:0 4px 18px rgba(161,18,18,.45);border:2px solid #ff6b6b;" +
+      "animation:sensorPulse 2s ease-in-out infinite";
+    if (!document.getElementById("sensor-alert-style")) {
+      const st = document.createElement("style");
+      st.id = "sensor-alert-style";
+      st.textContent = "@keyframes sensorPulse{0%,100%{border-color:#ff6b6b}50%{border-color:#ffd2d2}}";
+      document.head.appendChild(st);
+    }
+    document.body.insertBefore(bar, document.body.firstChild);
   }
   bar.innerHTML = "⚠ SENSOR FEED STALLED: " + stalled.map(c => {
     const age = c.lastMetarAgeMin ?? c.currentTempAgeMin;
