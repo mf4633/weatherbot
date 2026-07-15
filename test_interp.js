@@ -208,7 +208,7 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   ok("puddle: stale anchor -> null", detectPuddle(96, { tempF: 90, tsMs: now - 2 * 3600e3 }, now) === null);
   const mk = (st, w) => ({ station: st, r: 0.9, rmse: 1 + (1 - w), slope: 1, intercept: 0 });
   const stats = [mk("W1", .9), mk("W2", .8), mk("W3", .7), mk("E1", .5), mk("N1", .4), mk("S1", .3)];
-  const bearings = { W1: 270, W2: 280, W3: 260, E1: 90, N1: 10, S1: 180 };
+  const bearings = { W1: 290, W2: 280, W3: 300, E1: 90, N1: 10, S1: 180 };
   const sel = selectStationsDiverse(stats, bearings, 4);
   ok("diversity: one station per quadrant first", ["N1","E1","S1"].every(s => sel.includes(s)));
   ok("diversity: best western fills the rest", sel.includes("W1") && sel.length === 4);
