@@ -115,6 +115,49 @@ export function peakBiasFactor(proxyF) {
 
 export const applyPeakBias = (est, proxyF, bias) => est + bias * peakBiasFactor(proxyF) * PEAK_BIAS_BLEND;
 
+// Climb-conditional undercount (2026-07-15 KDEN): regression slopes are trained on
+// mostly-ordinary hours, so they compress (~0.6) and the estimate trails the official
+// by 1.5-3°F during fast climbs — it read 79.5 against a real ~82-84 mid-ramp, twice.
+// Fit: recency-weighted mean residual over pairs in hours where the official rose
+// >= RAMP_RATE_F_PER_H vs its previous ob. Applied (by the caller) only while the
+// latest officials are themselves rising fast — flat/falling hours get zero.
+export const RAMP_RATE_F_PER_H = 2.5;
+
+export function fitRampBias(pairs, statsList, officialObs, nowMs) {
+  const byStation = Object.fromEntries(statsList.map(s => [s.station, s]));
+  const rising = new Set();
+  for (let i = 1; i < officialObs.length; i++) {
+    const dt = (officialObs[i].tsMs - officialObs[i - 1].tsMs) / HOUR_MS;
+    if (dt > 0 && dt <= 1.5 && (officialObs[i].tempF - officialObs[i - 1].tempF) / dt >= RAMP_RATE_F_PER_H)
+      rising.add(officialObs[i].tsMs);
+  }
+  const byHour = {};
+  for (const p of pairs) {
+    const st = byStation[p.station];
+    if (!st || !rising.has(p.hourMs)) continue;
+    (byHour[p.hourMs] = byHour[p.hourMs] || []).push(p.knyc - (st.slope * p.proxy + st.intercept));
+  }
+  let acc = 0, ws = 0;
+  for (const h of Object.keys(byHour)) {
+    const m = byHour[h].reduce((a, b) => a + b, 0) / byHour[h].length;
+    const w = recencyWeight((nowMs - +h) / HOUR_MS);
+    acc += w * m; ws += w;
+  }
+  return ws > 0 ? Math.min(4, Math.max(0, acc / ws)) : 0;
+}
+
+// Weighted median — the robust center for split networks (2026-07-15: five sensors,
+// 7°F apart, sun-exposed vs shaded; the weighted MEAN is a coin toss between siting
+// regimes, the weighted median sides with the majority regime).
+export function weightedMedian(items) {
+  const s = items.filter(x => Number.isFinite(x.v)).sort((a, b) => a.v - b.v);
+  if (!s.length) return null;
+  const tot = s.reduce((a, x) => a + x.w, 0);
+  let c = 0;
+  for (const x of s) { c += x.w; if (c >= tot / 2) return x.v; }
+  return s[s.length - 1].v;
+}
+
 // Weighted PWS regression estimate from current readings.
 // currents: [{station, tempF}]. Returns {estimate, perStation} or null.
 export function pwsRegressionEstimate(weightedStats, currents, peakBias) {
@@ -144,6 +187,75 @@ export function deltaNowcast(officialTempF, anchors, currents, statsList) {
   }
   if (!(wsum > 0)) return null;
   return officialTempF + acc / wsum;
+}
+
+// --- walk-forward backtest (2026-07-15) -----------------------------------------
+// Replay every official ob after a warmup, computing the estimate exactly as the
+// live pipeline would at that minute using ONLY prior data (prior officials for
+// calibration + anchor, proxy rows up to the minute). The target ob is held out.
+// This is the hardest live case — the anchor is a full hour stale — so scores here
+// lower-bound live accuracy. ramp/robust toggle the 2026-07-15 upgrades so old and
+// new pipelines score on identical data.
+export function replayInterp({ officialObs, rows, stations, warmupH = 24, ramp = false, robust = false }) {
+  const out = [];
+  for (let i = 2; i < officialObs.length; i++) {
+    const t = officialObs[i];
+    if (t.tsMs - officialObs[0].tsMs < warmupH * HOUR_MS) continue;
+    const priorObs = officialObs.slice(0, i);
+    const priorRows = rows.filter(r => r.tsMs <= t.tsMs);
+    const pairs = mergeKnycPws(priorObs, priorRows);
+    const statsList = stations.map(s => stationStats(pairs, s, t.tsMs)).filter(Boolean);
+    if (!statsList.length) continue;
+    const weighted = stationWeights(statsList);
+    const peakBias = fitPeakBias(pairs, statsList, t.tsMs);
+    // "current" per station: max in (t-1h, t] — hourly-history stand-in for the live
+    // 5-min instantaneous (same for every variant, so the A/B stays fair).
+    const currents = [];
+    for (const s of stations) {
+      const inWin = priorRows.filter(r => r.station === s && r.tsMs > t.tsMs - HOUR_MS && r.tsMs <= t.tsMs);
+      if (inWin.length) currents.push({ station: s, tempF: Math.max(...inWin.map(r => r.tempF)) });
+    }
+    const reg = pwsRegressionEstimate(weighted, currents, peakBias);
+    if (!reg) continue;
+    let regEst = reg.estimate;
+    if (robust) {
+      const spread = assessSpread(reg.perStation);
+      if (!spread.reliable) {
+        const med = weightedMedian(reg.perStation.map(p => ({ v: p.est, w: p.weight })));
+        if (med != null) regEst = med;
+      }
+    }
+    const anchor = priorObs[priorObs.length - 1], prev = priorObs[priorObs.length - 2];
+    const anchors = {};
+    for (const s of stations) {
+      const inWin = priorRows.filter(r => r.station === s && r.tsMs > anchor.tsMs - HOUR_MS && r.tsMs <= anchor.tsMs);
+      if (inWin.length) anchors[s] = Math.max(...inWin.map(r => r.tempF));
+    }
+    const delta = deltaNowcast(anchor.tempF, anchors, currents, statsList);
+    const anchorRate = (anchor.tempF - prev.tempF) / Math.max(0.25, (anchor.tsMs - prev.tsMs) / HOUR_MS);
+    const rising = anchor.tempF > prev.tempF + 0.2;
+    let est = blendNowEstimate(regEst, { tempF: anchor.tempF, tsMs: anchor.tsMs }, delta, t.tsMs, rising);
+    let rampApplied = 0;
+    if (ramp && rising && anchorRate >= RAMP_RATE_F_PER_H) {
+      rampApplied = fitRampBias(pairs, statsList, priorObs, t.tsMs);
+      est += rampApplied;
+    }
+    const targetRising = (t.tempF - anchor.tempF) / Math.max(0.25, (t.tsMs - anchor.tsMs) / HOUR_MS) >= RAMP_RATE_F_PER_H;
+    out.push({ tsMs: t.tsMs, truth: t.tempF, est: +est.toFixed(2), err: +(est - t.tempF).toFixed(2),
+               rising: targetRising, rampApplied: +rampApplied.toFixed(2) });
+  }
+  return out;
+}
+
+// MAE/bias overall and split by whether the target hour was itself a fast climb —
+// the bucket where the old pipeline demonstrably failed.
+export function scoreReplay(rows) {
+  const sc = (xs) => xs.length ? {
+    n: xs.length,
+    mae: +(xs.reduce((a, r) => a + Math.abs(r.err), 0) / xs.length).toFixed(2),
+    bias: +(xs.reduce((a, r) => a + r.err, 0) / xs.length).toFixed(2),
+  } : { n: 0, mae: null, bias: null };
+  return { all: sc(rows), rising: sc(rows.filter(r => r.rising)), steady: sc(rows.filter(r => !r.rising)) };
 }
 
 // Candidate selection for cities WITHOUT a hand-validated station list (DEN, LAX):

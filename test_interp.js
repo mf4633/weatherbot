@@ -5,6 +5,7 @@ import {
   weightedPolyfit, recencyWeight, mergeKnycPws, stationStats, stationWeights,
   fitPeakBias, peakBiasFactor, applyPeakBias, pwsRegressionEstimate,
   deltaNowcast, blendNowEstimate, assessSpread,
+  fitRampBias, weightedMedian, replayInterp, scoreReplay,
 } from "./netlify/functions/lib/interp_knyc.js";
 
 let pass = 0, fail = 0;
@@ -153,6 +154,49 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   const one = assessSpread([{ est: 88 }]);
   ok("spread: single station → no verdict, stays reliable", one.reliable === true && one.width === null);
   ok("spread: non-finite ests ignored", assessSpread([{ est: 88 }, { est: null }, { est: 89 }]).width === 1);
+}
+
+// --- ramp bias: recovers an injected fast-climb undercount, ignores flat hours ---
+{
+  const H = 3600e3, base = 1000 * H;
+  // officials: flat for 6h, then +3/hr climb for 4h
+  const officialObs = [];
+  for (let i = 0; i < 10; i++) officialObs.push({ tsMs: base + i * H, tempF: i < 6 ? 70 : 70 + (i - 5) * 3 });
+  const stats = [{ station: "A", slope: 1, intercept: 0, r: 0.95, rmse: 1 }];
+  // pairs: proxy == official on flat hours; proxy 2°F LOW on climb hours (undercount)
+  const pairs = officialObs.map((o, i) => ({ hourMs: o.tsMs, knyc: o.tempF, station: "A",
+                                             proxy: i < 6 ? o.tempF : o.tempF - 2 }));
+  const b = fitRampBias(pairs, stats, officialObs, base + 10 * H);
+  ok("rampBias recovers ~+2 on climb hours", Math.abs(b - 2) < 0.05);
+  const flatOnly = fitRampBias(pairs.slice(0, 6), stats, officialObs.slice(0, 6), base + 6 * H);
+  ok("rampBias zero when nothing is climbing", flatOnly === 0);
+}
+
+// --- weighted median: sides with the majority siting regime on split networks ---
+{
+  const med = weightedMedian([{ v: 88, w: 0.3 }, { v: 89, w: 0.3 }, { v: 95, w: 0.4 }]);
+  ok("weightedMedian resists the hot outlier", med === 89);
+  ok("weightedMedian handles single item", weightedMedian([{ v: 90, w: 1 }]) === 90);
+  ok("weightedMedian null on empty", weightedMedian([]) === null);
+}
+
+// --- walk-forward replay: a perfect proxy scores tight; buckets are sane ---
+{
+  const H = 3600e3, base = 2000 * H;
+  const officialObs = [], rows = [];
+  for (let i = 0; i < 72; i++) {
+    const t = 75 + 12 * Math.sin((i % 24) / 24 * 2 * Math.PI - Math.PI / 2);  // diurnal
+    officialObs.push({ tsMs: base + i * H, tempF: +t.toFixed(1) });
+    rows.push({ tsMs: base + i * H - 5 * 60e3, station: "P1", tempF: +(t + 2).toFixed(1) }); // offset proxy
+  }
+  const rep = replayInterp({ officialObs, rows, stations: ["P1"] });
+  ok("replay produces held-out samples after warmup", rep.length > 30);
+  const sc = scoreReplay(rep);
+  ok("replay: perfect offset proxy → MAE ≤ 1.5 (anchor drag only)", sc.all.mae != null && sc.all.mae <= 1.5);
+  ok("replay: rising + steady buckets partition all", sc.rising.n + sc.steady.n === sc.all.n);
+  // ramp variant must not hurt the perfect proxy (bias fits ≈0 when there is no undercount)
+  const repR = replayInterp({ officialObs, rows, stations: ["P1"], ramp: true, robust: true });
+  ok("replay: ramp/robust on unbiased data ≈ unchanged", Math.abs(scoreReplay(repR).all.mae - sc.all.mae) < 0.3);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
