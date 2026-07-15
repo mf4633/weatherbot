@@ -198,6 +198,7 @@ async function load() {
     const r = await fetch("/api/weather", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
+    renderSensorAlert(j.cities || []);
     grid.innerHTML = (j.cities || []).map(renderCard).join("");
     updateJacksonBadges();
     handleHashOnLoad();
@@ -207,6 +208,38 @@ async function load() {
   } catch (e) {
     statusEl.textContent = `Error: ${e.message}. Retrying…`;
   }
+}
+
+// Stalled-sensor banner (2026-07-15 KDEN/KCFO feed outages): ASOS hourly METARs
+// arrive ~every 60 min; a gap beyond STALL_MIN means the market's automated feed is
+// dark for that station — exactly when the dashboard's other numbers (interp, PWS)
+// are both most valuable and most in need of a caveat. The banner distinguishes the
+// two realities learned live: the sensor almost always KEEPS RECORDING (CLI settles
+// on the full record; the 6-hr max backfills), only the transmission is down.
+const STALL_MIN = 75;
+function renderSensorAlert(cities) {
+  let bar = document.getElementById("sensor-alert");
+  const stalled = (cities || []).filter(c => {
+    const age = c.lastMetarAgeMin ?? (c.currentTempSource === "metar" ? c.currentTempAgeMin : null);
+    return age != null && age > STALL_MIN;
+  });
+  if (!stalled.length) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "sensor-alert";
+    bar.style.cssText = "background:#7a1f1f;color:#fff;padding:10px 14px;border-radius:8px;" +
+      "margin:0 0 12px;font-weight:600;line-height:1.4";
+    grid.parentNode.insertBefore(bar, grid);
+  }
+  bar.innerHTML = "⚠ SENSOR FEED STALLED: " + stalled.map(c => {
+    const age = c.lastMetarAgeMin ?? c.currentTempAgeMin;
+    const h = Math.floor(age / 60), m = age % 60;
+    return `<b>${c.station}</b> (${c.name}) — ${h ? `${h}h ` : ""}${m}m since last METAR`;
+  }).join(" · ") +
+  `<div style="font-weight:400;font-size:.85em;opacity:.9">Bots pricing off this feed are blind. ` +
+  `The sensor itself almost certainly still records (CLI settles on the full continuous record; ` +
+  `the next print's 6-hr max backfills the gap) — use the interp and PWS ring for live reads, ` +
+  `and treat the book's prices as stale information, not disagreement.</div>`;
 }
 
 function renderFreshness(f) {
