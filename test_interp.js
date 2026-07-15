@@ -4,7 +4,7 @@
 import {
   weightedPolyfit, recencyWeight, mergeKnycPws, stationStats, stationWeights,
   fitPeakBias, peakBiasFactor, applyPeakBias, pwsRegressionEstimate,
-  deltaNowcast, blendNowEstimate,
+  deltaNowcast, blendNowEstimate, assessSpread,
 } from "./netlify/functions/lib/interp_knyc.js";
 
 let pass = 0, fail = 0;
@@ -140,6 +140,19 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   ok("ramp floor: not rising → original blend (below anchor ok)", noFloor < 82);
   const staleAnchor = { tempF: 82, tsMs: nowMs - 40 * 60e3 };
   ok("ramp floor: stale anchor (>20min) not floored", blendNowEstimate(80.7, staleAnchor, 81.5, nowMs, true) < 82);
+}
+
+// --- spread reliability (2026-07-15: ±6° blowout during the 11 AM climb) ---
+{
+  const tight = assessSpread([{ est: 88.2 }, { est: 89.5 }, { est: 90.1 }]);
+  ok("spread: 1.9° band → reliable", tight.reliable === true && Math.abs(tight.width - 1.9) < 0.01);
+  const split = assessSpread([{ est: 86.1 }, { est: 88.0 }, { est: 93.8 }]);
+  ok("spread: 7.7° band → split, unreliable", split.reliable === false && Math.abs(split.width - 7.7) < 0.01);
+  ok("spread: note names the failure and the remedy", /split/.test(split.note) && /official/.test(split.note));
+  ok("spread: exactly at threshold (6.0) → split", assessSpread([{ est: 86 }, { est: 92 }]).reliable === false);
+  const one = assessSpread([{ est: 88 }]);
+  ok("spread: single station → no verdict, stays reliable", one.reliable === true && one.width === null);
+  ok("spread: non-finite ests ignored", assessSpread([{ est: 88 }, { est: null }, { est: 89 }]).width === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

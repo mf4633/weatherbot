@@ -27,6 +27,21 @@ const m3 = parseMetar("KLAX 091553Z 25008KT 6SM BR 20/17 A2998", ref);
 ok("body temp 20°C → 68°F", approx(m3.temp_f, 68));
 ok("body dewpoint 17°C → 62.6°F", approx(m3.dewpoint_f, 62.6));
 
+// Visibility + obstruction codes (2026-07-15: KNYC "4SM HZ" under CLR was a real
+// insolation cut the sky group can't see).
+ok("visibility 10SM", m1.visibility_mi === 10);
+ok("no obstruction → wx empty", m1.wx === "");
+ok("visibility 6SM + BR", m3.visibility_mi === 6 && m3.wx === "BR");
+const m4 = parseMetar("KNYC 151451Z 27008KT 4SM HZ CLR 32/21 A2990 RMK AO2 SLP113 T03220206", ref);
+ok("haze day: 4SM HZ", m4.visibility_mi === 4 && m4.wx === "HZ");
+const m5 = parseMetar("KBOS 151451Z 09010KT 1 1/2SM BR OVC005 18/17 A2995", ref);
+ok("fractional visibility 1 1/2SM → 1.5", approx(m5.visibility_mi, 1.5, 0.001));
+const m6 = parseMetar("KSEA 151453Z 00000KT M1/4SM FG VV002 12/12 A3005", ref);
+ok("M1/4SM → 0.25, FG", approx(m6.visibility_mi, 0.25, 0.001) && m6.wx === "FG");
+// codes after RMK must not leak into wx
+const m7 = parseMetar("KDEN 151453Z 18008KT 10SM CLR 30/10 A3002 RMK AO2 FU LYR ALQDS T03000100", ref);
+ok("RMK-only FU ignored", m7.wx === "" && m7.visibility_mi === 10);
+
 // Snapshot build: two local days, yesterday max + now + slp-24h-ago.
 const lines = [
   "KNYC 081451Z 20006KT 20/14 RMK SLP174 T02000140",  // yest 14:51Z 68°F
@@ -62,6 +77,8 @@ ok("v2 two analogs, most-recent-first", v2.analogs.length === 2 && approx(v2.ana
 ok("v2 second analog older day", approx(v2.analogs[1].max_f, 96.9, 0.2));
 ok("v2 analog hourlies carry sky", v2.analogs[0].hourlies.some(h => /SCT090/.test(h.sky)));
 ok("v2 max_so_far from today obs", approx(v2.max_so_far_f, 68, 0.1));
+ok("v2 today_hourlies carries the day's own trace (2026-07-15 mixing signal)",
+  v2.today_hourlies.length === 2 && v2.today_hourlies[1].ts.getTime() === v2.now.ts.getTime());
 
 // bugsweep FIX 3 regression: a missing dewpoint ("27/ ") must keep the temp, not drop the ob.
 {

@@ -1,7 +1,7 @@
 // Parity test: lib/claude_analog_v3.js must reproduce claude_analog_v3.py's
 // 2026-07-09 KNYC post-mortem replay (L1 upstream / L2 tilt / L3 lock / L4 guard).
 // No network. Run: node test_claude_analog_v3.js
-import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS } from "./netlify/functions/lib/claude_analog_v3.js";
+import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS, hazeDiscount, mixingSignal } from "./netlify/functions/lib/claude_analog_v3.js";
 import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
@@ -127,6 +127,53 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   const dawn = { ...hot, now: ob(7, 9, 5, 0, 82, 63, 90, 5, 1011.2, "CLR"), max_so_far_f: 82 };
   const card2 = predict(dawn, null, null, null);
   ok("ramp ceiling: pre-dawn +25 passes unclamped", card2.ramp_clamped === false && card2.components["R_analog(eff)"] > 20);
+}
+
+// ---- 2026-07-15 session signals: haze discount + intraday mixing regime ----
+{
+  const hz = (vis, wx) => ({ now: { ...ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR"), visibility_mi: vis, wx } });
+  // KNYC 10:51 printed "4SM HZ" under CLR — deficit (7-4)/7, k 2.5 ≈ -1.07
+  ok("haze: 4SM HZ ≈ -1.07", approx(hazeDiscount(hz(4, "HZ")), -2.5 * 3 / 7, 0.01));
+  ok("haze: smoke counts too", hazeDiscount(hz(3, "FU")) < -1.4);
+  ok("haze: clean 10SM → 0", hazeDiscount(hz(10, "")) === 0);
+  ok("haze: low vis without HZ/FU code → 0 (rain/fog is the deck's job)", hazeDiscount(hz(4, "")) === 0);
+  ok("haze: vis missing → 0", hazeDiscount({ now: ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR") }) === 0);
+
+  // The KNYC 2026-07-15 morning, verbatim: dp 69→70→72 (moistening climb), then
+  // the 10:51 break — 85→90 (+5/hr) as dp fell 72→69 (dry mixing breakout).
+  const trace = [ob(7, 15, 7, 51, 80, 69, null, 3, 1011.4, "CLR"),
+                 ob(7, 15, 8, 51, 82, 70, null, 6, 1011.3, "CLR"),
+                 ob(7, 15, 9, 51, 85, 72, null, 3, 1011.0, "CLR")];
+  const cfgN = getConfig("KNYC");
+  const m951 = mixingSignal({ station: "KNYC", tz: TZ, now: trace[2], today_hourlies: trace.slice(0, 2) }, cfgN);
+  ok("mixing 9:51: dp +3 over 2h while climbing → moistening_climb", m951.flag === "moistening_climb");
+  ok("mixing 9:51: no mu kick (Bowen already prices the level)", m951.kick === 0 && m951.sigmaMult === 1);
+  const m1051 = mixingSignal({ station: "KNYC", tz: TZ,
+    now: ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR"), today_hourlies: trace }, cfgN);
+  ok("mixing 10:51: dp -3 off trailing peak at +5/hr → dry_mixing_breakout", m1051.flag === "dry_mixing_breakout");
+  ok("mixing 10:51: kick 2.0×(3/4) = +1.5", approx(m1051.kick, 1.5, 0.01));
+  ok("mixing 10:51: σ inflated 1.3 (regime transition)", approx(m1051.sigmaMult, 1.3, 0.001));
+  // gates: pre-dawn dp wiggles are radiational, not mixing; no trace → no signal
+  const dawn = mixingSignal({ station: "KNYC", tz: TZ,
+    now: ob(7, 15, 5, 51, 78, 69, null, 3, 1011.3, "CLR"), today_hourlies: trace }, cfgN);
+  ok("mixing: pre-dawn gated off", dawn.flag === null && dawn.kick === 0);
+  ok("mixing: no today_hourlies → none", mixingSignal({ station: "KNYC", tz: TZ,
+    now: ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR") }, cfgN).flag === null);
+
+  // predict() integration: breakout kick + flag land on the card, haze in components
+  const snapBreak = { station: "KNYC", tz: TZ,
+    now: { ...ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR"), visibility_mi: 4, wx: "HZ" },
+    max_so_far_f: 90, today_hourlies: trace,
+    analogs: [{ hourlies: [ob(7, 14, 10, 51, 82, 66, null, 0, 1018.2, "CLR")], max_f: 90 }],
+    slp_24h_ago_mb: 1018.2 };
+  const cardB = predict(snapBreak, null, null, null);
+  ok("card: mixing_flag = dry_mixing_breakout", cardB.mixing_flag === "dry_mixing_breakout");
+  ok("card: A_mixing +1.5", approx(cardB.components.A_mixing, 1.5, 0.01));
+  ok("card: A_haze ≈ -1.07", approx(cardB.components.A_haze, -2.5 * 3 / 7, 0.01));
+  // belief: a breakout mid-climb is exactly when the analogs stop binding
+  const gB = gradeAnalogBelief({ peak_locked: false, dist: { sigma: 2.5, pTrunc: 0 }, advection_score: 0,
+    analog_audit: [{ weight: 0.5 }], mixing_flag: "dry_mixing_breakout" });
+  ok("grade: dry mixing breakout drags C → D", gB.grade === "D" && /breakout/.test(gB.why));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
