@@ -160,6 +160,35 @@ export function mixingSignal(snap, cfg) {
   return none;
 }
 
+// --- convergence pool (2026-07-15 KDEN, the $81 lesson) --------------------------
+// A DCVZ-prone station can sit in a shallow cold pool fed by an organized wind off
+// a cool fetch sector while the entire basin runs 4-6°F hotter: every airmass model
+// (NWS blend included) is then right about the county and wrong about the contract.
+// Detection: wind from the station's pool sector, >=5 kt (an organized feed — calm
+// pools cook off), and the official reading >= POOL_DIVERGENCE_F below the warmest
+// same-time neighbor. Effect: A_pool = -K_POOL x divergence (half, because pools
+// partially leak — 7/15 printed a 92 ridge and settled CLI 94), sigma x1.3, grade D.
+// Replayed on 7/15's 2:53 PM: neighbors 95, official 92, E10G23 → blend 96 - 1.5 =
+// 94.5 vs CLI 94.
+export const POOL_SECTORS = { KDEN: [[40, 160]] };
+export const POOL_DIVERGENCE_F = 3.5;
+export const K_POOL = 0.5;
+export const POOL_SIGMA_INFL = 1.3;
+
+export function convergencePool(snap, upstreamObs) {
+  const sectors = POOL_SECTORS[snap.station];
+  if (!sectors || !inSector(snap.now.wind_dir_deg, sectors)) return null;
+  if ((snap.now.wind_speed_kt || 0) < 5) return null;
+  const temps = Object.values(upstreamObs || {}).map(o => o?.temp_f).filter(Number.isFinite);
+  if (!temps.length) return null;
+  const basin = Math.max(...temps);
+  const div = basin - snap.now.temp_f;
+  if (div < POOL_DIVERGENCE_F) return null;
+  return { penalty: -K_POOL * div, divergence_f: +div.toFixed(1), basin_f: basin,
+    note: `convergence pool: official ${div.toFixed(1)}°F below warmest neighbor (${basin.toFixed(0)}°F) ` +
+          `under an organized ${snap.now.wind_dir_deg}° feed — microclimate decoupled, airmass models overshoot` };
+}
+
 // --- L2: informed-market tilt --------------------------------------------------
 // weight toward market grows with divergence: w = |d|/(|d|+3). Residual (what the
 // tilt does NOT close) becomes added-in-quadrature sigma.
@@ -266,11 +295,14 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   const rampClamped = ramp * rampCredit > rampCeil;
   const rampEff = rampClamped ? rampCeil : ramp * rampCredit;
 
-  // 2026-07-15 session signals: haze insolation cut + intraday mixing regime.
+  // 2026-07-15 session signals: haze insolation cut + intraday mixing regime +
+  // convergence-pool microclimate decoupling.
   const aHaze = hazeDiscount(snap);
   const mix = mixingSignal(snap, cfg);
+  const pool = convergencePool(snap, upstreamObs);
+  const aPool = pool ? pool.penalty : 0;
 
-  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp + aHaze + mix.kick;
+  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp + aHaze + mix.kick + aPool;
   mu = Math.max(mu, snap.max_so_far_f);
 
   // 2026-07-09 bugfix: sigma schedule runs on LOCAL hours (UTC shrank eastern
@@ -280,7 +312,7 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   if (h <= cfg.morning_hour) sigma = cfg.sigma_open;
   else if (h >= cfg.peak_hour) sigma = cfg.sigma_peak;
   else sigma = cfg.sigma_open + ((h - cfg.morning_hour) / (cfg.peak_hour - cfg.morning_hour)) * (cfg.sigma_peak - cfg.sigma_open);
-  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv) * mix.sigmaMult;
+  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv) * mix.sigmaMult * (pool ? POOL_SIGMA_INFL : 1);
 
   // L2 (post-hoc on the mean; sigma addition in quadrature)
   let tiltNote = "", extraSigma = 0;
@@ -296,9 +328,9 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
     station: snap.station, asof: snap.now.ts, dist,
     components: { T_now: snap.now.temp_f, "R_analog(eff)": rampEff, "R_analog(raw)": ramp,
       A_bowen: aBowen, A_trajectory: aTraj, A_airmass: aAir, A_sky: aSky, A_upstream: aUp,
-      A_haze: aHaze, A_mixing: mix.kick },
+      A_haze: aHaze, A_mixing: mix.kick, A_pool: aPool },
     analog_audit: audits, upstream_audit: upAudit, advection_score: adv,
-    ramp_clamped: rampClamped, mixing_flag: mix.flag,
+    ramp_clamped: rampClamped, mixing_flag: mix.flag, pool,
     peak_locked: false, lock_note: "", tilt_note: tiltNote,
     bin_probs: {}, market_pt: null, divergence_note: "",
   };
@@ -337,6 +369,7 @@ export function gradeAnalogBelief(card, { guarded = false, hrsToPeak = null } = 
   if (card.peak_locked) return { grade: "A", why: "peak locked — max is physically in" };
   if (guarded) return { grade: "D", why: "thin analog — persistence fallback, not a model belief" };
   if (card.ramp_clamped) return { grade: "D", why: "ramp clamped — analog climb exceeded the clock's physical ceiling" };
+  if (card.pool) return { grade: "D", why: `convergence pool — official ${card.pool.divergence_f}°F below basin, microclimate decoupled; airmass models overshoot` };
   let s = 3;                                    // C baseline
   const why = [];
   const sigma = card.dist.sigma;
