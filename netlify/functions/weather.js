@@ -6,8 +6,8 @@ import { fetch1MinObs, getTodayMaxMin, coverageCrossCheck } from "./lib/asos1min
 import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
-import { buildSnapshotV2 } from "./lib/metar.js";
-import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief } from "./lib/claude_analog_v3.js";
+import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
+import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -1498,6 +1498,27 @@ export default async (req) => {
     });
   }
 
+  // Upstream-neighbor current obs (2026-07-16): the inline dashboard card was
+  // calling claudePredict with NO upstream obs, so the L1 shield and the new
+  // convergence-pool signal could never fire on the number traders actually see
+  // (they only ran in the background-logged decisions). One cheap hours=3 fetch
+  // covers every neighbor; failures degrade to {} and every signal stays silent.
+  let neighborObs = {};
+  try {
+    const nids = [...new Set(Object.values(UPSTREAM_STATIONS).flat().map(u => u.station))];
+    const nr = await fetch(`https://aviationweather.gov/api/data/metar?ids=${nids.join(",")}&hours=3&format=raw`,
+      { headers: { "User-Agent": UA } });
+    if (nr.ok) {
+      const refNow = new Date();
+      for (const line of (await nr.text()).split("\n")) {
+        const m = line.match(/\b(K[A-Z]{3})\s+\d{6}Z/);
+        if (!m) continue;
+        const ob = parseMetar(line.trim(), refNow);
+        if (ob && (!neighborObs[m[1]] || ob.ts > neighborObs[m[1]].ts)) neighborObs[m[1]] = ob;
+      }
+    }
+  } catch { /* upstream layer is optional */ }
+
   let metarText = "";
   try { metarText = await fetchMetars(); }
   catch (e) {
@@ -1545,7 +1566,10 @@ export default async (req) => {
       const lines = metarText.split("\n").map(l => l.trim()).filter(l => stRe.test(l));
       const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: lines, maxSoFarF: result.maxSoFarCli ?? result.maxSoFar });
       if (snap) {
-        const card = claudePredict(snap);
+        const ups = {};
+        for (const u of UPSTREAM_STATIONS[c.station] || [])
+          if (neighborObs[u.station]) ups[u.station] = neighborObs[u.station];
+        const card = claudePredict(snap, null, null, null, ups);
         // Thin-analog guard: never predict "done warming" hours before peak just
         // because the analog was too sparse to yield a ramp (KLAX 8:53 AM read
         // high = current temp). Floors at damped persistence; flagged on the card.
@@ -1559,6 +1583,7 @@ export default async (req) => {
         // Expose the component breakdown so the card can answer "why this number".
         result.claudeComponents = Object.fromEntries(
           Object.entries(card.components).map(([k, v]) => [k, Math.round((+v) * 10) / 10]));
+        result.claudePool = card.pool || null;
       } else {
         result.claudeHigh = null;
       }
