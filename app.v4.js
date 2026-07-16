@@ -134,7 +134,8 @@ function renderCard(c) {
   // field came back null/absent — so a blank slot can't be confused with stale JS.
   const peek = `<span class="high-peek">HIGH <span class="peek-b">${c.mean.toFixed(0)}°</span> · ${
     cl && cl.point != null ? `<span class="peek-c">${(+cl.point).toFixed(0)}°</span>${gradeChip}` : `<span class="muted">n/a</span>`}${
-    cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</span>`;
+    cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}${
+    c.claudePool ? ` <span class="tag" title="${(c.claudePool.note || "").replace(/"/g, "'")}" style="color:#6cf">🧊 pool −${c.claudePool.divergence_f}°</span>` : ""}</span>`;
   return `<details class="card" id="${cardId}"${openCards.has(cardId) ? " open" : ""}>
     <summary class="card-summary">
       <div class="card-head">
