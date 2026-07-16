@@ -1,7 +1,7 @@
 // Parity test: lib/claude_analog_v3.js must reproduce claude_analog_v3.py's
 // 2026-07-09 KNYC post-mortem replay (L1 upstream / L2 tilt / L3 lock / L4 guard).
 // No network. Run: node test_claude_analog_v3.js
-import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS, hazeDiscount, mixingSignal } from "./netlify/functions/lib/claude_analog_v3.js";
+import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS, hazeDiscount, mixingSignal, convergencePool } from "./netlify/functions/lib/claude_analog_v3.js";
 import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
@@ -174,6 +174,28 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   const gB = gradeAnalogBelief({ peak_locked: false, dist: { sigma: 2.5, pTrunc: 0 }, advection_score: 0,
     analog_audit: [{ weight: 0.5 }], mixing_flag: "dry_mixing_breakout" });
   ok("grade: dry mixing breakout drags C → D", gB.grade === "D" && /breakout/.test(gB.why));
+}
+
+// ---- convergence pool (2026-07-15 KDEN: prints ridge 92, CLI 94, basin 95-96) ----
+{
+  const TZD = "America/Denver";
+  const obD = (h, mi, t, dir, spd) => ({ ts: new Date(Date.UTC(2026, 6, 15, h + 6, mi)), temp_f: t,
+    dewpoint_f: 44, wind_dir_deg: dir, wind_speed_kt: spd, slp_mb: 1010, sky: "FEW110" });
+  const snap253 = { station: "KDEN", tz: TZD, now: obD(14, 53, 92, 90, 10), max_so_far_f: 92,
+    analogs: [{ hourlies: [obD(14, 53, 94, 130, 15)], max_f: 95 }], slp_24h_ago_mb: 1012.1 };
+  const UPW = { KAPA: obD(14, 53, 95, 200, 6), KBJC: obD(14, 47, 96, 250, 4) };
+  const pool = convergencePool(snap253, UPW);
+  ok("pool: 7/15 2:53 fixture fires (div 4.0)", pool && pool.divergence_f === 4);
+  ok("pool: penalty is half the divergence", Math.abs(pool.penalty + 2) < 1e-9);
+  ok("pool: calm feed -> null (pools cook off)", convergencePool({ ...snap253, now: obD(14, 53, 92, 90, 3) }, UPW) === null);
+  ok("pool: westerly wind -> null (not the pool sector)", convergencePool({ ...snap253, now: obD(14, 53, 92, 270, 10) }, UPW) === null);
+  ok("pool: small divergence -> null", convergencePool(snap253, { KAPA: obD(14, 53, 94, 200, 6) }) === null);
+  ok("pool: no neighbors -> null", convergencePool(snap253, {}) === null);
+  const card = predict(snap253, null, null, null, UPW);
+  ok("card: A_pool applied", Math.abs(card.components.A_pool + 2) < 1e-9);
+  ok("card: pool object carried", card.pool && /decoupled/.test(card.pool.note));
+  const g = gradeAnalogBelief(card, { hrsToPeak: 1 });
+  ok("grade: pooled day capped low with the why", ["D","F"].includes(g.grade) && /pool/.test(g.why));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
