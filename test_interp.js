@@ -5,7 +5,7 @@ import {
   weightedPolyfit, recencyWeight, mergeKnycPws, stationStats, stationWeights,
   fitPeakBias, peakBiasFactor, applyPeakBias, pwsRegressionEstimate,
   deltaNowcast, blendNowEstimate, assessSpread,
-  fitRampBias, weightedMedian, replayInterp, scoreReplay, detectPuddle, selectStationsDiverse,
+  fitRampBias, weightedMedian, replayInterp, scoreReplay, detectPuddle, selectStationsDiverse, detectSmoke,
 } from "./netlify/functions/lib/interp_knyc.js";
 
 let pass = 0, fail = 0;
@@ -212,6 +212,21 @@ ok("applyPeakBias: est+bias·factor·0.65", approx(applyPeakBias(95, 95, 2), 95 
   const sel = selectStationsDiverse(stats, bearings, 4);
   ok("diversity: one station per quadrant first", ["N1","E1","S1"].every(s => sel.includes(s)));
   ok("diversity: best western fills the rest", sel.includes("W1") && sel.length === 4);
+}
+
+// --- smoke gate (2026-07-17 KDCA) ---
+{
+  const now = 1000 * 3600e3;
+  const fresh = now - 20 * 60e3;
+  // KDCA 12:52: 89/60, 2.5mi FU under the plume ceiling
+  const s = detectSmoke({ tempF: 89, tsMs: fresh, vis: 2.5, wx: "FU" }, now);
+  ok("smoke: 2.5mi FU fresh anchor -> flagged shield", s && s.shield === true && /off-regime/.test(s.note));
+  ok("smoke: 5mi FU -> null (thin plume, not a shield gate)", detectSmoke({ tempF: 90, tsMs: fresh, vis: 5, wx: "FU" }, now) === null);
+  ok("smoke: 1.5mi FU shield flag", detectSmoke({ tempF: 82, tsMs: fresh, vis: 1.5, wx: "FU" }, now).shield === true);
+  ok("smoke: 3.5mi FU is a gate but not a shield", detectSmoke({ tempF: 88, tsMs: fresh, vis: 3.5, wx: "FU" }, now).shield === false);
+  ok("smoke: haze (HZ) not smoke -> null", detectSmoke({ tempF: 90, tsMs: fresh, vis: 2.5, wx: "HZ" }, now) === null);
+  ok("smoke: stale anchor -> null", detectSmoke({ tempF: 89, tsMs: now - 2 * 3600e3, vis: 2.5, wx: "FU" }, now) === null);
+  ok("smoke: no vis -> null", detectSmoke({ tempF: 89, tsMs: fresh, vis: null, wx: "FU" }, now) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
