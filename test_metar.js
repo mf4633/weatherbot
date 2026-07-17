@@ -41,6 +41,11 @@ ok("M1/4SM → 0.25, FG", approx(m6.visibility_mi, 0.25, 0.001) && m6.wx === "FG
 // codes after RMK must not leak into wx
 const m7 = parseMetar("KDEN 151453Z 18008KT 10SM CLR 30/10 A3002 RMK AO2 FU LYR ALQDS T03000100", ref);
 ok("RMK-only FU ignored", m7.wx === "" && m7.visibility_mi === 10);
+// 2026-07-17 KDCA smoke tape: VV020 = sky obscured by the plume itself
+const m8 = parseMetar("KDCA 171252Z 00000KT 1 1/2SM FU VV020 28/17 A3007 RMK AO2 SLP183", ref);
+ok("smoke day: 1.5SM FU + VV020 obscured", approx(m8.visibility_mi, 1.5, 0.001) && m8.wx === "FU" && m8.sky_obscured === true);
+ok("smoke day: VV020 kept in sky string", /VV020/.test(m8.sky));
+ok("clean day: sky_obscured false", m1.sky_obscured === false);
 
 // Snapshot build: two local days, yesterday max + now + slp-24h-ago.
 const lines = [
