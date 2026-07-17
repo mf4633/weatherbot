@@ -302,6 +302,31 @@ export function detectPuddle(regEstimate, anchor, nowMs) {
     : `official sensor running ${-div}°F HOT vs calibrated network — localized heating; airmass models undershoot here` };
 }
 
+// Smoke gate (2026-07-17 KDCA): a wildfire smoke plume (FU, low visibility) breaks
+// the interp's two hidden assumptions at once. (1) The PWS regression self-calibrates
+// against recent official obs — but only if the plume covers the network uniformly;
+// a patchy plume puts proxies in different insolation than the official sensor, the
+// same correlated-geometry failure the puddle detector guards, now driven by aerosol
+// instead of terrain. (2) The peak-bias fit is trained on clear-sky afternoon PWS
+// overheating; under a shield the overheating is suppressed, so the learned bias is
+// off-regime and over-corrects. When the fresh official anchor reports FU below
+// SMOKE_VIS_MI, widen reliability and say so — the estimate is softer than its spread
+// suggests, and the settlement dynamics (shield cap vs dry-mixing punch-through) are
+// exactly what the KDCA smokeShield engine signal, not the interp, is there to price.
+export const SMOKE_VIS_MI = 4.0;
+export function detectSmoke(anchor, nowMs) {
+  if (!anchor || (nowMs - anchor.tsMs) > 75 * 60e3) return null;
+  if (anchor.vis == null || !/\bFU\b/.test(anchor.wx || "")) return null;
+  if (anchor.vis > SMOKE_VIS_MI) return null;
+  const shield = anchor.vis <= 3.0;
+  return {
+    vis_mi: anchor.vis, shield,
+    note: `official under smoke (${anchor.vis}mi FU${shield ? ", shield" : ""}) — plume may not cover the PWS ` +
+      `network uniformly and the peak-bias fit is off-regime; estimate reliability reduced, ` +
+      `lean on the :51/:52 official print and the engine smoke signal for the settle`,
+  };
+}
+
 // Azimuthally diverse discovery (2026-07-15: all five DEN stations sat WEST of the
 // airport, so the DCVZ put every proxy in different air than the official at once —
 // correlated failure by geometry). Guarantee the best quality-passing station in

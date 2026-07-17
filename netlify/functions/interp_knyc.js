@@ -1,9 +1,9 @@
 // /api/interp_knyc (alias /api/interp) — live interpolated official-sensor temp
 // from nearby Weather.com PWS, calibrated against the last 48h of official METARs.
 // JS port of the user's interpolatornyc pipeline (see lib/interp_knyc.js).
-// ?city=NYC (default) | DEN | LAX.
+// ?city=NYC (default) | DEN | LAX | PHX | DCA.
 //
-// NYC uses the user's hand-validated 6 stations (pinned). DEN/LAX discover
+// NYC uses the user's hand-validated 6 stations (pinned). All others discover
 // candidates via weather.com's location-near API, then let the calibration pick:
 // stations are kept only if they track the official sensor (r^2>=0.5, rmse<=4F)
 // and the top 6 by r^2/(rmse^2+0.01) survive — same weighting as the estimate
@@ -15,6 +15,7 @@ import { stationLines } from "./lib/claude_engine.js";
 import {
   PWS_STATIONS, mergeKnycPws, stationStats, stationWeights, fitPeakBias,
   pwsRegressionEstimate, deltaNowcast, blendNowEstimate, selectStations, assessSpread, detectPuddle,
+  detectSmoke,
 } from "./lib/interp_knyc.js";
 
 // Weather.com's public frontend key (shipped in the user's upload). Override via env.
@@ -29,6 +30,10 @@ const CITIES = {
   DEN: { official: "KDEN", tz: "America/Denver", geocode: "39.8561,-104.6737" },
   LAX: { official: "KLAX", tz: "America/Los_Angeles", geocode: "33.9382,-118.3866" },
   PHX: { official: "KPHX", tz: "America/Phoenix", geocode: "33.4278,-112.0038" },
+  // KDCA sits in the Potomac river-notch — the urban PWS ring runs warm on hot
+  // afternoons, which the puddle detector surfaces as an official-COLD divergence;
+  // the smoke gate handles the 2026-07-17 wildfire regime.
+  DCA: { official: "KDCA", tz: "America/New_York", geocode: "38.8512,-77.0402" },
 };
 
 async function getJson(url) {
@@ -76,7 +81,7 @@ async function fetchOfficialObs(station) {
   const refNow = new Date();
   return stationLines(await r.text(), station)
     .map(l => parseMetar(l, refNow)).filter(Boolean)
-    .map(o => ({ tsMs: o.ts.getTime(), tempF: o.temp_f }))
+    .map(o => ({ tsMs: o.ts.getTime(), tempF: o.temp_f, vis: o.visibility_mi, wx: o.wx }))
     .filter(o => Number.isFinite(o.tempF))
     .sort((a, b) => a.tsMs - b.tsMs);
 }
@@ -157,6 +162,7 @@ async function compute(cityKey) {
   const round1 = (x) => x == null ? null : Math.round(x * 10) / 10;
   const rel = assessSpread(reg.perStation);
   const puddle = detectPuddle(reg.estimate, { tempF: anchor.tempF, tsMs: anchor.tsMs }, nowMs);
+  const smoke = detectSmoke(anchor, nowMs);
   return {
     ok: true, city: cityKey, official: cfg.official, asof: now.toISOString(),
     discovered: resolved.discovered,
@@ -169,8 +175,10 @@ async function compute(cityKey) {
       peak_bias: round1(peakBias),
     },
     spread: [round1(Math.min(...reg.perStation.map(p => p.est))), round1(Math.max(...reg.perStation.map(p => p.est)))],
-    reliability: { reliable: rel.reliable, width: round1(rel.width), note: rel.note },
+    reliability: { reliable: rel.reliable && !smoke, width: round1(rel.width),
+      note: [rel.note, smoke?.note].filter(Boolean).join(" · ") },
     puddle,
+    smoke,
     stations: weighted.map(s => ({
       station: s.station, name: resolved.names[s.station] || s.station,
       r: round1(s.r), rmse: round1(s.rmse), slope: Math.round(s.slope * 1000) / 1000,
@@ -187,7 +195,7 @@ const json = (o, s = 200) => new Response(JSON.stringify(o, null, 2),
 export default async (req) => {
   const url = new URL(req.url);
   const cityKey = (url.searchParams.get("city") || "NYC").toUpperCase();
-  if (!CITIES[cityKey]) return json({ ok: false, error: `unknown city ${cityKey} (NYC|DEN|LAX)` }, 400);
+  if (!CITIES[cityKey]) return json({ ok: false, error: `unknown city ${cityKey} (NYC|DEN|LAX|PHX|DCA)` }, 400);
   const force = url.searchParams.get("force") === "1";
   const store = getStore("claude_scoreboard");
   const cacheKey = `interp/cache_${cityKey}.json`;
