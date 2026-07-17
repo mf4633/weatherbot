@@ -10,7 +10,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { score, evaluateGate } from "./lib/scoreboard.js";
-import { runPredict, runSettle, STORE, round1 } from "./lib/claude_engine.js";
+import { runPredict, runSettle, runAccuReport, STORE, round1 } from "./lib/claude_engine.js";
 
 // Re-export so test_claude.js (and anything else) can import the CLI parser here.
 export { parseCliProduct } from "./lib/claude_engine.js";
@@ -90,6 +90,7 @@ export default async (req) => {
     if (mode === "latest") return json(await runLatest());
     if (mode === "status") return json(await runStatus());
     if (mode === "backtest") return json(await runBacktest());
+    if (mode === "accu_report") return json(await runAccuReport(+(new URL(req.url).searchParams.get("days") || 14)));
     // Heavy: recompute + (optionally) log. Prefer claude_log-background.js for logging.
     return json(await runPredict(new URL(req.url).searchParams.get("log") !== "0"));
   } catch (e) {
