@@ -1584,6 +1584,7 @@ export default async (req) => {
         result.claudeComponents = Object.fromEntries(
           Object.entries(card.components).map(([k, v]) => [k, Math.round((+v) * 10) / 10]));
         result.claudePool = card.pool || null;
+        result.claudeSmoke = card.smoke || null;
       } else {
         result.claudeHigh = null;
       }

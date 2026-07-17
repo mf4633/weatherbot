@@ -106,9 +106,44 @@ export const K_HAZE = 2.5;
 
 export function hazeDiscount(snap) {
   const ob = snap.now;
-  if (ob.visibility_mi == null || !/\b(HZ|FU)\b/.test(ob.wx || "")) return 0;
+  // FU (smoke) is owned by smokeShield below — a plume is a shield, not a tint.
+  if (ob.visibility_mi == null || /\bFU\b/.test(ob.wx || "") || !/\bHZ\b/.test(ob.wx || "")) return 0;
   const deficit = Math.max(0, Math.min(1, (HAZE_VIS_CEILING_MI - ob.visibility_mi) / HAZE_VIS_CEILING_MI));
   return -K_HAZE * deficit;
+}
+
+// --- A_smoke: smoke radiation shield (2026-07-17 KDCA) --------------------------
+// Wildfire smoke (FU) below ~3 miles is a full radiation shield, not a haze tint:
+// KDCA ran -5°F on yesterday's clock at noon under 14 straight hours of 1.25-3mi
+// FU, with the ceilometer painting the plume as OVC030-035 and VV020 (sky
+// obscured) at mid-morning. The market priced it; the NWS grid didn't.
+// The counter-lesson from the same tape: the tax is NOT unconditional. A frontal
+// drydown left T-Td ≈ 29°F and the dry deep mixing drove +9°F in 5h THROUGH the
+// shield. So: penalty scales with the visibility deficit, is relieved by the
+// spread, sigma inflates either way, and the analog grade caps at D — analog
+// days don't bind through a plume in either direction.
+export const SMOKE_VIS_CEILING_MI = 7.0;
+export const K_SMOKE = 4.0;
+export const SMOKE_DRY_RELIEF_MAX = 0.5;
+export const SMOKE_SIGMA_INFL = 1.35;
+export const SMOKE_SHIELD_VIS_MI = 3.0;
+
+export function smokeShield(snap) {
+  const ob = snap.now;
+  if (ob.visibility_mi == null || !/\bFU\b/.test(ob.wx || "")) return null;
+  const deficit = Math.max(0, Math.min(1, (SMOKE_VIS_CEILING_MI - ob.visibility_mi) / SMOKE_VIS_CEILING_MI));
+  if (deficit <= 0) return null;
+  const spread = ob.dewpoint_f == null ? 0 : ob.temp_f - ob.dewpoint_f;
+  const relief = Math.max(0, Math.min(SMOKE_DRY_RELIEF_MAX, (spread - 15) / 20));
+  const penalty = -K_SMOKE * deficit * (1 - relief);
+  return {
+    penalty: +penalty.toFixed(2),
+    vis_mi: ob.visibility_mi,
+    obscured: !!ob.sky_obscured,
+    dry_relief: +relief.toFixed(2),
+    shield: ob.visibility_mi <= SMOKE_SHIELD_VIS_MI,
+    note: `smoke ${ob.visibility_mi}mi FU${ob.sky_obscured ? ", sky obscured" : ""}, T-Td ${Math.round(spread)}°F → ${Math.round(relief * 100)}% dry relief`,
+  };
 }
 
 // --- mixing signal (2026-07-15 KNYC session) ------------------------------------
@@ -298,11 +333,13 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   // 2026-07-15 session signals: haze insolation cut + intraday mixing regime +
   // convergence-pool microclimate decoupling.
   const aHaze = hazeDiscount(snap);
+  const smoke = smokeShield(snap);
+  const aSmoke = smoke ? smoke.penalty : 0;
   const mix = mixingSignal(snap, cfg);
   const pool = convergencePool(snap, upstreamObs);
   const aPool = pool ? pool.penalty : 0;
 
-  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp + aHaze + mix.kick + aPool;
+  let mu = snap.now.temp_f + rampEff + aBowen + aTraj + aAir + aSky + aUp + aHaze + aSmoke + mix.kick + aPool;
   mu = Math.max(mu, snap.max_so_far_f);
 
   // 2026-07-09 bugfix: sigma schedule runs on LOCAL hours (UTC shrank eastern
@@ -312,7 +349,7 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
   if (h <= cfg.morning_hour) sigma = cfg.sigma_open;
   else if (h >= cfg.peak_hour) sigma = cfg.sigma_peak;
   else sigma = cfg.sigma_open + ((h - cfg.morning_hour) / (cfg.peak_hour - cfg.morning_hour)) * (cfg.sigma_peak - cfg.sigma_open);
-  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv) * mix.sigmaMult * (pool ? POOL_SIGMA_INFL : 1);
+  sigma *= upSigmaMult * (1.0 + (ADVECTION_SIGMA_INFL - 1.0) * adv) * mix.sigmaMult * (pool ? POOL_SIGMA_INFL : 1) * (smoke ? SMOKE_SIGMA_INFL : 1);
 
   // L2 (post-hoc on the mean; sigma addition in quadrature)
   let tiltNote = "", extraSigma = 0;
@@ -328,9 +365,9 @@ export function predict(snap, cfg = null, kalshiBins = null, marketBookCents = n
     station: snap.station, asof: snap.now.ts, dist,
     components: { T_now: snap.now.temp_f, "R_analog(eff)": rampEff, "R_analog(raw)": ramp,
       A_bowen: aBowen, A_trajectory: aTraj, A_airmass: aAir, A_sky: aSky, A_upstream: aUp,
-      A_haze: aHaze, A_mixing: mix.kick, A_pool: aPool },
+      A_haze: aHaze, A_smoke: aSmoke, A_mixing: mix.kick, A_pool: aPool },
     analog_audit: audits, upstream_audit: upAudit, advection_score: adv,
-    ramp_clamped: rampClamped, mixing_flag: mix.flag, pool,
+    ramp_clamped: rampClamped, mixing_flag: mix.flag, pool, smoke,
     peak_locked: false, lock_note: "", tilt_note: tiltNote,
     bin_probs: {}, market_pt: null, divergence_note: "",
   };
@@ -370,6 +407,7 @@ export function gradeAnalogBelief(card, { guarded = false, hrsToPeak = null } = 
   if (guarded) return { grade: "D", why: "thin analog — persistence fallback, not a model belief" };
   if (card.ramp_clamped) return { grade: "D", why: "ramp clamped — analog climb exceeded the clock's physical ceiling" };
   if (card.pool) return { grade: "D", why: `convergence pool — official ${card.pool.divergence_f}°F below basin, microclimate decoupled; airmass models overshoot` };
+  if (card.smoke && card.smoke.shield) return { grade: "D", why: `smoke shield — ${card.smoke.note}; analogs don't bind through a plume` };
   let s = 3;                                    // C baseline
   const why = [];
   const sigma = card.dist.sigma;

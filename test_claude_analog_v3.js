@@ -1,7 +1,7 @@
 // Parity test: lib/claude_analog_v3.js must reproduce claude_analog_v3.py's
 // 2026-07-09 KNYC post-mortem replay (L1 upstream / L2 tilt / L3 lock / L4 guard).
 // No network. Run: node test_claude_analog_v3.js
-import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS, hazeDiscount, mixingSignal, convergencePool } from "./netlify/functions/lib/claude_analog_v3.js";
+import { predict, upstreamAdvection, detectPeakLock, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS, hazeDiscount, smokeShield, mixingSignal, convergencePool } from "./netlify/functions/lib/claude_analog_v3.js";
 import { getConfig } from "./netlify/functions/lib/claude_analog_v2.js";
 
 let pass = 0, fail = 0;
@@ -134,7 +134,7 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   const hz = (vis, wx) => ({ now: { ...ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR"), visibility_mi: vis, wx } });
   // KNYC 10:51 printed "4SM HZ" under CLR — deficit (7-4)/7, k 2.5 ≈ -1.07
   ok("haze: 4SM HZ ≈ -1.07", approx(hazeDiscount(hz(4, "HZ")), -2.5 * 3 / 7, 0.01));
-  ok("haze: smoke counts too", hazeDiscount(hz(3, "FU")) < -1.4);
+  ok("haze: FU handed off to smokeShield (no double count)", hazeDiscount(hz(3, "FU")) === 0);
   ok("haze: clean 10SM → 0", hazeDiscount(hz(10, "")) === 0);
   ok("haze: low vis without HZ/FU code → 0 (rain/fog is the deck's job)", hazeDiscount(hz(4, "")) === 0);
   ok("haze: vis missing → 0", hazeDiscount({ now: ob(7, 15, 10, 51, 90, 69, 270, 8, 1010.6, "CLR") }) === 0);
@@ -196,6 +196,38 @@ ok("upstream maps well-formed, no self-ref", Object.entries(UPSTREAM_STATIONS).e
   ok("card: pool object carried", card.pool && /decoupled/.test(card.pool.note));
   const g = gradeAnalogBelief(card, { hrsToPeak: 1 });
   ok("grade: pooled day capped low with the why", ["D","F"].includes(g.grade) && /pool/.test(g.why));
+}
+
+// ---- 2026-07-17 KDCA smoke shield: FU is a shield, dryness is the relief ----
+{
+  const fu = (t, dp, vis, obsc) => ({ now: { ...ob(7, 17, 10, 52, t, dp, 0, 3, 1018.0, "OVC030"),
+    visibility_mi: vis, wx: "FU", sky_obscured: !!obsc } });
+  // KDCA 8:52am verbatim: 82/62, 1.5mi FU, VV020. deficit (7-1.5)/7, relief (20-15)/20=0.25
+  const s852 = smokeShield(fu(82, 62, 1.5, true));
+  ok("smoke 8:52: penalty -2.36", approx(s852.penalty, -4.0 * (5.5 / 7) * 0.75, 0.01));
+  ok("smoke 8:52: shield (vis ≤3) + obscured carried", s852.shield === true && s852.obscured === true);
+  // KDCA 12:52pm: 89/60, 2.5mi FU. spread 29 → relief capped at 0.5 — the dry
+  // mixing that drove +9°F/5h through the plume halves the tax, never erases it.
+  const s1252 = smokeShield(fu(89, 60, 2.5, false));
+  ok("smoke 12:52: dry relief capped at 50%", approx(s1252.dry_relief, 0.5, 0.001));
+  ok("smoke 12:52: penalty -1.29", approx(s1252.penalty, -4.0 * (4.5 / 7) * 0.5, 0.01));
+  ok("smoke: thin plume (5mi) is a tint, not a shield", smokeShield(fu(90, 65, 5, false)).shield === false);
+  ok("smoke: vis ≥7 → null", smokeShield(fu(90, 65, 8, false)) === null);
+  ok("smoke: no FU code → null", smokeShield({ now: { ...ob(7, 17, 10, 52, 88, 60, 0, 3, 1018.0, "OVC030"), visibility_mi: 2.5, wx: "HZ" } }) === null);
+
+  // predict() integration: A_smoke lands, sigma inflates, belief caps at D
+  const snapFu = { station: "KDCA", tz: TZ,
+    now: { ...ob(7, 17, 12, 52, 89, 60, 160, 5, 1018.1, "OVC030"), visibility_mi: 2.5, wx: "FU", sky_obscured: false },
+    max_so_far_f: 90,
+    analogs: [{ hourlies: [ob(7, 16, 12, 52, 92, 75, 180, 9, 1013.7, "FEW045")], max_f: 99 }],
+    slp_24h_ago_mb: 1013.7 };
+  const cardS = predict(snapFu, null, null, null);
+  ok("card: A_smoke ≈ -1.29", approx(cardS.components.A_smoke, -1.29, 0.02));
+  ok("card: smoke object carried", cardS.smoke && cardS.smoke.shield === true);
+  const noFu = predict({ ...snapFu, now: { ...snapFu.now, wx: "", visibility_mi: 10 } }, null, null, null);
+  ok("card: σ inflated 1.35 vs clean-sky twin", cardS.dist.sigma > noFu.dist.sigma * 1.2);
+  const gS = gradeAnalogBelief(cardS, { hrsToPeak: 4 });
+  ok("grade: plume day capped at D with the why", gS.grade === "D" && /smoke shield/.test(gS.why));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

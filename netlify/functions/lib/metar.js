@@ -55,8 +55,11 @@ export function parseMetar(line, refNow) {
   }
   if (tempC == null) return null;
   const w = line.match(/\b(\d{3}|VRB)(\d{2,3})(?:G\d{2,3})?KT\b/);
-  const sky = (line.match(/\b(?:FEW|SCT|BKN|OVC)\d{3}\b/g) || []).join(" ") ||
+  // VV = indefinite ceiling / sky obscured (2026-07-17 KDCA smoke: "VV020 2 1/2SM FU"
+  // is the plume itself acting as the ceiling — score it like a full overcast).
+  const sky = (line.match(/\b(?:FEW|SCT|BKN|OVC|VV)\d{3}\b/g) || []).join(" ") ||
               (/\b(?:CLR|SKC|NSC|NCD)\b/.test(line) ? "CLR" : "");
+  const skyObscured = /\bVV\d{3}\b/.test(line.split(/\bRMK\b/)[0]);
   return {
     ts,
     temp_f: c2f(tempC),
@@ -67,6 +70,7 @@ export function parseMetar(line, refNow) {
     sky,
     visibility_mi: visibilityFrom(line),
     wx: wxFrom(line),
+    sky_obscured: skyObscured,
   };
 }
 
