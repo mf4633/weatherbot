@@ -8,6 +8,7 @@
 import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./metar.js";
 import { predict, UPSTREAM_STATIONS, gradeAnalogBelief, thinAnalogGuard } from "./claude_analog_v3.js";
+import { accuCityAllowed, accuHourAllowed, accuImpliedHigh, scoreAccuDecisions } from "./accuweather.js";
 
 export const SITE = "https://weatherbot-mf.netlify.app";
 export const AUTH = "Basic " + btoa("internal:hydro");
@@ -146,6 +147,17 @@ export async function runPredict(doLog) {
       sizing: sizingCard ? { point: round1(sizingCard.dist.mean()), bin_probs: sizingCard.bin_probs, note: sizingCard.tilt_note } : null,
     };
     const divergence = bayes ? round1(d.mean() - bayes.point) : null;
+    // AccuWeather forward-log leg (2026-07-17): same asof as bayes/claude/nws so the
+    // accu_report comparison is matched-pair. Quota-capped, city- and hour-gated;
+    // a fetch failure logs the error but never blocks the decision write.
+    let accu = null;
+    const accuApiKey = process.env.ACCUWEATHER_API_KEY;
+    if (store && accuApiKey && accuCityAllowed(c.name) && accuHourAllowed(localHour(c.tz))) {
+      try {
+        accu = await accuImpliedHigh(store, accuApiKey,
+          { station: c.station, tz: c.tz, maxSoFarF: c.maxSoFarCli ?? c.maxSoFar ?? null });
+      } catch (e) { errors.push(`accu ${c.station}: ${String(e?.message || e)}`); }
+    }
     out.push({ city: c.name, station: c.station, claude, bayes, market, divergence });
     if (store) {
       const date = localDate(c.tz);
@@ -154,7 +166,7 @@ export async function runPredict(doLog) {
       try {
         await store.setJSON(`dec/${c.station}/${date}/${String(localHour(c.tz)).padStart(2, "0")}.json`,
           { type: "decision", city: c.name, station: c.station, cli: c.cli || null, contract_date: date, asof: now,
-            claude, bayes, market, nws: c.forecastHighF ?? c.nwsHighF ?? null });
+            claude, bayes, market, nws: c.forecastHighF ?? c.nwsHighF ?? null, accu });
         logged++;
       } catch (e) {
         errors.push(`${c.station}: ${String(e?.message || e)}`);
@@ -200,6 +212,35 @@ async function fetchCliMaxFor(cli, targetDate) {
     } catch { /* try next version */ }
   }
   return null;
+}
+
+// AccuWeather vs bayes/claude/nws on settled decisions (matched-pair by asof).
+// Only decision records that actually carry an accu leg are scored, so the report
+// is empty until ACCUWEATHER_API_KEY is set and the cron has logged through a
+// settle. Scans the last `days` of settled dates to bound blob reads.
+export async function runAccuReport(days = 14) {
+  const store = getStore(STORE);
+  const cutoff = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
+  const { blobs: settleBlobs } = await store.list({ prefix: "settle/" });
+  const cliMaxByKey = {};
+  for (const b of settleBlobs || []) {
+    const [, station, dateJson] = b.key.split("/");
+    const date = dateJson.replace(/\.json$/, "");
+    if (date < cutoff) continue;
+    const s = await store.get(b.key, { type: "json" }).catch(() => null);
+    if (s?.cli_max != null) cliMaxByKey[`${station}|${date}`] = s.cli_max;
+  }
+  const { blobs: decBlobs } = await store.list({ prefix: "dec/" });
+  const decisions = [];
+  for (const b of decBlobs || []) {
+    const [, station, date] = b.key.split("/");
+    if (cliMaxByKey[`${station}|${date}`] == null) continue;
+    const d = await store.get(b.key, { type: "json" }).catch(() => null);
+    if (d?.accu?.implied_high != null) decisions.push(d);
+  }
+  const report = scoreAccuDecisions(decisions, cliMaxByKey);
+  return { ok: true, mode: "accu_report", days, settled_days: Object.keys(cliMaxByKey).length,
+           scored_decisions: report.overall.accu.n, ...report };
 }
 
 export async function runSettle() {
