@@ -187458,5 +187458,1825 @@
     "settle": {
       "extremumF": null
     }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "New York",
+    "cli": "NYC",
+    "tz": "America/New_York",
+    "dateLocal": "2026-07-18",
+    "localHour": 10,
+    "currentTemp": 75.9,
+    "maxSoFar": 75,
+    "minSoFar": 72,
+    "modelMean": 79.9,
+    "modelStd": 2.87,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHNY-26JUL18-B83.5",
+        "loInt": 83,
+        "hiInt": 84,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "10232.25",
+        "volume24h": "10175.86"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL18-T86",
+        "loInt": 87,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "12805.55",
+        "volume24h": "12758.31"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL18-B85.5",
+        "loInt": 85,
+        "hiInt": 86,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "12534.62",
+        "volume24h": "12452.17"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL18-B81.5",
+        "loInt": 81,
+        "hiInt": 82,
+        "yes_ask": 0.06,
+        "yes_bid": 0.05,
+        "no_ask": 0.95,
+        "no_bid": 0.94,
+        "last": 0.04,
+        "volume": "15274.99",
+        "volume24h": "14861.86"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL18-T79",
+        "loInt": null,
+        "hiInt": 78,
+        "yes_ask": 0.76,
+        "yes_bid": 0.74,
+        "no_ask": 0.26,
+        "no_bid": 0.24,
+        "last": 0.77,
+        "volume": "37433.90",
+        "volume24h": "36825.52"
+      },
+      {
+        "ticker": "KXHIGHNY-26JUL18-B79.5",
+        "loInt": 79,
+        "hiInt": 80,
+        "yes_ask": 0.21,
+        "yes_bid": 0.2,
+        "no_ask": 0.8,
+        "no_bid": 0.79,
+        "last": 0.21,
+        "volume": "19596.50",
+        "volume24h": "19414.96"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Los Angeles",
+    "cli": "LAX",
+    "tz": "America/Los_Angeles",
+    "dateLocal": "2026-07-18",
+    "localHour": 7,
+    "currentTemp": 72,
+    "maxSoFar": 71,
+    "minSoFar": 70,
+    "modelMean": 79.3,
+    "modelStd": 5.67,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHLAX-26JUL18-B72.5",
+        "loInt": 72,
+        "hiInt": 73,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "10961.17",
+        "volume24h": "10755.83"
+      },
+      {
+        "ticker": "KXHIGHLAX-26JUL18-B74.5",
+        "loInt": 74,
+        "hiInt": 75,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "20633.96",
+        "volume24h": "20067.39"
+      },
+      {
+        "ticker": "KXHIGHLAX-26JUL18-T72",
+        "loInt": null,
+        "hiInt": 71,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "3243.33",
+        "volume24h": "3226.33"
+      },
+      {
+        "ticker": "KXHIGHLAX-26JUL18-B78.5",
+        "loInt": 78,
+        "hiInt": 79,
+        "yes_ask": 0.34,
+        "yes_bid": 0.33,
+        "no_ask": 0.67,
+        "no_bid": 0.66,
+        "last": 0.33,
+        "volume": "22914.80",
+        "volume24h": "22208.20"
+      },
+      {
+        "ticker": "KXHIGHLAX-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.05,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.95,
+        "last": 0.04,
+        "volume": "22627.19",
+        "volume24h": "22395.65"
+      },
+      {
+        "ticker": "KXHIGHLAX-26JUL18-T79",
+        "loInt": 80,
+        "hiInt": null,
+        "yes_ask": 0.66,
+        "yes_bid": 0.65,
+        "no_ask": 0.35,
+        "no_bid": 0.34,
+        "last": 0.66,
+        "volume": "55108.19",
+        "volume24h": "54580.96"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Chicago",
+    "cli": "MDW",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 86,
+    "maxSoFar": 86,
+    "minSoFar": 79,
+    "modelMean": 88.4,
+    "modelStd": 3.12,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHCHI-26JUL18-T96",
+        "loInt": 97,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "2676.56",
+        "volume24h": "2642.56"
+      },
+      {
+        "ticker": "KXHIGHCHI-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1401.36",
+        "volume24h": "1324.07"
+      },
+      {
+        "ticker": "KXHIGHCHI-26JUL18-B91.5",
+        "loInt": 91,
+        "hiInt": 92,
+        "yes_ask": 0.2,
+        "yes_bid": 0.19,
+        "no_ask": 0.81,
+        "no_bid": 0.8,
+        "last": 0.18,
+        "volume": "6922.07",
+        "volume24h": "6905.68"
+      },
+      {
+        "ticker": "KXHIGHCHI-26JUL18-B89.5",
+        "loInt": 89,
+        "hiInt": 90,
+        "yes_ask": 0.37,
+        "yes_bid": 0.35,
+        "no_ask": 0.65,
+        "no_bid": 0.63,
+        "last": 0.36,
+        "volume": "8799.70",
+        "volume24h": "8569.75"
+      },
+      {
+        "ticker": "KXHIGHCHI-26JUL18-T89",
+        "loInt": null,
+        "hiInt": 88,
+        "yes_ask": 0.4,
+        "yes_bid": 0.39,
+        "no_ask": 0.61,
+        "no_bid": 0.6,
+        "last": 0.44,
+        "volume": "11174.93",
+        "volume24h": "10261.96"
+      },
+      {
+        "ticker": "KXHIGHCHI-26JUL18-B93.5",
+        "loInt": 93,
+        "hiInt": 94,
+        "yes_ask": 0.04,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.96,
+        "last": 0.04,
+        "volume": "4521.37",
+        "volume24h": "4520.37"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Chicago",
+    "cli": "MDW",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 86,
+    "maxSoFar": 86,
+    "minSoFar": 79,
+    "modelMean": 88.4,
+    "modelStd": 3.12,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTCHI-26JUL18-T74",
+        "loInt": 75,
+        "hiInt": null,
+        "yes_ask": 0.15,
+        "yes_bid": 0.08,
+        "no_ask": 0.92,
+        "no_bid": 0.85,
+        "last": 0.13,
+        "volume": "1243.56",
+        "volume24h": "1131.39"
+      },
+      {
+        "ticker": "KXLOWTCHI-26JUL18-B71.5",
+        "loInt": 71,
+        "hiInt": 72,
+        "yes_ask": 0.45,
+        "yes_bid": 0.39,
+        "no_ask": 0.61,
+        "no_bid": 0.55,
+        "last": 0.44,
+        "volume": "966.90",
+        "volume24h": "837.90"
+      },
+      {
+        "ticker": "KXLOWTCHI-26JUL18-B67.5",
+        "loInt": 67,
+        "hiInt": 68,
+        "yes_ask": 0.05,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.95,
+        "last": 0.05,
+        "volume": "245.22",
+        "volume24h": "245.22"
+      },
+      {
+        "ticker": "KXLOWTCHI-26JUL18-T67",
+        "loInt": null,
+        "hiInt": 66,
+        "yes_ask": 0.07,
+        "yes_bid": 0.02,
+        "no_ask": 0.98,
+        "no_bid": 0.93,
+        "last": 0.07,
+        "volume": "257.00",
+        "volume24h": "256.00"
+      },
+      {
+        "ticker": "KXLOWTCHI-26JUL18-B73.5",
+        "loInt": 73,
+        "hiInt": 74,
+        "yes_ask": 0.2,
+        "yes_bid": 0.15,
+        "no_ask": 0.85,
+        "no_bid": 0.8,
+        "last": 0.21,
+        "volume": "650.43",
+        "volume24h": "370.17"
+      },
+      {
+        "ticker": "KXLOWTCHI-26JUL18-B69.5",
+        "loInt": 69,
+        "hiInt": 70,
+        "yes_ask": 0.18,
+        "yes_bid": 0.12,
+        "no_ask": 0.88,
+        "no_bid": 0.82,
+        "last": 0.14,
+        "volume": "725.83",
+        "volume24h": "597.30"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Houston",
+    "cli": "HOU",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 86,
+    "maxSoFar": 86,
+    "minSoFar": 79,
+    "modelMean": 94.2,
+    "modelStd": 2.9,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-T100",
+        "loInt": 101,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1412.02",
+        "volume24h": "1402.02"
+      },
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.6,
+        "yes_bid": 0.59,
+        "no_ask": 0.41,
+        "no_bid": 0.4,
+        "last": 0.58,
+        "volume": "2127.05",
+        "volume24h": "2097.05"
+      },
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-T93",
+        "loInt": null,
+        "hiInt": 92,
+        "yes_ask": 0.04,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.96,
+        "last": 0.03,
+        "volume": "1025.34",
+        "volume24h": "1021.34"
+      },
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-B93.5",
+        "loInt": 93,
+        "hiInt": 94,
+        "yes_ask": 0.29,
+        "yes_bid": 0.27,
+        "no_ask": 0.73,
+        "no_bid": 0.71,
+        "last": 0.26,
+        "volume": "573.42",
+        "volume24h": "573.42"
+      },
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-B97.5",
+        "loInt": 97,
+        "hiInt": 98,
+        "yes_ask": 0.15,
+        "yes_bid": 0.11,
+        "no_ask": 0.89,
+        "no_bid": 0.85,
+        "last": 0.11,
+        "volume": "709.18",
+        "volume24h": "703.31"
+      },
+      {
+        "ticker": "KXHIGHTHOU-26JUL18-B99.5",
+        "loInt": 99,
+        "hiInt": 100,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.02,
+        "volume": "234.92",
+        "volume24h": "234.92"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Houston",
+    "cli": "HOU",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 86,
+    "maxSoFar": 86,
+    "minSoFar": 79,
+    "modelMean": 94.2,
+    "modelStd": 2.9,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTHOU-26JUL18-T72",
+        "loInt": null,
+        "hiInt": 71,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.02,
+        "volume": "175.00",
+        "volume24h": "175.00"
+      },
+      {
+        "ticker": "KXLOWTHOU-26JUL18-B78.5",
+        "loInt": 78,
+        "hiInt": 79,
+        "yes_ask": 0.97,
+        "yes_bid": 0.93,
+        "no_ask": 0.07,
+        "no_bid": 0.03,
+        "last": 0.98,
+        "volume": "1636.19",
+        "volume24h": "1528.19"
+      },
+      {
+        "ticker": "KXLOWTHOU-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.09,
+        "yes_bid": 0.04,
+        "no_ask": 0.96,
+        "no_bid": 0.91,
+        "last": 0.08,
+        "volume": "674.89",
+        "volume24h": "674.89"
+      },
+      {
+        "ticker": "KXLOWTHOU-26JUL18-T79",
+        "loInt": 80,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "2125.98",
+        "volume24h": "1838.98"
+      },
+      {
+        "ticker": "KXLOWTHOU-26JUL18-B72.5",
+        "loInt": 72,
+        "hiInt": 73,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.02,
+        "volume": "284.00",
+        "volume24h": "284.00"
+      },
+      {
+        "ticker": "KXLOWTHOU-26JUL18-B74.5",
+        "loInt": 74,
+        "hiInt": 75,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.02,
+        "volume": "495.28",
+        "volume24h": "495.28"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Phoenix",
+    "cli": "PHX",
+    "tz": "America/Phoenix",
+    "dateLocal": "2026-07-18",
+    "localHour": 7,
+    "currentTemp": 86,
+    "maxSoFar": 87,
+    "minSoFar": 85,
+    "modelMean": 99.3,
+    "modelStd": 3.8,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-T95",
+        "loInt": null,
+        "hiInt": 94,
+        "yes_ask": 0.05,
+        "yes_bid": 0.04,
+        "no_ask": 0.96,
+        "no_bid": 0.95,
+        "last": 0.04,
+        "volume": "2582.38",
+        "volume24h": "2564.38"
+      },
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.13,
+        "yes_bid": 0.12,
+        "no_ask": 0.88,
+        "no_bid": 0.87,
+        "last": 0.14,
+        "volume": "2523.93",
+        "volume24h": "2523.93"
+      },
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-T102",
+        "loInt": 103,
+        "hiInt": null,
+        "yes_ask": 0.03,
+        "yes_bid": 0.02,
+        "no_ask": 0.98,
+        "no_bid": 0.97,
+        "last": 0.03,
+        "volume": "4561.69",
+        "volume24h": "4073.69"
+      },
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-B101.5",
+        "loInt": 101,
+        "hiInt": 102,
+        "yes_ask": 0.2,
+        "yes_bid": 0.17,
+        "no_ask": 0.83,
+        "no_bid": 0.8,
+        "last": 0.17,
+        "volume": "2211.82",
+        "volume24h": "2108.22"
+      },
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-B99.5",
+        "loInt": 99,
+        "hiInt": 100,
+        "yes_ask": 0.24,
+        "yes_bid": 0.23,
+        "no_ask": 0.77,
+        "no_bid": 0.76,
+        "last": 0.22,
+        "volume": "4640.40",
+        "volume24h": "4640.40"
+      },
+      {
+        "ticker": "KXHIGHTPHX-26JUL18-B97.5",
+        "loInt": 97,
+        "hiInt": 98,
+        "yes_ask": 0.41,
+        "yes_bid": 0.4,
+        "no_ask": 0.6,
+        "no_bid": 0.59,
+        "last": 0.4,
+        "volume": "3569.12",
+        "volume24h": "3544.12"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Phoenix",
+    "cli": "PHX",
+    "tz": "America/Phoenix",
+    "dateLocal": "2026-07-18",
+    "localHour": 7,
+    "currentTemp": 86,
+    "maxSoFar": 87,
+    "minSoFar": 85,
+    "modelMean": 99.3,
+    "modelStd": 3.8,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTPHX-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.09,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.91,
+        "last": 0.09,
+        "volume": "1291.51",
+        "volume24h": "1291.51"
+      },
+      {
+        "ticker": "KXLOWTPHX-26JUL18-B78.5",
+        "loInt": 78,
+        "hiInt": 79,
+        "yes_ask": 0.04,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.96,
+        "last": 0.04,
+        "volume": "1963.21",
+        "volume24h": "1963.21"
+      },
+      {
+        "ticker": "KXLOWTPHX-26JUL18-T83",
+        "loInt": 84,
+        "hiInt": null,
+        "yes_ask": 0.79,
+        "yes_bid": 0.74,
+        "no_ask": 0.26,
+        "no_bid": 0.21,
+        "last": 0.78,
+        "volume": "3424.58",
+        "volume24h": "3107.58"
+      },
+      {
+        "ticker": "KXLOWTPHX-26JUL18-B80.5",
+        "loInt": 80,
+        "hiInt": 81,
+        "yes_ask": 0.04,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.96,
+        "last": 0.04,
+        "volume": "1574.62",
+        "volume24h": "1554.62"
+      },
+      {
+        "ticker": "KXLOWTPHX-26JUL18-B82.5",
+        "loInt": 82,
+        "hiInt": 83,
+        "yes_ask": 0.15,
+        "yes_bid": 0.07,
+        "no_ask": 0.93,
+        "no_bid": 0.85,
+        "last": 0.23,
+        "volume": "1514.01",
+        "volume24h": "1494.01"
+      },
+      {
+        "ticker": "KXLOWTPHX-26JUL18-T76",
+        "loInt": null,
+        "hiInt": 75,
+        "yes_ask": 0.04,
+        "yes_bid": 0.02,
+        "no_ask": 0.98,
+        "no_bid": 0.96,
+        "last": 0.04,
+        "volume": "933.35",
+        "volume24h": "933.35"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Philadelphia",
+    "cli": "PHL",
+    "tz": "America/New_York",
+    "dateLocal": "2026-07-18",
+    "localHour": 10,
+    "currentTemp": 80.1,
+    "maxSoFar": 80,
+    "minSoFar": 74,
+    "modelMean": 87.8,
+    "modelStd": 3.8,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-B82.5",
+        "loInt": 82,
+        "hiInt": 83,
+        "yes_ask": 0.06,
+        "yes_bid": 0.05,
+        "no_ask": 0.95,
+        "no_bid": 0.94,
+        "last": 0.05,
+        "volume": "3135.84",
+        "volume24h": "3110.84"
+      },
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-B88.5",
+        "loInt": 88,
+        "hiInt": 89,
+        "yes_ask": 0.26,
+        "yes_bid": 0.25,
+        "no_ask": 0.75,
+        "no_bid": 0.74,
+        "last": 0.27,
+        "volume": "1741.52",
+        "volume24h": "1741.52"
+      },
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-B84.5",
+        "loInt": 84,
+        "hiInt": 85,
+        "yes_ask": 0.27,
+        "yes_bid": 0.26,
+        "no_ask": 0.74,
+        "no_bid": 0.73,
+        "last": 0.25,
+        "volume": "2701.19",
+        "volume24h": "2669.60"
+      },
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-T89",
+        "loInt": 90,
+        "hiInt": null,
+        "yes_ask": 0.19,
+        "yes_bid": 0.18,
+        "no_ask": 0.82,
+        "no_bid": 0.81,
+        "last": 0.19,
+        "volume": "7298.69",
+        "volume24h": "7089.76"
+      },
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-T82",
+        "loInt": null,
+        "hiInt": 81,
+        "yes_ask": 0.05,
+        "yes_bid": 0.04,
+        "no_ask": 0.96,
+        "no_bid": 0.95,
+        "last": 0.02,
+        "volume": "3708.97",
+        "volume24h": "3640.97"
+      },
+      {
+        "ticker": "KXHIGHPHIL-26JUL18-B86.5",
+        "loInt": 86,
+        "hiInt": 87,
+        "yes_ask": 0.19,
+        "yes_bid": 0.17,
+        "no_ask": 0.83,
+        "no_bid": 0.81,
+        "last": 0.21,
+        "volume": "3293.95",
+        "volume24h": "3293.95"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "San Antonio",
+    "cli": "SAT",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 82,
+    "maxSoFar": 82,
+    "minSoFar": 79,
+    "modelMean": 93.4,
+    "modelStd": 2.46,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-T89",
+        "loInt": null,
+        "hiInt": 88,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "769.32",
+        "volume24h": "765.32"
+      },
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.31,
+        "yes_bid": 0.27,
+        "no_ask": 0.73,
+        "no_bid": 0.69,
+        "last": 0.31,
+        "volume": "1019.93",
+        "volume24h": "952.73"
+      },
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-B93.5",
+        "loInt": 93,
+        "hiInt": 94,
+        "yes_ask": 0.54,
+        "yes_bid": 0.53,
+        "no_ask": 0.47,
+        "no_bid": 0.46,
+        "last": 0.55,
+        "volume": "1025.61",
+        "volume24h": "889.98"
+      },
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-B89.5",
+        "loInt": 89,
+        "hiInt": 90,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "1074.41",
+        "volume24h": "1057.41"
+      },
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-B91.5",
+        "loInt": 91,
+        "hiInt": 92,
+        "yes_ask": 0.2,
+        "yes_bid": 0.19,
+        "no_ask": 0.81,
+        "no_bid": 0.8,
+        "last": 0.19,
+        "volume": "1635.52",
+        "volume24h": "1387.92"
+      },
+      {
+        "ticker": "KXHIGHTSATX-26JUL18-T96",
+        "loInt": 97,
+        "hiInt": null,
+        "yes_ask": 0.03,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.97,
+        "last": 0.02,
+        "volume": "1043.88",
+        "volume24h": "1041.88"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "San Antonio",
+    "cli": "SAT",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 82,
+    "maxSoFar": 82,
+    "minSoFar": 79,
+    "modelMean": 93.4,
+    "modelStd": 2.46,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTSATX-26JUL18-T70",
+        "loInt": null,
+        "hiInt": 69,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "83.00",
+        "volume24h": "83.00"
+      },
+      {
+        "ticker": "KXLOWTSATX-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.11,
+        "yes_bid": 0.1,
+        "no_ask": 0.9,
+        "no_bid": 0.89,
+        "last": 0.1,
+        "volume": "399.87",
+        "volume24h": "389.87"
+      },
+      {
+        "ticker": "KXLOWTSATX-26JUL18-T77",
+        "loInt": 78,
+        "hiInt": null,
+        "yes_ask": 0.89,
+        "yes_bid": 0.84,
+        "no_ask": 0.16,
+        "no_bid": 0.11,
+        "last": 0.87,
+        "volume": "561.65",
+        "volume24h": "546.65"
+      },
+      {
+        "ticker": "KXLOWTSATX-26JUL18-B74.5",
+        "loInt": 74,
+        "hiInt": 75,
+        "yes_ask": 0.02,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "118.03",
+        "volume24h": "99.03"
+      },
+      {
+        "ticker": "KXLOWTSATX-26JUL18-B70.5",
+        "loInt": 70,
+        "hiInt": 71,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.02,
+        "volume": "68.00",
+        "volume24h": "68.00"
+      },
+      {
+        "ticker": "KXLOWTSATX-26JUL18-B72.5",
+        "loInt": 72,
+        "hiInt": 73,
+        "yes_ask": 0.03,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.97,
+        "last": 0.01,
+        "volume": "31.00",
+        "volume24h": "31.00"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Dallas-Fort Worth",
+    "cli": "DFW",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 84.9,
+    "maxSoFar": 84,
+    "minSoFar": 79,
+    "modelMean": 97.3,
+    "modelStd": 2.51,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-B97.5",
+        "loInt": 97,
+        "hiInt": 98,
+        "yes_ask": 0.4,
+        "yes_bid": 0.39,
+        "no_ask": 0.61,
+        "no_bid": 0.6,
+        "last": 0.4,
+        "volume": "2089.98",
+        "volume24h": "1987.98"
+      },
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-B99.5",
+        "loInt": 99,
+        "hiInt": 100,
+        "yes_ask": 0.05,
+        "yes_bid": 0.04,
+        "no_ask": 0.96,
+        "no_bid": 0.95,
+        "last": 0.04,
+        "volume": "741.79",
+        "volume24h": "685.79"
+      },
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-T93",
+        "loInt": null,
+        "hiInt": 92,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1274.54",
+        "volume24h": "1271.54"
+      },
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-B93.5",
+        "loInt": 93,
+        "hiInt": 94,
+        "yes_ask": 0.04,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.96,
+        "last": 0.03,
+        "volume": "653.81",
+        "volume24h": "648.81"
+      },
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.58,
+        "yes_bid": 0.57,
+        "no_ask": 0.43,
+        "no_bid": 0.42,
+        "last": 0.55,
+        "volume": "7559.20",
+        "volume24h": "7060.12"
+      },
+      {
+        "ticker": "KXHIGHTDAL-26JUL18-T100",
+        "loInt": 101,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1199.28",
+        "volume24h": "1196.28"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Dallas-Fort Worth",
+    "cli": "DFW",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 84.9,
+    "maxSoFar": 84,
+    "minSoFar": 79,
+    "modelMean": 97.3,
+    "modelStd": 2.51,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTDAL-26JUL18-B74.5",
+        "loInt": 74,
+        "hiInt": 75,
+        "yes_ask": 0.02,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "690.94",
+        "volume24h": "679.94"
+      },
+      {
+        "ticker": "KXLOWTDAL-26JUL18-B70.5",
+        "loInt": 70,
+        "hiInt": 71,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "94.15",
+        "volume24h": "94.15"
+      },
+      {
+        "ticker": "KXLOWTDAL-26JUL18-T70",
+        "loInt": null,
+        "hiInt": 69,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "109.00",
+        "volume24h": "109.00"
+      },
+      {
+        "ticker": "KXLOWTDAL-26JUL18-T77",
+        "loInt": 78,
+        "hiInt": null,
+        "yes_ask": 0.97,
+        "yes_bid": 0.95,
+        "no_ask": 0.05,
+        "no_bid": 0.03,
+        "last": 0.96,
+        "volume": "3180.42",
+        "volume24h": "2903.99"
+      },
+      {
+        "ticker": "KXLOWTDAL-26JUL18-B72.5",
+        "loInt": 72,
+        "hiInt": 73,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "91.00",
+        "volume24h": "91.00"
+      },
+      {
+        "ticker": "KXLOWTDAL-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.04,
+        "yes_bid": 0.02,
+        "no_ask": 0.98,
+        "no_bid": 0.96,
+        "last": 0.05,
+        "volume": "1382.34",
+        "volume24h": "1075.95"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Austin",
+    "cli": "AUS",
+    "tz": "America/Chicago",
+    "dateLocal": "2026-07-18",
+    "localHour": 9,
+    "currentTemp": 84,
+    "maxSoFar": 84,
+    "minSoFar": 77,
+    "modelMean": 94.6,
+    "modelStd": 2.74,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHAUS-26JUL18-B96.5",
+        "loInt": 96,
+        "hiInt": 97,
+        "yes_ask": 0.41,
+        "yes_bid": 0.4,
+        "no_ask": 0.6,
+        "no_bid": 0.59,
+        "last": 0.4,
+        "volume": "3995.78",
+        "volume24h": "3983.78"
+      },
+      {
+        "ticker": "KXHIGHAUS-26JUL18-T97",
+        "loInt": 98,
+        "hiInt": null,
+        "yes_ask": 0.11,
+        "yes_bid": 0.09,
+        "no_ask": 0.91,
+        "no_bid": 0.89,
+        "last": 0.11,
+        "volume": "796.79",
+        "volume24h": "794.79"
+      },
+      {
+        "ticker": "KXHIGHAUS-26JUL18-T90",
+        "loInt": null,
+        "hiInt": 89,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1339.80",
+        "volume24h": "1337.80"
+      },
+      {
+        "ticker": "KXHIGHAUS-26JUL18-B94.5",
+        "loInt": 94,
+        "hiInt": 95,
+        "yes_ask": 0.28,
+        "yes_bid": 0.27,
+        "no_ask": 0.73,
+        "no_bid": 0.72,
+        "last": 0.28,
+        "volume": "7096.86",
+        "volume24h": "6983.95"
+      },
+      {
+        "ticker": "KXHIGHAUS-26JUL18-B92.5",
+        "loInt": 92,
+        "hiInt": 93,
+        "yes_ask": 0.19,
+        "yes_bid": 0.18,
+        "no_ask": 0.82,
+        "no_bid": 0.81,
+        "last": 0.17,
+        "volume": "4173.05",
+        "volume24h": "4145.83"
+      },
+      {
+        "ticker": "KXHIGHAUS-26JUL18-B90.5",
+        "loInt": 90,
+        "hiInt": 91,
+        "yes_ask": 0.05,
+        "yes_bid": 0.02,
+        "no_ask": 0.98,
+        "no_bid": 0.95,
+        "last": 0.02,
+        "volume": "638.62",
+        "volume24h": "633.62"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Seattle",
+    "cli": "SEA",
+    "tz": "America/Los_Angeles",
+    "dateLocal": "2026-07-18",
+    "localHour": 7,
+    "currentTemp": 57.9,
+    "maxSoFar": 60,
+    "minSoFar": 56,
+    "modelMean": 74.6,
+    "modelStd": 3.72,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-T74",
+        "loInt": null,
+        "hiInt": 73,
+        "yes_ask": 0.15,
+        "yes_bid": 0.13,
+        "no_ask": 0.87,
+        "no_bid": 0.85,
+        "last": 0.14,
+        "volume": "715.78",
+        "volume24h": "713.78"
+      },
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-B74.5",
+        "loInt": 74,
+        "hiInt": 75,
+        "yes_ask": 0.25,
+        "yes_bid": 0.23,
+        "no_ask": 0.77,
+        "no_bid": 0.75,
+        "last": 0.25,
+        "volume": "1149.80",
+        "volume24h": "948.20"
+      },
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-B78.5",
+        "loInt": 78,
+        "hiInt": 79,
+        "yes_ask": 0.11,
+        "yes_bid": 0.1,
+        "no_ask": 0.9,
+        "no_bid": 0.89,
+        "last": 0.1,
+        "volume": "374.44",
+        "volume24h": "373.44"
+      },
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-B80.5",
+        "loInt": 80,
+        "hiInt": 81,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.02,
+        "volume": "392.66",
+        "volume24h": "370.66"
+      },
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-B76.5",
+        "loInt": 76,
+        "hiInt": 77,
+        "yes_ask": 0.47,
+        "yes_bid": 0.46,
+        "no_ask": 0.54,
+        "no_bid": 0.53,
+        "last": 0.45,
+        "volume": "704.00",
+        "volume24h": "704.00"
+      },
+      {
+        "ticker": "KXHIGHTSEA-26JUL18-T81",
+        "loInt": 82,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1197.02",
+        "volume24h": "1157.02"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Seattle",
+    "cli": "SEA",
+    "tz": "America/Los_Angeles",
+    "dateLocal": "2026-07-18",
+    "localHour": 7,
+    "currentTemp": 57.9,
+    "maxSoFar": 60,
+    "minSoFar": 56,
+    "modelMean": 74.6,
+    "modelStd": 3.72,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTSEA-26JUL18-B53.5",
+        "loInt": 53,
+        "hiInt": 54,
+        "yes_ask": 0.08,
+        "yes_bid": 0.04,
+        "no_ask": 0.96,
+        "no_bid": 0.92,
+        "last": 0.09,
+        "volume": "896.23",
+        "volume24h": "896.23"
+      },
+      {
+        "ticker": "KXLOWTSEA-26JUL18-B51.5",
+        "loInt": 51,
+        "hiInt": 52,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "283.25",
+        "volume24h": "283.25"
+      },
+      {
+        "ticker": "KXLOWTSEA-26JUL18-B57.5",
+        "loInt": 57,
+        "hiInt": 58,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1428.77",
+        "volume24h": "1337.77"
+      },
+      {
+        "ticker": "KXLOWTSEA-26JUL18-T51",
+        "loInt": null,
+        "hiInt": 50,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.02,
+        "volume": "274.03",
+        "volume24h": "267.03"
+      },
+      {
+        "ticker": "KXLOWTSEA-26JUL18-T58",
+        "loInt": 59,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "660.82",
+        "volume24h": "554.82"
+      },
+      {
+        "ticker": "KXLOWTSEA-26JUL18-B55.5",
+        "loInt": 55,
+        "hiInt": 56,
+        "yes_ask": 0.97,
+        "yes_bid": 0.92,
+        "no_ask": 0.08,
+        "no_bid": 0.03,
+        "last": 0.98,
+        "volume": "1184.02",
+        "volume24h": "1155.02"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Denver",
+    "cli": "DEN",
+    "tz": "America/Denver",
+    "dateLocal": "2026-07-18",
+    "localHour": 8,
+    "currentTemp": 72,
+    "maxSoFar": 71,
+    "minSoFar": 65,
+    "modelMean": 93.5,
+    "modelStd": 3.6,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHDEN-26JUL18-B95.5",
+        "loInt": 95,
+        "hiInt": 96,
+        "yes_ask": 0.3,
+        "yes_bid": 0.29,
+        "no_ask": 0.71,
+        "no_bid": 0.7,
+        "last": 0.3,
+        "volume": "2593.88",
+        "volume24h": "2586.88"
+      },
+      {
+        "ticker": "KXHIGHDEN-26JUL18-B93.5",
+        "loInt": 93,
+        "hiInt": 94,
+        "yes_ask": 0.58,
+        "yes_bid": 0.57,
+        "no_ask": 0.43,
+        "no_bid": 0.42,
+        "last": 0.57,
+        "volume": "3842.51",
+        "volume24h": "3825.28"
+      },
+      {
+        "ticker": "KXHIGHDEN-26JUL18-T91",
+        "loInt": null,
+        "hiInt": 90,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "871.70",
+        "volume24h": "866.70"
+      },
+      {
+        "ticker": "KXHIGHDEN-26JUL18-B97.5",
+        "loInt": 97,
+        "hiInt": 98,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "959.81",
+        "volume24h": "955.81"
+      },
+      {
+        "ticker": "KXHIGHDEN-26JUL18-B91.5",
+        "loInt": 91,
+        "hiInt": 92,
+        "yes_ask": 0.16,
+        "yes_bid": 0.15,
+        "no_ask": 0.85,
+        "no_bid": 0.84,
+        "last": 0.15,
+        "volume": "2262.83",
+        "volume24h": "2257.83"
+      },
+      {
+        "ticker": "KXHIGHDEN-26JUL18-T98",
+        "loInt": 99,
+        "hiInt": null,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1035.65",
+        "volume24h": "879.12"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Washington DC",
+    "cli": "DCA",
+    "tz": "America/New_York",
+    "dateLocal": "2026-07-18",
+    "localHour": 10,
+    "currentTemp": 84,
+    "maxSoFar": 84,
+    "minSoFar": 77,
+    "modelMean": 93.6,
+    "modelStd": 4.14,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTDC-26JUL18-B90.5",
+        "loInt": 90,
+        "hiInt": 91,
+        "yes_ask": 0.12,
+        "yes_bid": 0.11,
+        "no_ask": 0.89,
+        "no_bid": 0.88,
+        "last": 0.11,
+        "volume": "640.55",
+        "volume24h": "637.55"
+      },
+      {
+        "ticker": "KXHIGHTDC-26JUL18-B96.5",
+        "loInt": 96,
+        "hiInt": 97,
+        "yes_ask": 0.19,
+        "yes_bid": 0.17,
+        "no_ask": 0.83,
+        "no_bid": 0.81,
+        "last": 0.18,
+        "volume": "699.27",
+        "volume24h": "550.28"
+      },
+      {
+        "ticker": "KXHIGHTDC-26JUL18-B92.5",
+        "loInt": 92,
+        "hiInt": 93,
+        "yes_ask": 0.28,
+        "yes_bid": 0.27,
+        "no_ask": 0.73,
+        "no_bid": 0.72,
+        "last": 0.26,
+        "volume": "828.30",
+        "volume24h": "825.30"
+      },
+      {
+        "ticker": "KXHIGHTDC-26JUL18-B94.5",
+        "loInt": 94,
+        "hiInt": 95,
+        "yes_ask": 0.39,
+        "yes_bid": 0.35,
+        "no_ask": 0.65,
+        "no_bid": 0.61,
+        "last": 0.34,
+        "volume": "589.01",
+        "volume24h": "586.01"
+      },
+      {
+        "ticker": "KXHIGHTDC-26JUL18-T97",
+        "loInt": 98,
+        "hiInt": null,
+        "yes_ask": 0.08,
+        "yes_bid": 0.07,
+        "no_ask": 0.93,
+        "no_bid": 0.92,
+        "last": 0.08,
+        "volume": "1166.76",
+        "volume24h": "1016.48"
+      },
+      {
+        "ticker": "KXHIGHTDC-26JUL18-T90",
+        "loInt": null,
+        "hiInt": 89,
+        "yes_ask": 0.04,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.96,
+        "last": 0.03,
+        "volume": "1235.03",
+        "volume24h": "1231.03"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Boston",
+    "cli": "BOS",
+    "tz": "America/New_York",
+    "dateLocal": "2026-07-18",
+    "localHour": 10,
+    "currentTemp": 82,
+    "maxSoFar": 82,
+    "minSoFar": 63,
+    "modelMean": 84.2,
+    "modelStd": 2.5,
+    "variable": "high",
+    "buckets": [
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-B82.5",
+        "loInt": 82,
+        "hiInt": 83,
+        "yes_ask": 0.23,
+        "yes_bid": 0.2,
+        "no_ask": 0.8,
+        "no_bid": 0.77,
+        "last": 0.19,
+        "volume": "1396.26",
+        "volume24h": "1322.26"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-T87",
+        "loInt": 88,
+        "hiInt": null,
+        "yes_ask": 0.04,
+        "yes_bid": 0.03,
+        "no_ask": 0.97,
+        "no_bid": 0.96,
+        "last": 0.03,
+        "volume": "2195.66",
+        "volume24h": "2182.44"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-T80",
+        "loInt": null,
+        "hiInt": 79,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1843.79",
+        "volume24h": "1829.79"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-B84.5",
+        "loInt": 84,
+        "hiInt": 85,
+        "yes_ask": 0.63,
+        "yes_bid": 0.61,
+        "no_ask": 0.39,
+        "no_bid": 0.37,
+        "last": 0.63,
+        "volume": "1900.14",
+        "volume24h": "1870.14"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-B80.5",
+        "loInt": 80,
+        "hiInt": 81,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "1771.01",
+        "volume24h": "1667.01"
+      },
+      {
+        "ticker": "KXHIGHTBOS-26JUL18-B86.5",
+        "loInt": 86,
+        "hiInt": 87,
+        "yes_ask": 0.16,
+        "yes_bid": 0.15,
+        "no_ask": 0.85,
+        "no_bid": 0.84,
+        "last": 0.15,
+        "volume": "2607.53",
+        "volume24h": "2389.15"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
+  },
+  {
+    "ts": "2026-07-18T14:57:40.127Z",
+    "city": "Boston",
+    "cli": "BOS",
+    "tz": "America/New_York",
+    "dateLocal": "2026-07-18",
+    "localHour": 10,
+    "currentTemp": 82,
+    "maxSoFar": 82,
+    "minSoFar": 63,
+    "modelMean": 84.2,
+    "modelStd": 2.5,
+    "variable": "low",
+    "buckets": [
+      {
+        "ticker": "KXLOWTBOS-26JUL18-T52",
+        "loInt": null,
+        "hiInt": 51,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.01,
+        "volume": "104.00",
+        "volume24h": "104.00"
+      },
+      {
+        "ticker": "KXLOWTBOS-26JUL18-B52.5",
+        "loInt": 52,
+        "hiInt": 53,
+        "yes_ask": 0.01,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.99,
+        "last": 0.02,
+        "volume": "115.02",
+        "volume24h": "115.02"
+      },
+      {
+        "ticker": "KXLOWTBOS-26JUL18-B58.5",
+        "loInt": 58,
+        "hiInt": 59,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.01,
+        "volume": "135.74",
+        "volume24h": "135.74"
+      },
+      {
+        "ticker": "KXLOWTBOS-26JUL18-T59",
+        "loInt": 60,
+        "hiInt": null,
+        "yes_ask": 0.97,
+        "yes_bid": 0.89,
+        "no_ask": 0.11,
+        "no_bid": 0.03,
+        "last": 0.91,
+        "volume": "1436.96",
+        "volume24h": "763.96"
+      },
+      {
+        "ticker": "KXLOWTBOS-26JUL18-B56.5",
+        "loInt": 56,
+        "hiInt": 57,
+        "yes_ask": 0.02,
+        "yes_bid": 0.01,
+        "no_ask": 0.99,
+        "no_bid": 0.98,
+        "last": 0.02,
+        "volume": "287.49",
+        "volume24h": "287.49"
+      },
+      {
+        "ticker": "KXLOWTBOS-26JUL18-B54.5",
+        "loInt": 54,
+        "hiInt": 55,
+        "yes_ask": 0.02,
+        "yes_bid": 0,
+        "no_ask": 1,
+        "no_bid": 0.98,
+        "last": 0.03,
+        "volume": "142.02",
+        "volume24h": "142.02"
+      }
+    ],
+    "settle": {
+      "extremumF": null
+    }
   }
 ]
