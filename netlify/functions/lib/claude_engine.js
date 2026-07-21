@@ -9,6 +9,7 @@ import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./metar.js";
 import { predict, UPSTREAM_STATIONS, gradeAnalogBelief, thinAnalogGuard } from "./claude_analog_v3.js";
 import { accuCityAllowed, accuHourAllowed, accuImpliedHigh, scoreAccuDecisions } from "./accuweather.js";
+import { scanNoFloor, scoreNoFloor, MIN_RETURN, MIN_WIN_PROB } from "./nofloor.js";
 
 export const SITE = "https://weatherbot-mf.netlify.app";
 export const AUTH = "Basic " + btoa("internal:hydro");
@@ -52,17 +53,21 @@ const labelOf = (lo, hi) =>
   hi === Infinity || hi == null ? `>=${lo}` :
   lo === hi ? `${lo}` : `${lo}-${hi}`;
 
-// Kalshi highBuckets → claude bins [{label,lo,hi}] + market {label: yes_cents}.
+// Kalshi highBuckets → claude bins [{label,lo,hi}] + market {label: yes_cents} +
+// books {label: full two-sided quote} (the NO-floor scan needs the NO side).
 function binsAndMarket(buckets) {
-  const bins = [], market = {};
+  const bins = [], market = {}, books = {};
   for (const b of buckets || []) {
     const lo = b.loInt == null ? -Infinity : b.loInt;
     const hi = b.hiInt == null ? Infinity : b.hiInt;
     const label = labelOf(lo, hi);
     bins.push({ label, lo, hi });
     if (b.yes_ask != null) market[label] = Math.round(b.yes_ask * 100);
+    books[label] = { loInt: b.loInt ?? null, hiInt: b.hiInt ?? null,
+      yes_ask: b.yes_ask ?? null, yes_bid: b.yes_bid ?? null,
+      no_ask: b.no_ask ?? null, no_bid: b.no_bid ?? null };
   }
-  return { bins, market };
+  return { bins, market, books };
 }
 
 const localDate = (tz) => new Intl.DateTimeFormat("en-CA", { timeZone: tz || "America/Chicago" }).format(new Date());
@@ -98,7 +103,7 @@ export async function runPredict(doLog) {
   let logged = 0; const errors = []; const analogStarved = [];
   for (const c of cities) {
     const kc = ksByName[c.name];
-    const { bins, market } = binsAndMarket(kc?.highBuckets);
+    const { bins, market, books } = binsAndMarket(kc?.highBuckets);
     const snap = buildSnapshotV2({ station: c.station, tz: c.tz, metarLines: stationLines(metarText, c.station), maxSoFarF: c.maxSoFarCli ?? c.maxSoFar });
     if (!snap) continue;
     // Truncated-fetch canary: a station with NO prior-day analogs means its METAR
@@ -147,6 +152,17 @@ export async function runPredict(doLog) {
       sizing: sizingCard ? { point: round1(sizingCard.dist.mean()), bin_probs: sizingCard.bin_probs, note: sizingCard.tilt_note } : null,
     };
     const divergence = bayes ? round1(d.mean() - bayes.point) : null;
+    // NO-floor scan (2026-07-21 reorientation): sell the bottom bucket the day
+    // clears with near-certainty; the monotonic high means it locks (early exit)
+    // the instant the trace prints past the ceiling. Uses the SIZING card's tilted
+    // bin_probs (market-aware) when available — the floor bet is about beating the
+    // book, so the informed distribution is the right input. Attach the top
+    // candidate + all evaluated rows to the card and the logged decision.
+    const floorProbs = (sizingCard || card).bin_probs;
+    const nofloorScan = Object.keys(books).length && floorProbs
+      ? scanNoFloor(books, floorProbs, c.maxSoFarCli ?? c.maxSoFar ?? null) : { candidates: [], evaluated: [] };
+    const nofloor = { top: nofloorScan.candidates[0] || null, candidates: nofloorScan.candidates,
+      evaluated: nofloorScan.evaluated, max_so_far: round1(c.maxSoFarCli ?? c.maxSoFar ?? null) };
     // AccuWeather forward-log leg (2026-07-17): same asof as bayes/claude/nws so the
     // accu_report comparison is matched-pair. Quota-capped, city- and hour-gated;
     // a fetch failure logs the error but never blocks the decision write.
@@ -158,7 +174,7 @@ export async function runPredict(doLog) {
           { station: c.station, tz: c.tz, maxSoFarF: c.maxSoFarCli ?? c.maxSoFar ?? null });
       } catch (e) { errors.push(`accu ${c.station}: ${String(e?.message || e)}`); }
     }
-    out.push({ city: c.name, station: c.station, claude, bayes, market, divergence });
+    out.push({ city: c.name, station: c.station, claude, bayes, market, divergence, nofloor });
     if (store) {
       const date = localDate(c.tz);
       // Surface write failures instead of swallowing them — a silent .catch here is
@@ -166,7 +182,7 @@ export async function runPredict(doLog) {
       try {
         await store.setJSON(`dec/${c.station}/${date}/${String(localHour(c.tz)).padStart(2, "0")}.json`,
           { type: "decision", city: c.name, station: c.station, cli: c.cli || null, contract_date: date, asof: now,
-            claude, bayes, market, nws: c.forecastHighF ?? c.nwsHighF ?? null, accu });
+            claude, bayes, market, nws: c.forecastHighF ?? c.nwsHighF ?? null, accu, nofloor });
         logged++;
       } catch (e) {
         errors.push(`${c.station}: ${String(e?.message || e)}`);
@@ -241,6 +257,87 @@ export async function runAccuReport(days = 14) {
   const report = scoreAccuDecisions(decisions, cliMaxByKey);
   return { ok: true, mode: "accu_report", days, settled_days: Object.keys(cliMaxByKey).length,
            scored_decisions: report.overall.accu.n, ...report };
+}
+
+// Live NO-floor board: newest logged decision per station, its floor candidates
+// ranked across all cities. This is the reoriented primary output — "where can I
+// sell the floor for >=20% with near-certainty and an early exit today". Fast
+// (blob reads only). Re-derives candidates from the stored scan so a threshold
+// override (?min_return=, ?min_win=) re-filters without a recompute.
+export async function runNoFloor(opts = {}) {
+  const store = getStore(STORE);
+  const { blobs } = await store.list({ prefix: "dec/" });
+  const best = {};
+  for (const b of blobs || []) {
+    const parts = b.key.split("/");
+    if (parts.length < 4) continue;
+    const [, station, date, hourFile] = parts;
+    const sort = `${date} ${hourFile.replace(".json", "")}`;
+    if (!best[station] || sort > best[station].sort) best[station] = { key: b.key, sort };
+  }
+  const recs = (await Promise.all(Object.values(best).map(({ key }) =>
+    store.get(key, { type: "json" }).catch(() => null)))).filter(Boolean);
+  const minReturn = opts.minReturn, minWin = opts.minWinProb;
+  const board = [];
+  for (const rec of recs) {
+    const nf = rec.nofloor;
+    if (!nf) continue;
+    // Re-filter the stored evaluation if the caller tightened/loosened the gates.
+    let cands = nf.candidates || [];
+    if (minReturn != null || minWin != null) {
+      cands = (nf.evaluated || []).filter(o => !o.already_locked &&
+        (minReturn == null || (o.return_pct != null && o.return_pct >= minReturn * 100)) &&
+        (minWin == null || (o.p_lock != null && o.p_lock >= minWin)))
+        .sort((a, b) => (b.ev_profit ?? -1) - (a.ev_profit ?? -1));
+    }
+    for (const c of cands) {
+      board.push({ city: rec.city || rec.station, station: rec.station, contract_date: rec.contract_date,
+        asof: rec.asof, max_so_far: nf.max_so_far, ...c });
+    }
+  }
+  board.sort((a, b) => (b.ev_profit ?? -1) - (a.ev_profit ?? -1));
+  return { ok: true, mode: "nofloor",
+           gates: { min_return_pct: (minReturn ?? MIN_RETURN) * 100, min_win_prob: minWin ?? MIN_WIN_PROB },
+           count: board.length, board };
+}
+
+// Score the logged NO-floor picks against CLI settles: hit rate + realized return,
+// so "near guaranteed 20%" is measured, not asserted. Picks = the top candidate of
+// each settled decision (the one the strategy would actually have taken).
+export async function runNoFloorReport(days = 21) {
+  const store = getStore(STORE);
+  const cutoff = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
+  const { blobs: settleBlobs } = await store.list({ prefix: "settle/" });
+  const cliMaxByKey = {};
+  for (const b of settleBlobs || []) {
+    const [, station, dateJson] = b.key.split("/");
+    const date = dateJson.replace(/\.json$/, "");
+    if (date < cutoff) continue;
+    const s = await store.get(b.key, { type: "json" }).catch(() => null);
+    if (s?.cli_max != null) cliMaxByKey[`${station}|${date}`] = s.cli_max;
+  }
+  // One pick per settled station-day: the EARLIEST decision that had a floor
+  // candidate (entry is a morning act, and the earliest fill carries the most
+  // premium). Dedup by station|date keeping the lowest hour.
+  const { blobs: decBlobs } = await store.list({ prefix: "dec/" });
+  const byKey = {};
+  for (const b of decBlobs || []) {
+    const parts = b.key.split("/");
+    if (parts.length < 4) continue;
+    const [, station, date, hourFile] = parts;
+    if (cliMaxByKey[`${station}|${date}`] == null) continue;
+    const hour = hourFile.replace(".json", "");
+    const k = `${station}|${date}`;
+    if (!byKey[k] || hour < byKey[k].hour) byKey[k] = { key: b.key, hour };
+  }
+  const picks = [];
+  for (const { key } of Object.values(byKey)) {
+    const d = await store.get(key, { type: "json" }).catch(() => null);
+    const top = d?.nofloor?.top;
+    if (top && top.no_ask != null) picks.push({ station: d.station, contract_date: d.contract_date, ...top });
+  }
+  const report = scoreNoFloor(picks, cliMaxByKey);
+  return { ok: true, mode: "nofloor_report", days, settled_days: Object.keys(cliMaxByKey).length, ...report };
 }
 
 export async function runSettle() {
