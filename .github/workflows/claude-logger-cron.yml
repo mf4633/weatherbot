@@ -1,0 +1,58 @@
+name: Claude logger cron
+
+# Reliable backstop for the CLAUDE decision logger (writes dec/*.json — the analog
+# cards, bin_probs, AND the sell-the-floor scan the nofloor board reads). Every other
+# function in this repo has an external cron backstop because Netlify's scheduler
+# stalls/throttles */5 functions for hours at a time; the claude logger did NOT, and
+# on 2026-07-19 the Netlify scheduler stopped firing it — logging silently died for
+# two days and the floor board stayed empty. This restores parity: an hourly HTTP
+# trigger that does not depend on Netlify's scheduler being healthy.
+#
+# Targets claude_log-background (a Netlify BACKGROUND function: returns 202 in <1s,
+# then runs runPredict+runSettle for up to 15 min), so the curl never times out.
+# Basic auth is required by the edge gate (edge-functions/auth.js, password "hydro");
+# the WEATHERBOT_BASIC_AUTH secret already backs the other crons.
+#
+# NOTE: GitHub's scheduler also coalesces/delays runs (often 5-20 min late, sometimes
+# more), so this is a resiliency net, not a precise clock — but "hourly-ish and alive"
+# beats "dead". For tighter cadence, add a cron-job.org trigger hitting the same URL.
+
+on:
+  schedule:
+    - cron: "15 * * * *"      # hourly at :15, offset from the snapshot (:40) and settle crons
+  workflow_dispatch: {}
+
+concurrency:
+  group: claude-logger
+  cancel-in-progress: false
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger claude_log-background
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          code=$(curl --max-time 60 -sS -u "$BASIC_AUTH" -X POST \
+            "https://weatherbot-mf.netlify.app/.netlify/functions/claude_log-background" \
+            -o /tmp/claude_log.txt -w "%{http_code}" || echo "000")
+          echo "HTTP $code"
+          # Background functions return 202 Accepted immediately; anything else is a
+          # real failure (401 = auth/secret drift, 404 = renamed, 5xx = deploy broken).
+          if [ "$code" != "202" ]; then
+            echo "::warning::claude_log-background did not accept (HTTP $code) — logging may be down"
+            head -c 400 /tmp/claude_log.txt || true
+          fi
+      - name: Confirm a fresh log landed
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          # Give the background run a moment, then read the status blob it writes.
+          sleep 45
+          curl --max-time 30 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/claude?mode=status" \
+            -o /tmp/status.json -w "status HTTP %{http_code}\n" || true
+          jq '{ranAt: .last_log.ranAt, cities: .last_log.predict.cities, logged: .last_log.predict.logged, errors: (.last_log.predict.errors // [] | length)}' \
+            /tmp/status.json 2>/dev/null || echo "(status not JSON — check auth/deploy)"
