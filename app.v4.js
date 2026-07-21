@@ -136,7 +136,8 @@ function renderCard(c) {
     cl && cl.point != null ? `<span class="peek-c">${(+cl.point).toFixed(0)}°</span>${gradeChip}` : `<span class="muted">n/a</span>`}${
     cl && cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}${
     c.claudePool ? ` <span class="tag" title="${(c.claudePool.note || "").replace(/"/g, "'")}" style="color:#6cf">🧊 pool −${c.claudePool.divergence_f}°</span>` : ""}${
-    c.claudeSmoke ? ` <span class="tag" title="${(c.claudeSmoke.note || "").replace(/"/g, "'")}" style="color:#e90">🔥 smoke ${c.claudeSmoke.penalty}°</span>` : ""}</span>`;
+    c.claudeSmoke ? ` <span class="tag" title="${(c.claudeSmoke.note || "").replace(/"/g, "'")}" style="color:#e90">🔥 smoke ${c.claudeSmoke.penalty}°</span>` : ""}${
+    (c.nofloor && c.nofloor.top) ? ` <span class="tag" title="Sell the floor: NO on ${c.nofloor.top.label} at ${Math.round((c.nofloor.top.no_ask || 0) * 100)}¢ pays ${c.nofloor.top.return_pct}% — locks (early exit) once the high clears ${c.nofloor.top.lock_temp}°, ${c.nofloor.top.deg_to_lock == null ? "" : c.nofloor.top.deg_to_lock + "° to go, "}${Math.round((c.nofloor.top.p_lock || 0) * 100)}% likely" style="color:#5c6">🛡 floor NO ${c.nofloor.top.label} +${c.nofloor.top.return_pct}%</span>` : ""}</span>`;
   return `<details class="card" id="${cardId}"${openCards.has(cardId) ? " open" : ""}>
     <summary class="card-summary">
       <div class="card-head">
