@@ -159,8 +159,11 @@ export async function runPredict(doLog) {
     // book, so the informed distribution is the right input. Attach the top
     // candidate + all evaluated rows to the card and the logged decision.
     const floorProbs = (sizingCard || card).bin_probs;
-    const nofloorScan = Object.keys(books).length && floorProbs
-      ? scanNoFloor(books, floorProbs, c.maxSoFarCli ?? c.maxSoFar ?? null) : { candidates: [], evaluated: [] };
+    let nofloorScan = { candidates: [], evaluated: [] };
+    try {
+      if (Object.keys(books).length && floorProbs && Object.keys(floorProbs).length)
+        nofloorScan = scanNoFloor(books, floorProbs, c.maxSoFarCli ?? c.maxSoFar ?? null);
+    } catch (e) { errors.push(`nofloor ${c.station}: ${String(e?.message || e)}`); }
     const nofloor = { top: nofloorScan.candidates[0] || null, candidates: nofloorScan.candidates,
       evaluated: nofloorScan.evaluated, max_so_far: round1(c.maxSoFarCli ?? c.maxSoFar ?? null) };
     // AccuWeather forward-log leg (2026-07-17): same asof as bayes/claude/nws so the

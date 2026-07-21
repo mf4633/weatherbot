@@ -68,7 +68,11 @@ export function scanNoFloor(books, binProbs, maxSoFarF, opts = {}) {
     // Gate on p_lock (not p_win): the early exit — the entire reason for this
     // strategy — only fires via the lock path. A middle bucket that "wins" only
     // because it might come in cold does not give an early exit and is not a floor.
-    const candidate = !alreadyLocked && pLock != null && returnPct != null &&
+    // CRITICAL: require an actual model probability for THIS bucket (p_yes != null).
+    // Without it, p_lock degenerates to 1 (nothing sums into pAtOrBelow) and a cheap
+    // NO would qualify at a FALSE 100% confidence — a blind bet dressed as the safest
+    // on the board. No model prob → no recommendation, full stop.
+    const candidate = !alreadyLocked && pYes != null && pLock != null && returnPct != null &&
       pLock >= minWin && returnPct >= minReturn;
     return {
       label: b.label, pure_floor: b.loInt == null, ceiling, lock_temp: lockTemp,
