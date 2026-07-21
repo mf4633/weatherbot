@@ -76,6 +76,21 @@ const probs = { "<=88": 0.03, "89-90": 0.12, "91-92": 0.45, "93-94": 0.30, ">=95
   ok("gate: 70% win fails the 93% near-guaranteed floor", approx(b.p_lock, 0.70) && b.candidate === false);
 }
 
+// ---- SAFETY: a priced book with NO model probability must never be a candidate ----
+{
+  // Books present (cheap NO on the bottom bucket) but the model scored nothing.
+  const { evaluated, candidates } = scanNoFloor(ladder(), {}, 82);
+  const b = evaluated.find(e => e.label === "<=88");
+  ok("safety: empty bin_probs → p_yes null", b.p_yes == null);
+  ok("safety: blind bucket is NOT a candidate despite cheap NO", b.candidate === false);
+  ok("safety: whole board empty when the model scored nothing", candidates.length === 0);
+  // Partial: only the bottom bucket scored, the rest missing → bottom still needs its own prob.
+  const partial = scanNoFloor(ladder(), { "<=88": 0.03 }, 82).evaluated.find(e => e.label === "<=88");
+  ok("safety: a bucket WITH its own prob still evaluates", partial.p_yes === 0.03 && partial.candidate === true);
+  const midMissing = scanNoFloor(ladder(), { "<=88": 0.03 }, 82).evaluated.find(e => e.label === "91-92");
+  ok("safety: a bucket missing its own prob is not a candidate", midMissing.p_yes == null && midMissing.candidate === false);
+}
+
 // ---- threshold overrides ----
 {
   const b = scanNoFloor(ladder(), probs, 82, { minReturn: 0.30 }).evaluated.find(e => e.label === "<=88");
