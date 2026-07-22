@@ -177,6 +177,9 @@ function renderCard(c) {
         Object.entries(c.claudeComponents).filter(([k]) => k !== "T_now" && k !== "R_analog(raw)")
           .map(([k, v]) => `${k.replace("A_", "").replace("R_", "").replace("(eff)", "")} ${v >= 0 ? "+" : ""}${(+v).toFixed(1)}`)
           .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}${(c.claudeBlendW ?? 0) > 0 && c.claudePure != null ? `  · pure analog ${(+c.claudePure).toFixed(1)} / NWS ${c.claudeNwsBase != null ? (+c.claudeNwsBase).toFixed(0) : "—"}` : ""}</div>` : ""}
+      ${c.climate && c.climate.flags && c.climate.flags.length ? `<div class="ci" title="${c.climate.flags.map(f => f.note).join(" | ").replace(/"/g, "'")}">${
+        c.climate.regime === "capped-lean" ? `<span class="cool">regime: capped</span>` : c.climate.regime === "hot-lean" ? `<span class="warm">regime: hot</span>` : `regime: ${c.climate.regime}`
+      } — ${c.climate.flags.map(f => `${f.lean === "cap" ? "▽" : f.lean === "hot" ? "▲" : "·"}${f.code}`).join("  ")}</div>` : ""}
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.std.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci68)}</span></div>
       <div class="row ci"><span>95% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci95)}</span></div>

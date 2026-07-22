@@ -8,6 +8,7 @@ import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
 import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, nwsBaseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
+import { adviseClimate } from "./lib/station_climate.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -1593,6 +1594,17 @@ export default async (req) => {
           Object.entries(card.components).map(([k, v]) => [k, Math.round((+v) * 10) / 10]));
         result.claudePool = card.pool || null;
         result.claudeSmoke = card.smoke || null;
+        // Station-climate regime advisor (2026-07-22): encoded marine-layer /
+        // sea-breeze / compressional-flow knowledge per station. Display-only —
+        // context for reading the numbers, never fed to the scored models.
+        try {
+          const hourLocal = (() => {
+            const p = new Intl.DateTimeFormat("en-US", { timeZone: c.tz, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+            const g = (t) => parseInt(p.find(x => x.type === t)?.value ?? "0", 10);
+            return (g("hour") % 24) + g("minute") / 60;
+          })();
+          result.climate = adviseClimate(c.station, snap.now, { hourLocal });
+        } catch (e) { result.climate = null; }
       } else {
         result.claudeHigh = null;
       }
