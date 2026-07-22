@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interpolatornyc"
+version = "0.1.0"
+description = "Interpolate KNYC (Central Park) temperature from nearby Wunderground PWS stations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Michael Flynn" }]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+interpolatornyc = "interpolatornyc:main"
+
+[project.urls]
+Homepage = "https://github.com/mf4633/interpolatornyc"
+
+[tool.setuptools]
+packages = ["interpolatornyc"]
+
+[tool.setuptools.package-dir]
+"interpolatornyc" = "."
