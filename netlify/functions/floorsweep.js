@@ -34,7 +34,7 @@ const CITIES = {
   LAX:  { series: "KXHIGHLAX",  official: "KLAX", tz: "America/Los_Angeles" },  // confirmed
   SFO:  { series: "KXHIGHTSFO", official: "KSFO", tz: "America/Los_Angeles" },  // confirmed
   SEA:  { series: "KXHIGHTSEA", official: "KSEA", tz: "America/Los_Angeles" },  // confirmed
-  PHX:  { series: "KXHIGHPHX",  official: "KPHX", tz: "America/Phoenix" },      // verify ticker
+  PHX:  { series: "KXHIGHTPHX", official: "KPHX", tz: "America/Phoenix" },      // confirmed (kxhightphx)
   MIA:  { series: "KXHIGHMIA",  official: "KMIA", tz: "America/New_York" },     // verify ticker
   CHI:  { series: "KXHIGHCHI",  official: "KMDW", tz: "America/Chicago" },      // verify ticker
   AUS:  { series: "KXHIGHAUS",  official: "KAUS", tz: "America/Chicago" },      // verify ticker
