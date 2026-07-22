@@ -41,10 +41,29 @@ const CITIES = {
   PHIL: { series: "KXHIGHPHIL", official: "KPHL", tz: "America/New_York" },     // verify ticker
 };
 
-async function getJson(url, headers = {}) {
-  const r = await fetch(url, { headers: { "User-Agent": UA, accept: "application/json", ...headers }, signal: AbortSignal.timeout(9000) });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// Kalshi 429s when every city fetches at once (the CHI/AUS/PHIL failures were a self-
+// inflicted 11-city parallel burst). Retry 429/503 with backoff so a transient rate
+// limit doesn't silently drop a whole city from the sweep.
+async function getJson(url, headers = {}, tries = 3) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(url, { headers: { "User-Agent": UA, accept: "application/json", ...headers }, signal: AbortSignal.timeout(9000) });
+    if ((r.status === 429 || r.status === 503) && attempt < tries - 1) { await sleep(500 * 2 ** attempt); continue; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+}
+
+// Bounded-concurrency map: run at most `limit` city sweeps at once so the whole sweep
+// doesn't rate-limit itself against Kalshi. Every item still completes (results keep
+// input order); only the in-flight count is capped.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 async function fetchOfficialObs(station, hours, refNow) {
@@ -139,7 +158,7 @@ export default async (req) => {
 
   const now = new Date(), nowMs = now.getTime();
   const keys = (only ? [only.toUpperCase()] : Object.keys(CITIES)).filter((k) => CITIES[k]);
-  const results = await Promise.all(keys.map((k) => sweepCity(k, CITIES[k], { now, nowMs, gates })));
+  const results = await mapLimit(keys, 4, (k) => sweepCity(k, CITIES[k], { now, nowMs, gates }));
 
   const best = results.filter((r) => r.ok)
     .flatMap((r) => r.candidates.map((c) => ({ city: r.city, ...c })))

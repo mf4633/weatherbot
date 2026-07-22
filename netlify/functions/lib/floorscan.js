@@ -53,13 +53,32 @@ export function scanFloors(prediction, books, maxSoFarF, opts = {}) {
   const tailwind = isMorning && anomaly != null && anomaly <= -ANOMALY_WARN_F;
   const headwind = isMorning && anomaly != null && anomaly >= ANOMALY_WARN_F;
   const offHoursAnomaly = !isMorning && anomaly != null && Math.abs(anomaly) >= ANOMALY_WARN_F;
+
+  // low_confidence guard (the 2026-07-22 SFO ≤73 trap): when the predictor flags the
+  // anchor as unreliable (SFO's +7°F anomaly), the peak distribution — and therefore
+  // p_lock — is NOT trustworthy. A p_lock=1 there is model overconfidence, not a real
+  // lock: SFO's "≤73" NO showed p_lock=1 at 27¢ while the market (correctly) priced ~73%
+  // that it stays ≤73. Suppress candidates so the sweep never ranks a coin flip as a
+  // near-guaranteed floor; keep them visible in `evaluated` with a `suppressed` reason.
+  const lowConfidence = !!prediction?.low_confidence;
+  const suppressedLowConf = lowConfidence ? candidates.length : 0;
+  const outCandidates = lowConfidence ? [] : candidates;
+  const outEvaluated = lowConfidence
+    ? evaluated.map((e) => (e.candidate ? { ...e, candidate: false, suppressed: "low_confidence" } : e))
+    : evaluated;
+
   return {
-    candidates, evaluated,
+    candidates: outCandidates, evaluated: outEvaluated,
     context: {
-      anchor_anomaly_f: anomaly, phase,
+      anchor_anomaly_f: anomaly, phase, low_confidence: lowConfidence,
       floor_tailwind: tailwind,
       floor_headwind: headwind,
-      note: tailwind
+      suppressed_low_confidence: suppressedLowConf,
+      note: lowConfidence
+        ? `low_confidence prediction (anchor anomaly ${anomaly}°F): p_lock is unreliable here, so ` +
+          `${suppressedLowConf} floor candidate(s) were SUPPRESSED — a p_lock=1 on a flagged day is ` +
+          `model overconfidence, not a lock (the SFO ≤73 trap). Do not sell this floor on the raw gate.`
+        : tailwind
         ? `cold-pool morning (anchor ${Math.abs(anomaly)}°F below norm): the predictor's p_lock is a ` +
           `LOWER bound — the day mixes out hotter than modeled, so cheap low-bucket NOs are safer than ` +
           `they look and the crowd is likely leaving premium on the floor. This is the window to lean in.`

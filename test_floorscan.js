@@ -36,6 +36,25 @@ const board = () => ({
   ok("warm: no anomaly → no tailwind/headwind", r.context.floor_tailwind === false && r.context.floor_headwind === false);
 }
 
+// ---- low_confidence guard: the 2026-07-22 SFO ≤73 trap. A +7°F anchor anomaly makes
+//      the peak distribution (and p_lock) unreliable, so a p_lock=1 floor is model
+//      overconfidence, NOT a lock. Suppress it — never rank a coin flip as a floor. ----
+{
+  const trap = { peak_samples: [95, 96, 96, 97, 98], anchor_anomaly_f: 7, latest_hour: 6, low_confidence: true };
+  // Control: identical board + peaks WITHOUT the flag — the guard is the ONLY thing that
+  // suppresses (not an unrelated gate change). Every one of these gets suppressed.
+  const ctl = scanFloors({ ...trap, low_confidence: false }, board(), 82);
+  const r = scanFloors(trap, board(), 82);
+  const b88 = r.evaluated.find((e) => e.label === "<=88");
+  ok("low_conf: control (flag off) surfaces the ≤88 candidate", ctl.candidates.some((c) => c.label === "<=88"));
+  ok("low_conf: raw p_lock is still 1 (peaks clear 88)", approx(b88.p_lock, 1));
+  ok("low_conf: the p_lock=1 candidate is SUPPRESSED", b88.candidate === false && b88.suppressed === "low_confidence");
+  ok("low_conf: no actionable candidate reaches the buy-list", r.candidates.length === 0);
+  ok("low_conf: suppression count matches what the gate would have passed",
+    r.context.low_confidence === true && r.context.suppressed_low_confidence === ctl.candidates.length && ctl.candidates.length > 0);
+  ok("low_conf: note names the trap", r.context.note.includes("low_confidence") && r.context.note.includes("SFO"));
+}
+
 // ---- monotonic lock: once max-so-far clears the ceilings, no edge left ----
 {
   const warm = { peak_samples: [95, 96, 96, 97, 98], anchor_anomaly_f: 1 };
