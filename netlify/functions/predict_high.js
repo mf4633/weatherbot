@@ -51,6 +51,7 @@ export default async (req) => {
   const asOfHour = Math.min(20, Math.max(6, parseInt(url.searchParams.get("as_of_hour") || "12", 10)));
   const anchorParam = url.searchParams.get("anchor");
   const bucketAnchor = anchorParam != null ? (parseInt(anchorParam, 10) & 1) : cfg.anchor;
+  const experimental = url.searchParams.get("experimental_anchor") === "1";
 
   try {
     const now = new Date();
@@ -60,6 +61,14 @@ export default async (req) => {
     const prediction = predictHigh(obs, cfg.tz, { bucketAnchor });
     const backtest = backtestHigh(obs, cfg.tz, { asOfHour, bucketAnchor, minPriorDays: 3 });
 
+    // Opt-in peak-on-anchor regression (?experimental_anchor=1). Off by default: it did
+    // NOT beat the base rise method on the 6-day KDEN sample — kept for re-evaluation.
+    const experimentalBlock = experimental ? {
+      prediction: predictHigh(obs, cfg.tz, { bucketAnchor, anchorAnomaly: true }),
+      backtest: backtestHigh(obs, cfg.tz, { asOfHour, bucketAnchor, minPriorDays: 3, anchorAnomaly: true }),
+      caveat: "peak-on-anchor regression; underperformed base on the 6-day KDEN sample, off by default",
+    } : undefined;
+
     return json({
       ok: true, city: cityKey, official: cfg.official, tz: cfg.tz,
       bucket_anchor: bucketAnchor, asof: now.toISOString(),
@@ -68,9 +77,12 @@ export default async (req) => {
         as_of_hour: backtest.as_of_hour, n: backtest.n, mae: backtest.mae, bias: backtest.bias,
         bucket_hit_pct: backtest.bucket_hit_pct, within1_pct: backtest.within1_pct, days: backtest.days,
       },
+      experimental: experimentalBlock,
       note: "prediction = today's latest :53 + the median historical rise-to-peak from this clock hour, " +
-        "floored by today's max so far (monotonic). bucket_probs are the empirical distribution of those " +
-        "historical rises. backtest walks the same rule forward over the window, target day held out.",
+        "floored by today's max so far (monotonic). bucket_probs = empirical distribution of those rises. " +
+        "When today's anchor sits far off the same-hour norm (anchor_anomaly_f), low_confidence trips and " +
+        "the range widens toward the airmass — the 2026-07-21 KDEN cold-pool lesson. backtest walks the " +
+        "rule forward, target day held out.",
     });
   } catch (e) {
     return json({ ok: false, city: cityKey, error: String(e?.message || e) }, 500);

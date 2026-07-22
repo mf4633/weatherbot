@@ -2,7 +2,7 @@
 // traces in America/Denver (July = MDT, UTC-6), so local hour H → UTC H+6, all inside
 // one UTC day for H in 6..17 — deterministic, no live fetch.
 import {
-  localParts, bucketOf, dailyRecords, calibrateRiseByHour, predictHigh, backtestHigh,
+  localParts, bucketOf, dailyRecords, calibrateRiseByHour, fitPeakOnAnchor, predictHigh, backtestHigh,
 } from "./netlify/functions/lib/highpredict.js";
 
 let pass = 0, fail = 0;
@@ -125,6 +125,73 @@ const day = (dnum, pairs) => pairs.map(([h, t]) => at(dnum, h, t));
   ok("backtest(noisy): within-1 drops below 100", bt.within1_pct === 66.7);
   const miss = bt.days.find(d => d.day === "2026-07-19");
   ok("backtest(noisy): 07-19 err = -2 (predicted 91 vs actual 93)", miss.err === -2 && miss.hit === false);
+}
+
+// ---- fitPeakOnAnchor + anchor-anomaly correction (2026-07-21 KDEN post-mortem) ----
+{
+  // Prior days where the peak rises only HALF as fast as the anchor (slope 0.5) — i.e.
+  // a cool anchor does NOT mean a cool day, it mostly mixes out. The base slope-1
+  // method can't see this; the fit can.
+  const priorObs = [
+    ...day(10, [[11, 80], [15, 92]]),
+    ...day(11, [[11, 84], [15, 94]]),
+    ...day(12, [[11, 88], [15, 96]]),
+    ...day(13, [[11, 82], [15, 93]]),
+  ];
+  const pdays = dailyRecords(priorObs, TZ);
+  const fit = fitPeakOnAnchor(pdays, 11, { minN: 4 });
+  ok("fit: learned slope 0.5 (peak rises half as fast as anchor)", approx(fit.b, 0.5));
+  ok("fit: intercept 52", approx(fit.a, 52));
+  ok("fit: n=4, training range 80..88", fit.n === 4 && fit.xmin === 80 && fit.xmax === 88);
+  ok("fit: too few days → null", fitPeakOnAnchor(pdays, 11, { minN: 5 }) === null);
+
+  const obs = [...priorObs, ...day(14, [[11, 78]])]; // today: cold anchor 78, below training
+  const asOf = at(14, 11, 78).tsMs;
+  const rise = predictHigh(obs, TZ, { asOfMs: asOf, bucketAnchor: 0 });
+  const corr = predictHigh(obs, TZ, { asOfMs: asOf, bucketAnchor: 0, anchorAnomaly: true, anchorMinN: 4 });
+  ok("base(rise): cold anchor carried ~1:1 → 88.5", rise.method === "rise" && rise.predicted === 88.5);
+  ok("corrected(anchor): cold anchor pulled up → 91", corr.method === "anchor" && corr.predicted === 91);
+  ok("corrected: reports the learned slope 0.5", corr.slope === 0.5);
+  ok("corrected: flags extrapolation (78 below training)", corr.extrapolating === true);
+  ok("corrected: lifts a cold-pool anchor above the naive rise", corr.predicted > rise.predicted);
+
+  // Graceful fallback: too few days for a fit → use the base rise method.
+  const few = [...day(10, [[11, 80], [15, 92]]), ...day(11, [[11, 84], [15, 94]]), ...day(14, [[11, 78]])];
+  const fb = predictHigh(few, TZ, { asOfMs: at(14, 11, 78).tsMs, anchorAnomaly: true, anchorMinN: 4 });
+  ok("fallback: < minN days → base rise method", fb.method === "rise");
+}
+
+// ---- always-on anchor-anomaly DETECTION + tail-widening (the validated lesson) ----
+{
+  const prior = [
+    ...day(10, [[11, 88], [15, 93]]),
+    ...day(11, [[11, 85], [15, 92]]),
+    ...day(12, [[11, 87], [15, 90]]),
+    ...day(13, [[11, 92], [15, 97]]),
+    ...day(14, [[11, 95], [15, 100]]),   // same-hour anchors span 85..95, mean 89.4
+  ];
+  // Cold-pool morning: today's 82 sits below every analog at this hour (the 7/21 KDEN case).
+  const cold = predictHigh([...prior, ...day(15, [[11, 82]])], TZ,
+    { asOfMs: at(15, 11, 82).tsMs, bucketAnchor: 1 });
+  ok("anomaly: cold anchor flagged (~-7.4°F vs norm)", approx(cold.anchor_anomaly_f, -7.4, 0.1));
+  ok("anomaly: cold-pool morning → low_confidence", cold.low_confidence === true);
+  ok("anomaly: emits an explanatory note", typeof cold.note === "string" && cold.note.includes("cold-pool"));
+  ok("anomaly: upper range widened toward the airmass (89→92)", cold.range[1] === 92 && cold.range[0] === 85);
+  ok("anomaly: point estimate itself unchanged (82+median 5 = 87)", cold.predicted === 87);
+
+  // Normal anchor in-range → no flag, no widening.
+  const norm = predictHigh([...prior, ...day(15, [[11, 90]])], TZ,
+    { asOfMs: at(15, 11, 90).tsMs, bucketAnchor: 1 });
+  ok("anomaly: in-range anchor not flagged", norm.low_confidence === false && norm.note == null);
+  ok("anomaly: in-range range not widened", norm.range[1] === 97);
+}
+
+// ---- backtestHigh scores the corrected method too ----
+{
+  const obs = [];
+  for (let d = 14; d <= 19; d++) obs.push(...day(d, [[8, 70], [11, 85], [15, 91]]));
+  const bt = backtestHigh(obs, TZ, { asOfHour: 11, minPriorDays: 3, bucketAnchor: 1, anchorAnomaly: true });
+  ok("backtest(anchor): tags method and scores post-warmup days", bt.method === "anchor" && bt.n === 3);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
