@@ -9,7 +9,11 @@ name: Floor sweep cron
 
 on:
   schedule:
-    - cron: "0 11,13,15,17,19,21 * * *"   # every 2h across US mornings (UTC); GitHub cron is loose
+    # Minute :23, NOT :00 — GitHub delays/drops top-of-hour schedules under load (its
+    # own docs), which is why the :00 version logged 0 runs in 13h while the :15 logger
+    # cron fired. Hourly across the US-morning window so every city's cheap-floor window
+    # (east-coast ~12-15Z, west-coast ~14-17Z) gets a capture.
+    - cron: "23 11,12,13,14,15,16,17,18 * * *"
   workflow_dispatch: {}
 
 concurrency:
