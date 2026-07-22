@@ -61,9 +61,26 @@
 </section>
 
 <section id="rain-outlook-section">
-  <h2>Rainfall outlook (this month)</h2>
-  <main id="rain-outlook-grid"></main>
+  <!-- Collapsed by default (2026-07-22) — rain monthlies settle 5-30 days out and the
+       cards rarely need daily eyes; expansion state persists in localStorage. -->
+  <details id="rain-outlook-details">
+    <summary style="cursor:pointer; list-style:revert"><h2 style="display:inline-block; margin:0">Rainfall outlook (this month)</h2> <span class="muted" style="font-size:12px">click to expand</span></summary>
+    <main id="rain-outlook-grid"></main>
+  </details>
 </section>
+<script>
+  (function () {
+    const d = document.getElementById("rain-outlook-details");
+    try { if (localStorage.getItem("rainOutlookOpen") === "1") d.open = true; } catch (e) {}
+    d.addEventListener("toggle", () => {
+      try { localStorage.setItem("rainOutlookOpen", d.open ? "1" : "0"); } catch (e) {}
+    });
+    // The top-nav "Rain" link should land on an OPEN section.
+    const openIfTargeted = () => { if (location.hash === "#rain-outlook-section") d.open = true; };
+    window.addEventListener("hashchange", openIfTargeted);
+    openIfTargeted();
+  })();
+</script>
 
 <section id="kalshi-section">
   <h2>Kalshi prediction-market edges</h2>
