@@ -1,0 +1,39 @@
+name: Floor sweep cron
+
+# Capture the MORNING mispricing window for the low-tail-NO strategy. /api/floorsweep
+# logs the top floor pick per city (first-per-day wins), so it must run early and often
+# across US mornings — a west-coast board and an east-coast board have their cheap-floor
+# windows hours apart. Netlify's scheduler stalls (documented, cf. the claude-logger
+# outage), so this is the external backstop that actually captures the picks the
+# ?mode=report scorer later grades against CLI settlement.
+
+on:
+  schedule:
+    - cron: "0 11,13,15,17,19,21 * * *"   # every 2h across US mornings (UTC); GitHub cron is loose
+  workflow_dispatch: {}
+
+concurrency:
+  group: floorsweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run floor sweep (logs the morning picks)
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          code=$(curl --max-time 150 -sS -u "$BASIC_AUTH" \
+            "https://weatherbot-mf.netlify.app/api/floorsweep" \
+            -o /tmp/sweep.json -w "%{http_code}" || echo "000")
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning::floorsweep did not return 200 (HTTP $code)"
+            head -c 400 /tmp/sweep.json || true
+            exit 0
+          fi
+          # Surface what got logged + any wrong-ticker cities to fix in CITIES.
+          jq '{logged, candidates: (.best_low_tail_no|length), tailwinds: .tailwind_cities, failed: [.failed[].city]}' \
+            /tmp/sweep.json 2>/dev/null || head -c 400 /tmp/sweep.json

@@ -12,11 +12,17 @@
 // confirmed from live URLs). A city returning error:"kalshi … HTTP 404" just needs its
 // ticker corrected here — the parsing + scan are unit-tested (test_kalshi.js).
 
+import { getStore } from "@netlify/blobs";
 import { parseMetar } from "./lib/metar.js";
 import { stationLines } from "./lib/claude_engine.js";
 import { predictHigh } from "./lib/highpredict.js";
 import { scanFloors } from "./lib/floorscan.js";
 import { booksFromMarkets, eventDateCode, marketsForDay } from "./lib/kalshi.js";
+import { normalizePick, dedupePicks, scoreFloorLog } from "./lib/floorlog.js";
+
+const STORE = "claude_scoreboard";
+const LOG_KEY = "floorlog/picks.json";
+const localYmd = (tz, ms) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(ms));
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 const KALSHI = process.env.KALSHI_API_BASE || "https://api.elections.kalshi.com/trade-api/v2";
@@ -75,8 +81,8 @@ async function sweepCity(key, cfg, opts) {
       low_confidence: prediction.low_confidence, anchor_anomaly_f: prediction.anchor_anomaly_f,
       floor_tailwind: context.floor_tailwind, tailwind_note: context.floor_tailwind ? context.note : undefined,
       candidates: candidates.map((c) => ({
-        label: c.label, no_ask: c.no_ask, return_pct: c.return_pct, p_lock: c.p_lock,
-        deg_to_lock: c.deg_to_lock, already_locked: c.already_locked,
+        label: c.label, ceiling: c.ceiling, lock_temp: c.lock_temp, no_ask: c.no_ask,
+        return_pct: c.return_pct, p_lock: c.p_lock, deg_to_lock: c.deg_to_lock, already_locked: c.already_locked,
       })),
     };
   } catch (e) {
@@ -88,8 +94,44 @@ const num = (url, k) => { const v = url.searchParams.get(k); return v == null ? 
 const json = (o, s = 200) => new Response(JSON.stringify(o, null, 2),
   { status: s, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
+// Settled CLI highs for the logged stations (IEM archive — the Kalshi settlement source).
+async function fetchCliHighs(stations, years) {
+  const cli = {};
+  await Promise.all(stations.map(async (st) => {
+    for (const y of years) {
+      try {
+        const j = await getJson(`https://mesonet.agron.iastate.edu/json/cli.py?station=${st}&year=${y}`);
+        for (const r of j.results || []) if (r.high != null && r.valid) cli[`${st}|${r.valid}`] = r.high;
+      } catch { /* year/station gap is fine */ }
+    }
+  }));
+  return cli;
+}
+
 export default async (req) => {
   const url = new URL(req.url);
+
+  // ?mode=report — score the logged picks against the CLI settlement (the proof the
+  // "near-guaranteed 20%" claim rests on).
+  if (url.searchParams.get("mode") === "report") {
+    try {
+      const store = getStore(STORE);
+      const log = (await store.get(LOG_KEY, { type: "json" }).catch(() => null)) || { picks: [] };
+      const picks = log.picks || [];
+      const stations = [...new Set(picks.map((p) => p.station).filter(Boolean))];
+      const years = [...new Set(picks.map((p) => String(p.contract_date || "").slice(0, 4)).filter(Boolean))];
+      const cli = await fetchCliHighs(stations, years);
+      const score = scoreFloorLog(picks, cli);
+      return json({
+        ok: true, mode: "report", logged_picks: picks.length, settled: score.n, score,
+        note: "hit_rate + mean_return_pct over settled logged floor picks, overall and by_city. " +
+          "Picks are the top low-tail NO per city per day, captured at first sight (the morning window).",
+      });
+    } catch (e) {
+      return json({ ok: false, mode: "report", error: String(e?.message || e) }, 500);
+    }
+  }
+
   const only = url.searchParams.get("city");
   const gates = {};
   if (num(url, "min_return") !== undefined) gates.minReturn = num(url, "min_return");
@@ -103,7 +145,28 @@ export default async (req) => {
     .flatMap((r) => r.candidates.map((c) => ({ city: r.city, ...c })))
     .sort((a, b) => (b.return_pct ?? -1) - (a.return_pct ?? -1));
 
+  // Log the top candidate per city (first-per-day wins → the morning capture). Best-
+  // effort: never let a store hiccup break the sweep. ?nolog=1 skips (for manual checks).
+  let logged = 0;
+  if (url.searchParams.get("nolog") !== "1") {
+    try {
+      const store = getStore(STORE);
+      const prev = (await store.get(LOG_KEY, { type: "json" }).catch(() => null)) || { picks: [] };
+      const incoming = results.filter((r) => r.ok && r.candidates.length).map((r) =>
+        normalizePick({
+          city: r.city, station: r.official, contractDate: localYmd(CITIES[r.city].tz, nowMs),
+          candidate: r.candidates[0], predicted: r.predicted, loggedAtMs: nowMs,
+        })).filter(Boolean);
+      if (incoming.length) {
+        const merged = dedupePicks(prev.picks || [], incoming);
+        await store.setJSON(LOG_KEY, { picks: merged, updated: now.toISOString() });
+        logged = incoming.length;
+      }
+    } catch { /* logging is best-effort */ }
+  }
+
   return json({
+    logged,
     ok: true, asof: now.toISOString(),
     best_low_tail_no: best,
     tailwind_cities: results.filter((r) => r.ok && r.floor_tailwind).map((r) => r.city),
