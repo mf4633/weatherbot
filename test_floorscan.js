@@ -47,20 +47,32 @@ const board = () => ({
 // ---- cold-pool morning: the honest KDEN case — raw p_lock UNDER-rates the floor,
 //      but the tailwind flags that it's safer than the gate shows ----
 {
-  const cold = { peak_samples: [85, 87, 87, 87, 89], anchor_anomaly_f: -7 }; // today's 11:53 shape
+  const cold = { peak_samples: [85, 87, 87, 87, 89], anchor_anomaly_f: -7, latest_hour: 8 }; // morning
   const r = scanFloors(cold, board(), 82);
   const b88 = r.evaluated.find((e) => e.label === "<=88");
   ok("cold: raw p_lock under-rates ≤88 (only 1/5 peaks clear 88)", approx(b88.p_lock, 0.2, 0.01));
   ok("cold: raw gate therefore rejects ≤88", b88.candidate === false);
-  ok("cold: BUT tailwind fires (cold-pool → floor safer than modeled)", r.context.floor_tailwind === true);
+  ok("cold: morning tailwind fires (cold-pool → floor safer than modeled)", r.context.floor_tailwind === true);
+  ok("cold: phase is morning", r.context.phase === "morning");
   ok("cold: tailwind note explains the mispricing", r.context.note.includes("cold-pool") && r.context.note.includes("premium"));
 }
 
-// ---- warm-start headwind ----
+// ---- the 2026-07-22 evening false-positive: same cold anomaly, but not morning ----
 {
-  const hot = { peak_samples: [95, 96, 96, 97, 98], anchor_anomaly_f: 6 };
+  const evening = { peak_samples: [85, 87, 87, 87, 89], anchor_anomaly_f: -9.4, latest_hour: 18 };
+  const r = scanFloors(evening, board(), 86);
+  ok("evening: tailwind gated OFF outside the morning window", r.context.floor_tailwind === false);
+  ok("evening: phase reported", r.context.phase === "evening");
+  ok("evening: note calls the anomaly diurnal, not a floor signal", r.context.note.includes("diurnal"));
+}
+
+// ---- warm-start headwind (morning only) ----
+{
+  const hot = { peak_samples: [95, 96, 96, 97, 98], anchor_anomaly_f: 6, latest_hour: 9 };
   const r = scanFloors(hot, board(), 82);
   ok("headwind: warm-start flags floor risk", r.context.floor_headwind === true && r.context.note.includes("warm-start"));
+  const hotPM = scanFloors({ ...hot, latest_hour: 15 }, board(), 82);
+  ok("headwind: gated off in the afternoon", hotPM.context.floor_headwind === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
