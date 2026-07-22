@@ -42,12 +42,21 @@ export function scanFloors(prediction, books, maxSoFarF, opts = {}) {
   const { candidates, evaluated } = scanNoFloor(books, binProbs, maxSoFarF, opts);
 
   const anomaly = prediction?.anchor_anomaly_f ?? null;
-  const tailwind = anomaly != null && anomaly <= -ANOMALY_WARN_F; // cold-pool → floors safer
-  const headwind = anomaly != null && anomaly >= ANOMALY_WARN_F;  // warm start → floors riskier
+  const hour = prediction?.latest_hour ?? null;
+  const phase = hour == null ? "unknown"
+    : hour < 4 ? "overnight" : hour <= 11 ? "morning" : hour <= 16 ? "afternoon" : "evening";
+  // The cold-pool tailwind premise ("cool now → mixes out hot, floor safe, crowd leaves
+  // premium") only holds BEFORE the peak. Run in the afternoon/evening a negative anomaly
+  // is just diurnal cooling, not a floor signal — so gate the tailwind to the morning
+  // window (fix for the 2026-07-22 evening-run false positives on CHI/PHIL).
+  const isMorning = phase === "morning";
+  const tailwind = isMorning && anomaly != null && anomaly <= -ANOMALY_WARN_F;
+  const headwind = isMorning && anomaly != null && anomaly >= ANOMALY_WARN_F;
+  const offHoursAnomaly = !isMorning && anomaly != null && Math.abs(anomaly) >= ANOMALY_WARN_F;
   return {
     candidates, evaluated,
     context: {
-      anchor_anomaly_f: anomaly,
+      anchor_anomaly_f: anomaly, phase,
       floor_tailwind: tailwind,
       floor_headwind: headwind,
       note: tailwind
@@ -57,6 +66,9 @@ export function scanFloors(prediction, books, maxSoFarF, opts = {}) {
         : headwind
         ? `warm-start morning (anchor +${anomaly}°F): the high tail is fatter than modeled, so a low bucket ` +
           `can stay live longer — trust the monotonic max-so-far, not the early p_lock, before selling a floor.`
+        : offHoursAnomaly
+        ? `${phase} run: the ${anomaly}°F anomaly is diurnal (not a cold-pool morning) — floor tailwind ` +
+          `signals only apply in the morning window, and by now the day's high is largely set.`
         : "",
     },
   };
