@@ -31,9 +31,17 @@ jobs:
           echo "HTTP $code"
           if [ "$code" != "200" ]; then
             echo "::warning::floorsweep did not return 200 (HTTP $code)"
-            head -c 400 /tmp/sweep.json || true
+            head -c 800 /tmp/sweep.json || true
             exit 0
           fi
-          # Surface what got logged + any wrong-ticker cities to fix in CITIES.
-          jq '{logged, candidates: (.best_low_tail_no|length), tailwinds: .tailwind_cities, failed: [.failed[].city]}' \
-            /tmp/sweep.json 2>/dev/null || head -c 400 /tmp/sweep.json
+          # Dump the full actionable result to the log (this IS the readable output).
+          echo "=== FLOOR SWEEP $(date -u +%FT%TZ) ==="
+          jq -r '"logged=\(.logged)  candidates=\(.best_low_tail_no|length)  tailwinds=\(.tailwind_cities|join(",") // "none")"' /tmp/sweep.json || true
+          echo "--- best_low_tail_no (ranked buy-list) ---"
+          jq -r '(.best_low_tail_no[] | "\(.city)  \(.label)  NO=\(.no_ask)  return=\(.return_pct)%  p_lock=\(.p_lock)  deg->lock=\(.deg_to_lock)  locked=\(.already_locked)") // empty' /tmp/sweep.json || true
+          echo "--- tailwind cities (cold-pool, lean in) ---"
+          jq -r '(.cities[] | select(.floor_tailwind==true) | "\(.city)  predicted=\(.predicted)  anomaly=\(.anchor_anomaly_f)  \(.tailwind_note // "")") // empty' /tmp/sweep.json || true
+          echo "--- failed (fix ticker in CITIES) ---"
+          jq -r '(.failed[] | "\(.city): \(.error)") // empty' /tmp/sweep.json || true
+          echo "--- per-city ---"
+          jq -r '.cities[] | "\(.city) ok=\(.ok) predicted=\(.predicted // "-") maxSoFar=\(.max_so_far // "-") tailwind=\(.floor_tailwind // "-") cands=\(.candidates|length)"' /tmp/sweep.json || true
