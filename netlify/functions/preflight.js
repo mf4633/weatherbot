@@ -28,10 +28,18 @@ const HIGH_SERIES = {
   "Washington DC": "KXHIGHTDC", "Boston": "KXHIGHTBOS",
 };
 
-async function getJSON(url, headers = {}) {
-  const r = await fetch(url, { headers, signal: AbortSignal.timeout(9000) });
-  if (!r.ok) throw new Error(`${url.replace(/^https?:\/\/[^/]+/, "")} HTTP ${r.status}`);
-  return r.json();
+async function getJSON(url, headers = {}, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(9000) }).catch((e) => {
+      if (attempt >= retries) throw e;
+      return null;
+    });
+    if (r && r.ok) return r.json();
+    // Kalshi 429s under the ticker sweep are routine (shared egress + tight limits) —
+    // verified 2026-07-22: the "dead series" list churned between runs until retried.
+    if (attempt >= retries) throw new Error(`${url.replace(/^https?:\/\/[^/]+/, "")} HTTP ${r ? r.status : "ERR"}`);
+    await new Promise((res) => setTimeout(res, 700 * (attempt + 1)));
+  }
 }
 
 async function mapLimit(items, limit, fn) {
@@ -76,7 +84,7 @@ export default async () => {
   let tickers = null;
   try {
     const entries = Object.entries(HIGH_SERIES);
-    const results = await mapLimit(entries, 4, async ([city, series]) => {
+    const results = await mapLimit(entries, 2, async ([city, series]) => {
       try {
         const j = await getJSON(`${KALSHI}/markets?series_ticker=${series}&status=open&limit=1`,
                                 { Accept: "application/json" });
