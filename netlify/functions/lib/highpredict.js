@@ -228,6 +228,7 @@ export function predictHigh(obs, tz, opts = {}) {
         max_so_far: maxSoFar, latest_temp: latest.tempF, latest_hour: latestHour,
         slope: round1(fit.b), fit_rmse: round1(fit.rmse), n_cal_days: fit.n,
         extrapolating, low_confidence: fit.n < 4 || extrapolating,
+        peak_samples: peaksA.map(round1),
       };
     }
   }
@@ -273,6 +274,7 @@ export function predictHigh(obs, tz, opts = {}) {
     rise_range: hourStat ? [hourStat.min, hourStat.max] : null,
     anchor_anomaly_f: anomaly, n_cal_days: hourStat ? hourStat.n : 0,
     low_confidence: lowConfidence, note,
+    peak_samples: peaks.map(round1),
   };
 }
 

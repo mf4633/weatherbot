@@ -15,6 +15,26 @@
 import { parseMetar } from "./lib/metar.js";
 import { stationLines } from "./lib/claude_engine.js";
 import { predictHigh, backtestHigh } from "./lib/highpredict.js";
+import { scanFloors } from "./lib/floorscan.js";
+
+// Normalize a posted board into { label: {loInt, hiInt, no_ask, yes_bid} }. Accepts
+// either that object shape or an array of {label, loInt, hiInt, no_ask, yes_bid}.
+function normalizeBoard(board) {
+  if (!board) return null;
+  const entries = Array.isArray(board)
+    ? board.map((b) => [b.label, b])
+    : Object.entries(board);
+  const out = {};
+  for (const [label, b] of entries) {
+    if (!label || !b) continue;
+    out[label] = {
+      loInt: b.loInt ?? null, hiInt: b.hiInt ?? null,
+      no_ask: b.no_ask ?? null, yes_bid: b.yes_bid ?? null,
+      yes_ask: b.yes_ask ?? null, no_bid: b.no_bid ?? null,
+    };
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
@@ -53,12 +73,20 @@ export default async (req) => {
   const bucketAnchor = anchorParam != null ? (parseInt(anchorParam, 10) & 1) : cfg.anchor;
   const experimental = url.searchParams.get("experimental_anchor") === "1";
 
+  // POST a board (JSON {board: …}) to also get the floor-scan: which low-tail NOs are
+  // locked-or-locking and still paying, with the cold-pool tailwind surfaced.
+  let board = null;
+  if (req.method === "POST") {
+    try { board = normalizeBoard((await req.json())?.board); } catch { /* no/!json body */ }
+  }
+
   try {
     const now = new Date();
     const obs = await fetchOfficialObs(cfg.official, days * 24, now);
     if (obs.length < 24) throw new Error(`only ${obs.length} official obs`);
 
     const prediction = predictHigh(obs, cfg.tz, { bucketAnchor });
+    const floors = board ? scanFloors(prediction, board, prediction.max_so_far) : undefined;
     const backtest = backtestHigh(obs, cfg.tz, { asOfHour, bucketAnchor, minPriorDays: 3 });
 
     // Opt-in peak-on-anchor regression (?experimental_anchor=1). Off by default: it did
@@ -73,6 +101,7 @@ export default async (req) => {
       ok: true, city: cityKey, official: cfg.official, tz: cfg.tz,
       bucket_anchor: bucketAnchor, asof: now.toISOString(),
       prediction,
+      floors,
       backtest: {
         as_of_hour: backtest.as_of_hour, n: backtest.n, mae: backtest.mae, bias: backtest.bias,
         bucket_hit_pct: backtest.bucket_hit_pct, within1_pct: backtest.within1_pct, days: backtest.days,
