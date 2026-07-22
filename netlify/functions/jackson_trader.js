@@ -1096,10 +1096,19 @@ export async function runTraderCycle(isPaper = false) {
       cashDollars = Math.max(0, paperState.bankroll - openStake);
       positions = [];   // paper dedup runs off the ledger (botPlacedKeys), not Kalshi
     } else {
-      const cashCents = balanceRaw.balance ?? 0;     // Kalshi returns balance in cents
+      // Kalshi historically returns balance/portfolio_value in integer cents; the
+      // 2026-07 quote-schema migration moved market fields to *_dollars strings, so
+      // parse defensively in case the portfolio endpoints follow (live-readiness
+      // hardening 2026-07-22 — a silent 0 here would zero the bankroll and halt
+      // sizing on the day the flag gets flipped).
+      const asCents = (cents, dollars) =>
+        cents != null ? +cents
+        : dollars != null ? Math.round(parseFloat(dollars) * 100)
+        : 0;
+      const cashCents = asCents(balanceRaw.balance, balanceRaw.balance_dollars);
       cashDollars = cashCents / 100;
       // Equity = free cash + portfolio_value (open positions). Mirrors rain trader's line-457 formula.
-      equityDollars = cashDollars + ((balanceRaw.portfolio_value ?? 0) / 100);
+      equityDollars = cashDollars + (asCents(balanceRaw.portfolio_value, balanceRaw.portfolio_value_dollars) / 100);
       // Normalize Kalshi position fields. Real fields: position_fp (string of float;
       // sign = direction), market_exposure_dollars (string), realized_pnl_dollars (string).
       positions = (positionsRaw.market_positions || []).map(p => ({

@@ -395,6 +395,28 @@ export function thinAnalogGuard(point, snap, rampEff, hrsToPeak) {
   return { point: floor, guarded: true };
 }
 
+// --- NWS-base morning blend (2026-07-22) -----------------------------------------
+// The pure analog point is anchored on T_now + ramp, which systematically reads
+// LOW in the morning: the ramp only knows the obs trace so far, while the gridded
+// forecast has already integrated the synoptic day. Session evidence 2026-07-22:
+// morning served points ran 2-7°F under eventual CLI highs in NYC/HOU/AUS while
+// the NWS grid (bias-corrected) was close. Serve a point that stands on the NWS
+// forecast high as the BASE early and hands over to the obs-analog as the day's
+// own evidence accumulates:
+//   w_nws = clamp((hrsToPeak - 2) / 10, 0, 0.7)
+//   9h to peak (early morning): 70% NWS / 30% analog
+//   5h to peak: 30% NWS  ·  <=2h to peak: pure analog (obs dominate near peak)
+// Floored at max-so-far (the served number can never sit under an observed max).
+// DISPLAY/GATING ONLY — the scored ledger keeps the pure `point` for continuity;
+// this is the number the dashboard shows next to the Bayesian.
+export function nwsBaseBlend(analogPoint, nwsHigh, hrsToPeak, maxSoFar) {
+  if (nwsHigh == null || !Number.isFinite(+nwsHigh)) return { point: analogPoint, w: 0 };
+  const w = Math.min(0.7, Math.max(0, ((hrsToPeak ?? 0) - 2) / 10));
+  const point = Math.max(w * (+nwsHigh) + (1 - w) * analogPoint,
+                         Number.isFinite(+maxSoFar) ? +maxSoFar : -Infinity);
+  return { point, w };
+}
+
 // --- belief grade (2026-07-10) ---------------------------------------------------
 // How much the analog believes its own number, A (strongest) … F, from the same
 // signals used to argue a call: peak-lock (max physically in → A), persistence

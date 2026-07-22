@@ -7,7 +7,7 @@ import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
-import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
+import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, nwsBaseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
@@ -1574,7 +1574,15 @@ export default async (req) => {
         // because the analog was too sparse to yield a ramp (KLAX 8:53 AM read
         // high = current temp). Floors at damped persistence; flagged on the card.
         const g = thinAnalogGuard(card.dist.mean(), snap, card.components["R_analog(eff)"], result.hrsToPeak);
-        result.claudeHigh = Math.round(g.point * 10) / 10;
+        // NWS-base morning blend (2026-07-22): the served number stands on the NWS
+        // forecast high early (analog mornings read low) and hands over to the
+        // obs-analog approaching peak. Pure guarded point kept in claudePure.
+        const nwsBase = result.forecastHighF ?? result.nwsHighF ?? null;
+        const blend = nwsBaseBlend(g.point, nwsBase, result.hrsToPeak, result.maxSoFarCli ?? result.maxSoFar);
+        result.claudeHigh = Math.round(blend.point * 10) / 10;
+        result.claudePure = Math.round(g.point * 10) / 10;
+        result.claudeBlendW = Math.round(blend.w * 100) / 100;
+        result.claudeNwsBase = nwsBase;
         result.claudeGuarded = g.guarded;
         result.claudePeakLocked = !!card.peak_locked;
         const gr = gradeAnalogBelief(card, { guarded: g.guarded, hrsToPeak: result.hrsToPeak });

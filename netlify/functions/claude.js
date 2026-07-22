@@ -64,7 +64,10 @@ async function runLatest() {
     if (!rec.claude) continue;
     if (rec.asof && (!asof || rec.asof > asof)) asof = rec.asof;
     byStation[rec.station] = rec.claude;
-    const divergence = rec.bayes ? round1(rec.claude.point - rec.bayes.point) : null;
+    // Divergence vs the SERVED point (NWS-base blend when active) — the pure-model
+    // divergence is recoverable from claude.point, but the dashboard should compare
+    // the number it actually displays against the Bayesian.
+    const divergence = rec.bayes ? round1((rec.claude.point_blend ?? rec.claude.point) - rec.bayes.point) : null;
     cities.push({ city: rec.city || rec.station, station: rec.station, claude: rec.claude, bayes: rec.bayes || null, market: rec.market || null, divergence, nofloor: rec.nofloor || null });
   }
   cities.sort((a, b) => a.city.localeCompare(b.city));

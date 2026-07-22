@@ -170,13 +170,13 @@ function renderCard(c) {
           ${cl && cl.point != null
             ? `<div class="big claude-num">${(+cl.point).toFixed(1)}°F${gradeChip}${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>`
             : `<div class="big claude-num" style="opacity:.5">n/a</div>`}
-          <div class="model-cap">Claude analog${c.claudeGrade ? ` · belief ${c.claudeGrade}` : ""}</div>
+          <div class="model-cap">Claude analog${(c.claudeBlendW ?? 0) > 0 ? ` · NWS base ${Math.round(c.claudeBlendW * 100)}%` : ""}${c.claudeGrade ? ` · belief ${c.claudeGrade}` : ""}</div>
         </div>
       </div>
       ${c.claudeComponents ? `<div class="ci">claude: T_now ${(+c.claudeComponents.T_now).toFixed(1)}  ${
         Object.entries(c.claudeComponents).filter(([k]) => k !== "T_now" && k !== "R_analog(raw)")
           .map(([k, v]) => `${k.replace("A_", "").replace("R_", "").replace("(eff)", "")} ${v >= 0 ? "+" : ""}${(+v).toFixed(1)}`)
-          .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}</div>` : ""}
+          .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}${(c.claudeBlendW ?? 0) > 0 && c.claudePure != null ? `  · pure analog ${(+c.claudePure).toFixed(1)} / NWS ${c.claudeNwsBase != null ? (+c.claudeNwsBase).toFixed(0) : "—"}` : ""}</div>` : ""}
       <div class="row"><span>std (σ)<span class="muted small"> pre-clamp</span></span><span>${c.std.toFixed(2)}°F</span></div>
       <div class="row ci"><span>68% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci68)}</span></div>
       <div class="row ci"><span>95% CI${hiFloored ? `<span class="muted small"> obs-floored</span>` : ""}</span><span>${fmtPair(c.ci95)}</span></div>
