@@ -14,6 +14,7 @@ import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketR
 import { getStore } from "@netlify/blobs";
 import { normCdf01 } from "./lib/stats.js";
 import { lowScreenCheck, highScreenCheck } from "./lib/low_screen.js";
+import { buildOrderBody, normalizeOrderResponse, V2_ORDERS_PATH } from "./lib/kalshi_orders.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // No concurrent-position cap. Threshold gates (EV / halfKelly / Kelly-LCB), tile
@@ -896,43 +897,35 @@ function variableLimitPrice(ask, bid, pWin) {
 
 // Place a buy order via Kalshi. Returns the order response.
 // Kalshi prices are integer cents 1-99. Stake comes through `count` (number of contracts).
+// V2 (2026-07-23): the payload is built in lib/kalshi_orders.js — the old endpoint is
+// 410 Gone and V2 quotes everything on the YES leg, so a NO buy goes out as a YES sell
+// at the complement price. This signature and its cents stay unchanged for callers.
 async function placeBuyOrder(ticker, side, count, priceCents) {
-  const body = {
-    action: "buy",
-    side: side.toLowerCase(),       // "yes" or "no"
-    ticker,
-    count: Math.max(1, Math.round(count)),
-    type: "limit",
-    [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
+  const body = buildOrderBody({
+    ticker, action: "buy", side, count, priceCents,
     // 15-min expiration (extended from 5-min on 2026-05-07): on illiquid temp
     // markets the 5-min window often expired with partial or zero fills (SATX
     // 7-contract intent → 1-share fill). 15 min lets resting orders catch new
     // offers as they post. Phantom-grace reconcile (jackson_trader.js) keeps
     // ledger entries alive within 1h, so the longer expiration doesn't cause
     // double-buys on the next 5-min cycle.
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
-    client_order_id: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  };
-  const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
+    expirySec: 60 * 15,
+    clientOrderId: `wb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+  const r = await kalshiAuthedFetch("POST", V2_ORDERS_PATH, body);
   const j = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok: r.ok, status: r.status, body: normalizeOrderResponse(j) };
 }
 
 // Place a sell order to close an existing position.
 async function placeSellOrder(ticker, side, count, priceCents) {
-  const body = {
-    action: "sell",
-    side: side.toLowerCase(),
-    ticker,
-    count: Math.max(1, Math.round(count)),
-    type: "limit",
-    [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
-    client_order_id: `wb-sell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  };
-  const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
+  const body = buildOrderBody({
+    ticker, action: "sell", side, count, priceCents, expirySec: 60 * 15,
+    clientOrderId: `wb-sell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+  const r = await kalshiAuthedFetch("POST", V2_ORDERS_PATH, body);
   const j = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok: r.ok, status: r.status, body: normalizeOrderResponse(j) };
 }
 
 // Public (no-auth) Kalshi market-result lookup — paper mode runs without Kalshi

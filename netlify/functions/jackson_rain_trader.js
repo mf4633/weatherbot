@@ -16,6 +16,7 @@
 
 import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketResult } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
+import { buildOrderBody, normalizeOrderResponse, V2_ORDERS_PATH } from "./lib/kalshi_orders.js";
 
 const RAINBOT_BASE = process.env.RAINBOT_BASE_URL || "https://rainbot-mf.netlify.app";
 
@@ -176,36 +177,25 @@ function buildRainSnapshot(rainData) {
   return lookup;
 }
 
+// V2 payload (2026-07-23) — see lib/kalshi_orders.js. Cents in, YES-leg dollars out.
 async function placeBuyOrder(ticker, side, count, priceCents) {
-  const body = {
-    action: "buy",
-    side: side.toLowerCase(),
-    ticker,
-    count: Math.max(1, Math.round(count)),
-    type: "limit",
-    [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
-    client_order_id: `wbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  };
-  const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
+  const body = buildOrderBody({
+    ticker, action: "buy", side, count, priceCents, expirySec: 60 * 15,
+    clientOrderId: `wbr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+  const r = await kalshiAuthedFetch("POST", V2_ORDERS_PATH, body);
   const j = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok: r.ok, status: r.status, body: normalizeOrderResponse(j) };
 }
 
 async function placeSellOrder(ticker, side, count, priceCents) {
-  const body = {
-    action: "sell",
-    side: side.toLowerCase(),
-    ticker,
-    count: Math.max(1, Math.round(count)),
-    type: "limit",
-    [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 15,
-    client_order_id: `wbr-sell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  };
-  const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
+  const body = buildOrderBody({
+    ticker, action: "sell", side, count, priceCents, expirySec: 60 * 15,
+    clientOrderId: `wbr-sell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+  const r = await kalshiAuthedFetch("POST", V2_ORDERS_PATH, body);
   const j = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok: r.ok, status: r.status, body: normalizeOrderResponse(j) };
 }
 
 export default async () => {

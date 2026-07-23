@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "netlify dev",
     "deploy": "netlify deploy --prod",
-    "test": "node test_safety.js && node test_diurnal.js && node test_peakhour.js && node test_claude_analog.js && node test_claude_analog_v2.js && node test_claude_analog_v3.js && node test_metar.js && node test_scoreboard.js && node test_asos1min.js && node test_claude.js && node test_backtest.js && node test_dsm.js && node test_interp.js && node test_highpredict.js && node test_floorscan.js && node test_kalshi.js && node test_floorlog.js"
+    "test": "node test_safety.js && node test_kalshi_orders.js && node test_diurnal.js && node test_peakhour.js && node test_claude_analog.js && node test_claude_analog_v2.js && node test_claude_analog_v3.js && node test_metar.js && node test_scoreboard.js && node test_asos1min.js && node test_claude.js && node test_backtest.js && node test_dsm.js && node test_interp.js && node test_highpredict.js && node test_floorscan.js && node test_kalshi.js && node test_floorlog.js"
   },
   "dependencies": {
     "@netlify/blobs": "^9.0.0"

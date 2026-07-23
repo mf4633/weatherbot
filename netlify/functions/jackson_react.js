@@ -20,6 +20,7 @@
 // duplicate sell with a clear error and we log it. Safe by API contract, no double-sell.
 
 import { kalshiAuthedFetch, getPositions } from "./jackson.js";
+import { buildOrderBody, normalizeOrderResponse, V2_ORDERS_PATH } from "./lib/kalshi_orders.js";
 import { getStore } from "@netlify/blobs";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
@@ -45,23 +46,19 @@ async function fetchInternal(path) {
   return await r.json();
 }
 
+// V2 payload (2026-07-23) — see lib/kalshi_orders.js.
 async function placeSellOrder(ticker, side, count, priceCents) {
-  const body = {
-    action: "sell",
-    side: side.toLowerCase(),
-    ticker,
-    count: Math.max(1, Math.round(count)),
-    type: "limit",
-    [side.toLowerCase() === "yes" ? "yes_price" : "no_price"]: priceCents,
+  const body = buildOrderBody({
+    ticker, action: "sell", side, count, priceCents,
     // Short expiration (3 min) on the React sell. Different from jackson_trader's 15-min
     // because this fires every minute — if the order doesn't fill within 3 min, the next
     // React cycle will re-evaluate and resubmit at a fresher price.
-    expiration_ts: Math.floor(Date.now() / 1000) + 60 * 3,
-    client_order_id: `wb-react-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  };
-  const r = await kalshiAuthedFetch("POST", "/trade-api/v2/portfolio/orders", body);
+    expirySec: 60 * 3,
+    clientOrderId: `wb-react-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  });
+  const r = await kalshiAuthedFetch("POST", V2_ORDERS_PATH, body);
   const j = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: j };
+  return { ok: r.ok, status: r.status, body: normalizeOrderResponse(j) };
 }
 
 export default async () => {
@@ -75,12 +72,23 @@ export default async () => {
     });
   }
   const liveFlag = (process.env.KALSHI_TRADING_LIVE || "").trim().toLowerCase();
-  const isLive   = ["true", "1", "yes", "on", "live"].includes(liveFlag);
+  // DOUBLE-KEY (added 2026-07-23): this used to arm on KALSHI_TRADING_LIVE alone, while
+  // jackson_trader and jackson_rain_trader both additionally require their RESUME key.
+  // That was a trap: jackson_trader's own halt message instructs you to set RESUME='true'
+  // AND LIVE='true', so setting LIVE first — either order — silently armed this 5-min sell
+  // loop on the live account with no second key. It went unnoticed only because order
+  // placement was 410 Gone from 2026-07-09 until the V2 migration; once orders work again,
+  // the same slip would place real sells. Same key as jackson_trader on purpose: the
+  // postmortem halt is meant to cover every real-money path, not just the buy side.
+  const resumed  = process.env.KALSHI_TRADING_RESUME === "true";
+  const isLive   = resumed && ["true", "1", "yes", "on", "live"].includes(liveFlag);
   const isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
   if (!isLive && !isDryRun) {
-    return new Response(JSON.stringify({ ok: true, paused: true,
+    return new Response(JSON.stringify({ ok: true, paused: true, halted: !resumed,
       flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
-      message: "React-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live)." }), {
+      message: resumed
+        ? "React-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live)."
+        : "React-trader HALTED per TRADING_POSTMORTEM.md. To resume, set KALSHI_TRADING_RESUME='true' AND KALSHI_TRADING_LIVE='true'." }), {
       status: 200, headers: { "content-type": "application/json" }
     });
   }

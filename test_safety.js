@@ -29,6 +29,7 @@ const tests = [
   { name: "balance (allowed)",      path: "/trade-api/v2/portfolio/balance", expectThrow: false },
   { name: "positions (allowed)",    path: "/trade-api/v2/portfolio/positions?limit=5", expectThrow: false },
   { name: "orders (allowed)",       path: "/trade-api/v2/portfolio/orders", expectThrow: false },
+  { name: "V2 order create (allowed)", path: "/trade-api/v2/portfolio/events/orders", expectThrow: false },
   { name: "fills (allowed)",        path: "/trade-api/v2/portfolio/fills", expectThrow: false }
 ];
 

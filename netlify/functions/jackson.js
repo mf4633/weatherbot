@@ -20,8 +20,9 @@ const ACCOUNT_NAME = "royal.greyhound5665";
 const ENDPOINT_ALLOWLIST = [
   /^\/trade-api\/v2\/portfolio\/balance$/,
   /^\/trade-api\/v2\/portfolio\/positions(\?.*)?$/,
-  /^\/trade-api\/v2\/portfolio\/orders(\?.*)?$/,
+  /^\/trade-api\/v2\/portfolio\/orders(\?.*)?$/,        // GET list/reads only — POST here is 410 Gone since 2026-07-09
   /^\/trade-api\/v2\/portfolio\/orders\/[\w-]+$/,
+  /^\/trade-api\/v2\/portfolio\/events\/orders$/,       // V2 order creation (POST)
   /^\/trade-api\/v2\/portfolio\/fills(\?.*)?$/,
   /^\/trade-api\/v2\/markets(\?.*)?$/,
   /^\/trade-api\/v2\/markets\/[\w.\-]+$/,
