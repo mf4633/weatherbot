@@ -979,8 +979,15 @@ export async function runTraderCycle(isPaper = false) {
     // orders — lets us instrument without trading. Dry-run stays available while halted.
     isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
     if (!isLive && !isDryRun) {
+      // Report BOTH keys separately. The old single `flagValueSeen` string described only
+      // the LIVE flag, so a truthy LIVE with RESUME unset printed "(non-empty but not
+      // truthy)" — which reads as "LIVE is off" when LIVE is on and RESUME is the missing
+      // key. That is the opposite of the safety-relevant fact and it cost real debugging
+      // time on 2026-07-23.
       return new Response(JSON.stringify({ ok: true, paused: true, halted: !resumed,
-        flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
+        liveFlagTruthy: ["true", "1", "yes", "on", "live"].includes(liveFlag),
+        resumeKeySet: resumed,
+        flagValueSeen: liveFlag ? "(non-empty)" : "(empty/unset)",
         message: resumed
           ? "Real-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live). Set to 'dryrun' for instrumentation-only mode."
           : "Real-trader HALTED per TRADING_POSTMORTEM.md (model is a net loser). No real orders will be placed. To resume, set KALSHI_TRADING_RESUME='true' AND KALSHI_TRADING_LIVE='true'." }), {

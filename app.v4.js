@@ -20,6 +20,14 @@ const CALIBRATING_CITIES = new Set(["Asheville"]);
 let jacksonPositionsByCity = {};
 let initialHashHandled = false;
 
+// Balance panel state. The rollup comes from /api/balance_history, which is built from
+// ONE SNAPSHOT PER UTC DAY (00:05 UTC cron) — so its "equity" is up to 24h old and can
+// diverge wildly from the account intraday. LIVE_ACCOUNT carries the real figure from
+// /api/jackson so the panel can show both instead of presenting a day-old number as
+// current. Declared here, above every loader call site, so the loaders don't hit the TDZ.
+let LAST_ROLLUP = null;
+let LIVE_ACCOUNT = null;   // { equity, at } — cash + portfolio value, in dollars
+
 // Which city cards are expanded — preserved across the 60s re-render so an open
 // card doesn't snap shut. toggle events don't bubble, so listen in capture phase.
 const openCards = new Set();
@@ -1005,6 +1013,11 @@ async function loadJackson() {
     statusEl.textContent = `Live · fetched ${(j.fetchedAtUTC || "").slice(11, 16)} UTC`;
     statusEl.className = "sub fresh";
     const balDollars = (j.balance?.balance ?? 0) / 100;
+    // Feed the balance panel the true current equity (cash + marked position value, both
+    // cents from Kalshi) and re-render it, since the daily snapshot it normally shows can
+    // be a full day behind the account.
+    LIVE_ACCOUNT = { equity: balDollars + (j.balance?.portfolio_value ?? 0) / 100, at: j.fetchedAtUTC };
+    renderBalanceRollup(LAST_ROLLUP);
     const positions = j.positions?.market_positions || [];
     // Kalshi position fields: position_fp (string of float; sign = direction),
     // market_exposure_dollars (string), realized_pnl_dollars (string).
@@ -1246,6 +1259,22 @@ async function loadJackson() {
   }
 }
 
+// Newest ISO-8601 Z timestamp anywhere in a response, or null. Used to age-stamp panels
+// whose payloads carry no single "updated_at" field.
+function newestIsoTimestamp(obj) {
+  const re = /^20\d{2}-\d{2}-\d{2}T[\d:.]+Z$/;
+  let best = null;
+  const seen = new Set();
+  const walk = (v) => {
+    if (typeof v === "string") { if (re.test(v) && (!best || v > best)) best = v; return; }
+    if (!v || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    for (const k of Object.keys(v)) walk(v[k]);
+  };
+  walk(obj);
+  return best;
+}
+
 async function loadCombo() {
   const statusEl = document.getElementById("combo-status");
   const lbEl = document.getElementById("combo-leaderboard-wrap");
@@ -1262,8 +1291,18 @@ async function loadCombo() {
     const linkStatus = j.rainbot_link_status === "ok"
       ? "rainbot signals: linked"
       : `rainbot signals: ${j.rainbot_link_status}`;
-    statusEl.textContent = linkStatus;
-    statusEl.className = j.rainbot_link_status === "ok" ? "sub fresh" : "sub muted";
+    // "signals: linked" only means the rainbot fetch succeeded — it says nothing about
+    // whether combo_trader itself has run. combo_trader has no external cron and relies
+    // on Netlify's scheduler, which is throttled here, so this panel can sit frozen for
+    // months while still reporting "linked" (on 2026-07-23 its newest activity was
+    // 2026-05-22). Show the age of the data so a stale board can't read as a live one.
+    const lastActivity = newestIsoTimestamp(j);
+    const ageDays = lastActivity ? (Date.now() - Date.parse(lastActivity)) / 8.64e7 : null;
+    const stale = ageDays != null && ageDays >= 1;
+    statusEl.textContent = lastActivity
+      ? `${linkStatus} · last activity ${ageDays < 1 ? `${(ageDays * 24).toFixed(1)}h` : `${Math.floor(ageDays)}d`} ago${stale ? " — STALE, combo_trader is not running" : ""}`
+      : linkStatus;
+    statusEl.className = (j.rainbot_link_status === "ok" && !stale) ? "sub fresh" : "sub muted";
 
     // Leaderboard. Highlight the row with the highest comparable value (MTM where
     // available, bankroll otherwise — same metric the milestone log uses).
@@ -1568,7 +1607,8 @@ async function loadBalanceHistory() {
     const r = await fetch("/api/balance_history", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    renderBalanceRollup(j.rollup);
+    LAST_ROLLUP = j.rollup;
+    renderBalanceRollup(LAST_ROLLUP);
     renderBalanceChart(j.entries || []);
   } catch (e) {
     const el = document.getElementById("balance-rollup");
@@ -1576,21 +1616,41 @@ async function loadBalanceHistory() {
   }
 }
 
+// Renders the equity line. Every figure here except `live` comes from the once-daily
+// snapshot series, so each one is labelled with the snapshot it came from — the panel
+// used to print the snapshot's equity as bare "Equity", which read as the current
+// account value and was off by 7x on 2026-07-23 ($194.79 snapshot vs $28.43 live).
 function renderBalanceRollup(rollup) {
   const el = document.getElementById("balance-rollup");
   if (!el) return;
   if (!rollup) {
-    el.innerHTML = `No snapshots yet — first one fires at 00:00 UTC, or trigger manually: <code>/api/balance_snapshot</code>`;
+    // NOTE: balance_snapshot declares no config.path and has no /api redirect, so it is
+    // reachable only at its function URL — /api/balance_snapshot 404s.
+    el.innerHTML = `No snapshots yet — first one fires at 00:05 UTC, or trigger manually: <code>/.netlify/functions/balance_snapshot</code>`;
     return;
   }
   const fmt = n => (n >= 0 ? "+" : "") + "$" + n.toFixed(2);
   const cls = n => n >= 0 ? "warm" : "cool";
   const r = rollup;
+  const snapAt = r.latest?.tsUTC;
+  const ageH = snapAt ? (Date.now() - Date.parse(snapAt)) / 3.6e6 : null;
+  const ageTxt = ageH == null ? "" : ageH < 1 ? `${Math.round(ageH * 60)}m ago` : `${ageH.toFixed(1)}h ago`;
+  // Live equity, when the account panel has loaded. Flag a material gap so nobody reads
+  // the snapshot as the current balance.
+  let liveTxt = "";
+  if (LIVE_ACCOUNT) {
+    const gap = LIVE_ACCOUNT.equity - r.currentEquity;
+    const stale = Math.abs(gap) >= 1;
+    liveTxt = `<span>Live equity <strong>$${LIVE_ACCOUNT.equity.toFixed(2)}</strong></span>`
+      + (stale ? ` <span class="${cls(gap)}">(${fmt(gap)} vs snapshot)</span>` : "")
+      + `&nbsp;·&nbsp; `;
+  }
   el.innerHTML = `
-    <span>Equity <strong>$${r.currentEquity.toFixed(2)}</strong></span>
+    ${liveTxt}<span class="muted">snapshot ${ageTxt}:</span>
+    <span>equity $${r.currentEquity.toFixed(2)}</span>
     &nbsp;·&nbsp; peak $${r.peakEquity.toFixed(2)}
     &nbsp;·&nbsp; drawdown $${r.drawdownDollars.toFixed(2)} (${r.drawdownPct.toFixed(1)}%)
-    &nbsp;·&nbsp; <span class="${cls(r.lastDayDelta)}">last 24h ${fmt(r.lastDayDelta)}</span>
+    &nbsp;·&nbsp; <span class="${cls(r.lastDayDelta)}">last snapshot-to-snapshot ${fmt(r.lastDayDelta)}</span>
     &nbsp;·&nbsp; <span class="${cls(r.totalDelta)}">since start ${fmt(r.totalDelta)}</span>
     &nbsp;·&nbsp; ${r.daysRunning} day${r.daysRunning === 1 ? "" : "s"} tracked
   `;

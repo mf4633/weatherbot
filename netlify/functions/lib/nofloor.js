@@ -22,7 +22,6 @@
 export const MIN_RETURN = 0.20;    // >= 20% payout on the NO
 export const MIN_WIN_PROB = 0.93;  // "near guaranteed" the high clears the ceiling
 
-const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
 const r3 = (x) => (x == null ? null : Math.round(x * 1000) / 1000);
 
 // no_ask, preferring the book's direct NO ask; else derive from the YES bid

@@ -112,11 +112,23 @@ export default async () => {
   } catch (e) { warnings.push(`calibration check failed: ${String(e?.message || e)}`); }
 
   const ready = blockers.length === 0;
+  // `ready` has only ever meant INFRASTRUCTURE readiness (creds, quotes, tickers, cal age).
+  // Reported alone next to arming instructions it reads as a green light to trade, which
+  // is the opposite of the standing decision: TRADING_POSTMORTEM.md halted this strategy
+  // because it is a measured net loser. State that here so the two can't be confused.
+  const strategy_halt = {
+    in_force: true,
+    source: "TRADING_POSTMORTEM.md",
+    finding: "344 temperature bets May-Jul 2026, staked $1,606.91, lost $716.63 (-44.6% ROI, 18.3% win rate); zero deployable +EV strategies found across eight hypotheses; the market prices the bot's own bets better than the model does (Brier 0.1925 vs 0.4481).",
+    means: "Infrastructure readiness is not permission to trade. Clearing the go/no-go bar in STRATEGY.md is."
+  };
   return new Response(JSON.stringify({
     ok: true, ready, armed,
+    ready_meaning: "infrastructure only — creds, quote parsing, live tickers, calibration age. NOT a judgement that trading is +EV.",
+    strategy_halt,
     arm_state: { creds_present: creds, KALSHI_TRADING_LIVE: liveFlag || "(unset)", KALSHI_TRADING_RESUME: resumeFlag },
     to_go_live: ready
-      ? "Set KALSHI_TRADING_RESUME=true and KALSHI_TRADING_LIVE=dryrun in Netlify env for one instrumentation-only rehearsal, review /api/trader_log, then KALSHI_TRADING_LIVE=true."
+      ? "BLOCKED BY STRATEGY HALT (see strategy_halt). Infrastructure is otherwise ready: arming would be KALSHI_TRADING_RESUME=true + KALSHI_TRADING_LIVE=dryrun for an instrumentation-only rehearsal, review /api/trader_log, then LIVE=true — but do not do that until a strategy clears STRATEGY.md's go/no-go bar."
       : "Resolve blockers first.",
     blockers, warnings, quotes, tickers, calibration,
     asof: new Date().toISOString(),

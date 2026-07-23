@@ -85,7 +85,9 @@ export default async () => {
   const isDryRun = !isLive && ["dryrun", "dry-run", "shadow"].includes(liveFlag);
   if (!isLive && !isDryRun) {
     return new Response(JSON.stringify({ ok: true, paused: true, halted: !resumed,
-      flagValueSeen: liveFlag ? "(non-empty but not truthy)" : "(empty/unset)",
+      liveFlagTruthy: ["true", "1", "yes", "on", "live"].includes(liveFlag),
+      resumeKeySet: resumed,
+      flagValueSeen: liveFlag ? "(non-empty)" : "(empty/unset)",
       message: resumed
         ? "React-trader paused: KALSHI_TRADING_LIVE must be 'true' (or 1/yes/on/live)."
         : "React-trader HALTED per TRADING_POSTMORTEM.md. To resume, set KALSHI_TRADING_RESUME='true' AND KALSHI_TRADING_LIVE='true'." }), {

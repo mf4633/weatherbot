@@ -10,7 +10,7 @@ import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
 import { surfaceObsFromMetars } from "./lib/low_screen.js";
 import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, nwsBaseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { adviseClimate } from "./lib/station_climate.js";
-import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
+import { kalmanCorrection, KALMAN_FLOOR_F,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
 
 const CITIES = [
@@ -646,11 +646,9 @@ function forecastRemainingPeakToday(hourly, tzMidnight, now) {
   if (!remaining.length) return null;
   return Math.max(...remaining.map(p => p.tempF));
 }
-// Truncated normal mean for X | X <= a (upper-bound truncation; mirror of truncNormalMean).
-function truncNormalMeanUpper(mu, sigma, a) {
-  // Mirror around 0 and reuse the lower-bound function.
-  return -truncNormalMean(-mu, sigma, -a);
-}
+// (truncNormalMeanUpper — E[X | X <= a] — was removed 2026-07-23: it had no callers.
+// The LOW branch replaced it with the shifted-floor estimator; see the comments at the
+// "Replaces truncNormalMeanUpper" site for why that undershoots near the realized min.)
 
 // Compute warming rate (°F/hr) from last ~4 hourly METARs via linear regression.
 // Returns null if insufficient data. Clips extreme slopes that won't extrapolate
@@ -1061,7 +1059,6 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // Replaces the old `0.4·(1−e^(−hrsToPeak/5))` decay, which under-weighted the midday
     // signal 3-10× and sloped the wrong way (weakening β toward peak when it should grow).
     const biasWeight = interpBeta(highBetaTbl, hrsToPeak);
-    const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorMean = forecastHighF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS[city.name] != null) priorMean -= CITY_OFFSETS[city.name];
     // Regime correction: Kalman filter (primary) with heuristic 7d fallback. The
@@ -1286,7 +1283,6 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     // weighted the signal and sloped the wrong way (weakening β toward the trough when
     // it should grow). β rises 0.52→0.69 from 6h out to 1h before the dawn trough.
     const biasWeight = interpBeta(lowBetaTbl, hrsToTrough_);
-    const biasMag = biasF != null ? Math.abs(biasF) : 2.0;
     let priorLowMean = forecastLowF + (biasF != null ? biasWeight * biasF : 0);
     if (CITY_OFFSETS_LOW[city.name] != null) priorLowMean -= CITY_OFFSETS_LOW[city.name];
     // LOW Kalman regime correction (added 2026-05-12, mirror of HIGH wiring).
