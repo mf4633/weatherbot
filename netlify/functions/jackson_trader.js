@@ -13,6 +13,7 @@
 import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketResult } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
 import { normCdf01 } from "./lib/stats.js";
+import { lowScreenCheck } from "./lib/low_screen.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // No concurrent-position cap. Threshold gates (EV / halfKelly / Kelly-LCB), tile
@@ -188,6 +189,12 @@ const CONCENTRATION_CAP = 0.20;
 // HOU LOW stays on LOW_PAUSED_CITIES, + CONCENTRATION/AGGREGATE caps. Re-flip true if live
 // LOW bleeds again or a fresh population σ-audit on settled LOW shows |z|/exp > 2.
 const LOW_HARD_OFF = false;
+// LOW screening heuristics (lib/low_screen.js — physics floor, jagged-trace,
+// undercut-live advisory). Modes: "off" | "shadow" (compute + log, never act)
+// | "enforce" (skips low-physics-floor and low-jagged-no candidates). Default
+// shadow: like every calibrated gate before it, it earns enforce on logged
+// evidence, not on the night it was written (2026-07-22).
+const LOW_SCREEN_MODE = (process.env.LOW_SCREEN_MODE || "shadow").trim().toLowerCase();
 // (b) AGGREGATE_EXPOSURE_CAP: total open exposure / equity ceiling. Per-position
 // concentration (above) doesn't help when N small positions all sink together. 50%
 // keeps half of equity in cash reserve. Heuristic — needs its own backtest. Skips new
@@ -991,6 +998,7 @@ export async function runTraderCycle(isPaper = false) {
   const PAPER_SEED = 100;
 
   const placements = [], sales = [], errors = [], skipped = [];
+  const lowScreen = [];  // shadow/enforce records from lib/low_screen.js
   const ledgerStore = getStore(isPaper ? "open_bets" : "jackson_open_bets");
   const settledStore = getStore(isPaper ? "settled_bets" : "jackson_settled_bets");
   const cooldownStore = getStore(isPaper ? "paper_cooldown" : "jackson_cooldown");
@@ -1882,6 +1890,21 @@ export async function runTraderCycle(isPaper = false) {
         // drops past minSoFar — SATX 2026-05-07 lost B62.5 YES at minSoFar=62.6 when a cold
         // front pushed the low to 60.8°F).
         const cityWeather = (weatherData.cities || []).find(c => c.name === b.city);
+        // LOW screening heuristics (lib/low_screen.js). Runs BEFORE the calibrated
+        // margin/obs gates so undercut-live advisories are recorded even for bets
+        // those gates go on to skip — that join is the evidence base for ever
+        // relaxing them. Shadow mode records and never acts.
+        if (b.variable === "low" && LOW_SCREEN_MODE !== "off" && cityWeather?.surfaceObs) {
+          const ls = lowScreenCheck(b, cityWeather, cliMinObs(cityWeather));
+          if (ls.skips.length || ls.advisories.length) {
+            lowScreen.push({ ticker: b.ticker, city: b.city, side: b.side,
+                             mode: LOW_SCREEN_MODE, skips: ls.skips, advisories: ls.advisories });
+          }
+          if (LOW_SCREEN_MODE === "enforce" && ls.skips.length) {
+            skipped.push({ ...briefBet(b), reason: ls.skips[0].reason, lowScreenDetail: ls.skips[0] });
+            continue;
+          }
+        }
         const margin = bucketBoundaryMargin(b, cityWeather);
         const marginThreshold = b.side?.toLowerCase() === "yes" ? BUCKET_YES_MARGIN_MIN_F : BUCKET_MARGIN_MIN_F;
         // Debug instrumentation: tag every B-bucket decision (YES or NO) with the margin
@@ -2204,7 +2227,8 @@ export async function runTraderCycle(isPaper = false) {
       stake_floor: STAKE_FLOOR,
       stake_ceil_dollars: stakeCeil,
       cal_blocked: calBlocked, cal_age_min: calAgeMin,
-      sales, placements, pyramids, skipped, errors
+      low_screen_mode: LOW_SCREEN_MODE,
+      sales, placements, pyramids, skipped, errors, lowScreen
     };
 
     // Write per-cycle structured log to trader_logs blob. Filename = ISO timestamp.
@@ -2240,6 +2264,8 @@ export async function runTraderCycle(isPaper = false) {
           stake_dollars: p.stake_dollars, ok: p.ok
         })),
         skipped: skipped.slice(0, 30),  // cap to avoid huge blobs
+        lowScreen: lowScreen.slice(0, 30),
+        low_screen_mode: LOW_SCREEN_MODE,
         errors: errors.slice(0, 10)
       });
     } catch (logErr) {

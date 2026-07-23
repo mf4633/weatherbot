@@ -7,6 +7,7 @@ import { fetchIemDailyExtremes } from "./lib/iem.js";
 import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
+import { surfaceObsFromMetars } from "./lib/low_screen.js";
 import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, nwsBaseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { adviseClimate } from "./lib/station_climate.js";
 import { kalmanCorrection, KALMAN_FLOOR_F, KALMAN_PARAMS,
@@ -751,6 +752,11 @@ function resolveIntradayBeta(regimeBlob) {
 
 function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob, oneMin, iem, dsm, oneMinByStation) {
   const now = new Date();
+  // Surface-obs summary (dewpoint/sky/wind/wx/convective flag) for the LOW
+  // screening heuristics in lib/low_screen.js. Additive — no existing consumer
+  // reads it.
+  let surfaceObs = null;
+  try { surfaceObs = surfaceObsFromMetars(metars, city.tz, now, parseMetar); } catch (e) {}
   const localMidnight = localMidnightUTC(city.tz, now);
   const todayObs = metars.filter(o => o.ts >= localMidnight);
   const tempsF = todayObs.map(o => cToF(o.tempC));
@@ -1487,6 +1493,7 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       model: s.model, peak: Math.round(s.peak * 10) / 10,
       trough: s.trough != null ? Math.round(s.trough * 10) / 10 : null
     })),
+    surfaceObs,
     lastCLI
   };
 }
