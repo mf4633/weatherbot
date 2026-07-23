@@ -34,3 +34,4 @@ analyze*.log
 # Python bytecode
 __pycache__/
 *.pyc
+_cli_cache/
