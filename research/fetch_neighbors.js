@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 // 8 compass-direction neighbors. ~0.3° offset ≈ 30 km at midlatitudes.
 const NEIGHBORS = [

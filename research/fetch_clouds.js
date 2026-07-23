@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 const LOOKBACK_DAYS = 365;
 function isoDate(d) { return d.toISOString().slice(0, 10); }

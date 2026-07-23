@@ -1,6 +1,6 @@
 // Year-long backtest with chronological train/test split and per-city tuning.
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 const LOOKBACK_DAYS = 365;
 const TEST_DAYS = 90;

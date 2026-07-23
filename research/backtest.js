@@ -8,7 +8,7 @@
 //
 // Iterate over model parameters; report RMSE, MAE, bias, 68%/95% CI coverage.
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 const LOOKBACK_DAYS = 30;
 const PREDICTION_HOURS = [6, 9, 12, 15]; // local hours at which we predict

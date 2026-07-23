@@ -4,7 +4,7 @@ A code-level audit of where the Kalshi trading edge is most likely leaking, acro
 three areas: **fee/EV math**, **σ-calibration**, and **entry gates + Kelly sizing**.
 
 > **Method & caveat.** This was a *static* audit — every backtest
-> (`backtest_gates.js`, `analyze_gate_sweeps.js`, `replay_backtest.js`) and every
+> (`research/backtest_gates.js`, `research/analyze_gate_sweeps.js`, `research/replay_backtest.js`) and every
 > live endpoint (`/api/residuals`, `/api/calibration_state`, …) needs data behind
 > hosts that were unreachable from the audit environment (open-meteo, Kalshi,
 > aviationweather, the Netlify site all refused the connection). So findings are
@@ -52,13 +52,13 @@ fees (the code half-admits this in the `MIN_EDGE_HIGH` comment).
 - The corrected fee `feePerContract = ceil(0.07·price·(1−price)·100)/100` is wired into
   `kalshi.js` and `jackson_trader.js` behind `FEE_PER_CONTRACT` (env flag, **default
   off** → byte-identical to today until you flip it).
-- `resweep_fee.js` recomputes every settled bet's net edge under the corrected fee and
+- `research/resweep_fee.js` recomputes every settled bet's net edge under the corrected fee and
   re-runs the `MIN_EDGE` tightening sweep (ALL/HIGH/LOW), plus a "hold-selectivity"
   floor = the `MIN_EDGE_new` that still admits exactly the bets the old 0.28 gate did.
-  Run it offline from a saved dump: `BETS_FILE=./audit.json node resweep_fee.js`, or
-  live: `AUTH="x:hydro" node resweep_fee.js`.
+  Run it offline from a saved dump: `BETS_FILE=./audit.json node research/resweep_fee.js`, or
+  live: `AUTH="x:hydro" node research/resweep_fee.js`.
 
-**To ship:** run `resweep_fee.js` against real settled bets → set `MIN_EDGE_HIGH/LOW`
+**To ship:** run `research/resweep_fee.js` against real settled bets → set `MIN_EDGE_HIGH/LOW`
 (and `MIN_PRICE`) to the chosen new floors → deploy with `FEE_PER_CONTRACT=true`. Ship
 the fee flag and the new floors **together**. (Settled data can't measure
 over-admission, so the hold-selectivity floor is the conservative starting point; the
@@ -82,12 +82,12 @@ Needs live settled-bet residuals to calibrate.
 ### G. `MIN_EDGE_LOW` may be over-tightened (0.28 vs LOW-specific peak 0.25)
 `MIN_EDGE_LOW=0.28` came from a joint all-bets sweep, but the LOW-specific sweep peaked
 at 0.25 ("lower dilutes"). Verify against the `MIN_EDGE (LOW)` block of
-`analyze_gate_sweeps.js`; if LOW net-delta stays positive to 0.25, drop it back.
+`research/analyze_gate_sweeps.js`; if LOW net-delta stays positive to 0.25, drop it back.
 
 ### H. Kalman params are stale / pre-summer
 `per_city_kalman_params.json` is `fitted_at: 2026-05-12` on data ending `2026-05-03`
 — the warm-regime params predate summer while the bot trades July highs. Refit through
-summer (`node kalman_fit_all_cities.js`, needs the data archive). Params look
+summer (`node research/kalman_fit_all_cities.js`, needs the data archive). Params look
 non-degenerate; mild over/under-fit flags on SJC/TPA warm-walk worth a glance.
 
 ---
@@ -115,7 +115,7 @@ non-degenerate; mild over/under-fit flags on SJC/TPA warm-walk worth a glance.
   `jackson_trader.js` — don't blind-delete; the `kalshi.js` comment describing the old
   `σ_eff=√(σ_ens²+σ_irred²)` formula is stale.
 - `predictive_scale` is read (`kalshi.js`) but never applied — apply it or delete the field.
-- `backtest_gates.js` / `analyze_gate_sweeps.js` still print the pre-2026-06-13
+- `research/backtest_gates.js` / `research/analyze_gate_sweeps.js` still print the pre-2026-06-13
   thresholds (0.20/0.10/0.04) as "current production" — will mislead the next tuner.
 - `netlify.toml` schedules `pwin_calibration_fit` hourly; the file declares `*/30`.
 
@@ -206,7 +206,7 @@ dashboard); ledger grades from here on are honest.
 ## Standing verdict
 
 No tradeable edge demonstrated in any window or bucket. The honest live candidates
-remain (a) the obs-lock-in strategy — evaluate with `eval_strategy.mjs` once
+remain (a) the obs-lock-in strategy — evaluate with `research/eval_strategy.mjs` once
 `data/exports/market.json` lands, and (b) trusting grade-A cards specifically:
 A-grade MAE 0.76°F is sharper than the market's morning book implies — the next
 analysis should Brier-score A-grade city-days alone against the morning market.

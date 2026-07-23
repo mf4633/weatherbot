@@ -4,7 +4,7 @@
 
 import { writeFileSync } from "node:fs";
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 // Production 5 (drop JMA, GEM — they hurt the ensemble in earlier tests).
 const MODELS = [

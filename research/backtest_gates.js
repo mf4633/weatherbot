@@ -214,7 +214,7 @@ console.log(`(${results.untouched.length} bets passed through unchanged)`);
 // Mirrors jackson_trader.js gate: ev ≥ 0.20, halfKelly ≥ 0.10, price ≥ 0.04.
 // ===========================================================================
 const MIN_EDGE = 0.20, MIN_HALF_KELLY = 0.10, MIN_PRICE = 0.04;
-import { erf } from "./erf.js";
+import { erf } from "../erf.js";
 const normCdf = z => 0.5 * (1 + erf(z / Math.SQRT2));
 function bucketProb(mean, std, loInt, hiInt, lowerFloor, upperFloor) {
   let effLo = loInt === -Infinity || loInt == null ? -Infinity : loInt - 0.5;

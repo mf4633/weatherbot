@@ -21,7 +21,7 @@ const CURRENT_SIGMA_IRRED = 1.0;
 
 const minEdgeFor = b => b.variable === "low" ? MIN_EDGE_LOW : MIN_EDGE_HIGH;
 
-import { erf } from "./erf.js";
+import { erf } from "../erf.js";
 const normCdf = z => 0.5 * (1 + erf(z / Math.SQRT2));
 
 function parseBucketStr(s) {

@@ -109,13 +109,13 @@ Replay backtest of the trading layer (simulated Kalshi vs single-GFS market): 67
 │   ├── jackson_trader.js   — real-money trader (scheduled, idle by default)
 │   ├── logger.js           — paper trader (scheduled every 5 min)
 │   └── residuals.js        — production residual log
-├── fetch_data.js, fetch_models.js, fetch_clouds.js, fetch_neighbors.js
-├── backtest.js, backtest_yr.js
-├── analyze.js, analyze_5yr.js, analyze_cloud.js, analyze_ensemble.js,
-│   analyze_disagreement.js, analyze_low.js, analyze_sigma.js,
-│   analyze_spatial.js, analyze_percity_weights.js
-├── replay_backtest.js                         ← end-to-end replay of trading layer
-├── check_kalshi.js                            ← local CLI tool: print +EV table
+├── research/fetch_data.js, research/fetch_models.js, research/fetch_clouds.js, research/fetch_neighbors.js
+├── research/backtest.js, research/backtest_yr.js
+├── research/analyze.js, research/analyze_5yr.js, research/analyze_cloud.js, research/analyze_ensemble.js,
+│   research/analyze_disagreement.js, research/analyze_low.js, research/analyze_sigma.js,
+│   research/analyze_spatial.js, research/analyze_percity_weights.js
+├── research/replay_backtest.js                         ← end-to-end replay of trading layer
+├── research/check_kalshi.js                            ← local CLI tool: print +EV table
 └── test_safety.js                             ← unit test for Kalshi API guards
 ```
 

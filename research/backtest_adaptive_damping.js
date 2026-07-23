@@ -32,7 +32,7 @@ function intlFmt(tz) {
 const localHour = (iso, tz) => parseInt(intlFmt(tz).hour.format(new Date(iso)), 10);
 const localDateStr = (iso, tz) => intlFmt(tz).date.format(new Date(iso));
 
-import { erf } from "./erf.js";
+import { erf } from "../erf.js";
 function expectedMaxNormal(mu, sigma, a) {
   const z = (a - mu) / sigma;
   const phi = Math.exp(-z*z/2) / Math.sqrt(2*Math.PI);

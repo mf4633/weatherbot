@@ -17,8 +17,8 @@
 // diurnal envelope, not an exact ASOS violation rate. Directionally it is the best
 // large sample available.
 import { readFileSync } from "node:fs";
-import { RISE } from "./netlify/functions/lib/diurnal_bounds.js";
-import { SETTLE_MARGIN_F } from "./netlify/functions/lib/diurnal.js";
+import { RISE } from "../netlify/functions/lib/diurnal_bounds.js";
+import { SETTLE_MARGIN_F } from "../netlify/functions/lib/diurnal.js";
 
 // data.json (41MB, GFS-only) carries the same hourly obs as data_models.json (125MB).
 // This test needs observations only, so use the light file.

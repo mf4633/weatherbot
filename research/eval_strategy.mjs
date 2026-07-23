@@ -19,7 +19,7 @@
 //     settle:{ extremumF } }   // extremumF = final CLI high (variable=high) or low (=low)
 
 import { readFileSync } from "node:fs";
-import { lockinBets, feePerContract } from "./netlify/functions/lib/strategy_lockin.js";
+import { lockinBets, feePerContract } from "../netlify/functions/lib/strategy_lockin.js";
 
 const LATENCY_SLIP = Number(process.env.LATENCY_SLIP ?? 0.0); // extra cents paid vs quoted ask
 

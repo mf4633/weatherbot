@@ -127,13 +127,13 @@ Settlements roll in at each city's local 7 AM (Eastern: ~11 UTC, Pacific: ~14 UT
 If you want to refresh the backtest data (e.g., after a few months):
 
 ```
-node fetch_data.js              # 1-year obs
-node fetch_models.js            # 5-year obs + 5 NWP models (~5-10 min, may rate-limit)
-node analyze_5yr.js             # tune biasW + per-city offsets (HIGH)
-node analyze_low.js             # tune for LOW
-node analyze_sigma.js           # tune σ formula
-node analyze_ensemble.js        # test alternative ensemble blends
-node replay_backtest.js         # simulated paper-trade across the trading layer
+node research/fetch_data.js              # 1-year obs
+node research/fetch_models.js            # 5-year obs + 5 NWP models (~5-10 min, may rate-limit)
+node research/analyze_5yr.js             # tune biasW + per-city offsets (HIGH)
+node research/analyze_low.js             # tune for LOW
+node research/analyze_sigma.js           # tune σ formula
+node research/analyze_ensemble.js        # test alternative ensemble blends
+node research/replay_backtest.js         # simulated paper-trade across the trading layer
 ```
 
 Results will print to stdout; weights are saved to `weights_high.json` / `weights_low.json` for inspection.
@@ -168,7 +168,7 @@ The bot's allowlist physically can't deposit/withdraw. If you see a position you
 ## Future work (open ideas)
 
 - **Conformal prediction CIs** instead of parametric Gaussian + grid-tuned σ
-- **Per-city ensemble weights** with statistical significance gating (5-year data fetched; analysis script ready as `analyze_percity_weights.js`)
+- **Per-city ensemble weights** with statistical significance gating (5-year data fetched; analysis script ready as `research/analyze_percity_weights.js`)
 - **Real-station mesonet integration** (Iowa State ASOS endpoint verified working)
 - **Limit-order execution** vs current market-at-ask
 - **Bot-only P&L attribution** (separate ledger of bot fills vs user-placed positions in real account)

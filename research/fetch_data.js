@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 
-import { CITIES } from "./cities.js";
+import { CITIES } from "../cities.js";
 
 const LOOKBACK_DAYS = 5 * 365 + 1;  // 5 years (Open-Meteo historical-forecast archive starts 2021-01)
 

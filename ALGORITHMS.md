@@ -324,7 +324,7 @@ Plus the bot maintains its own ledger (Netlify Blob `jackson_open_bets`). The se
 
 ## 10. Replay backtest of the trading layer
 
-`replay_backtest.js` simulates 90 days of trading by pricing a synthetic Kalshi market at single-GFS forecast probabilities (with a 2¢ bid-ask spread) and running our actual trading logic against it. Headline numbers (n=1,736 simulated bets):
+`research/replay_backtest.js` simulates 90 days of trading by pricing a synthetic Kalshi market at single-GFS forecast probabilities (with a 2¢ bid-ask spread) and running our actual trading logic against it. Headline numbers (n=1,736 simulated bets):
 
 - Win rate: **67.0%**
 - Per-bet ROI: **+24.7%** (gross, before fees)

@@ -64,18 +64,18 @@ records every 15 min, **places no trades**):
 - Bounds carry a `SETTLE_MARGIN` (CLI rounding) and remaining-rise/fall tables in
   `lib/diurnal_bounds.js`, so it errs toward abstention. The tables ship as **conservative
   placeholders**; regenerate them from data (a `/api/snapshots` export or shadow-logger
-  export) with `fit_diurnal.mjs`, which sets each hour's bound to a safe upper envelope
+  export) with `research/fit_diurnal.mjs`, which sets each hour's bound to a safe upper envelope
   (P99.5 + 1°F buffer) of the observed remaining move and reports the coverage/frequency
   tradeoff:
-  - `node fit_diurnal.mjs --synthetic` — self-test (recovers a known envelope at 100% coverage)
-  - `SNAPSHOTS=<export.json> node fit_diurnal.mjs --write` — regenerate `diurnal_bounds.js`
+  - `node research/fit_diurnal.mjs --synthetic` — self-test (recovers a known envelope at 100% coverage)
+  - `SNAPSHOTS=<export.json> node research/fit_diurnal.mjs --write` — regenerate `diurnal_bounds.js`
 
-**Evaluation harness** (`eval_strategy.mjs`): replays snapshots through a strategy with
+**Evaluation harness** (`research/eval_strategy.mjs`): replays snapshots through a strategy with
 realistic fills + settlement and reports the numbers that decide a pilot — **realized win
 rate vs claimed probability** (for lock-in it must be ≈100%; below that the bounds are too
 tight), net ROI after real fills, and abstention rate, split train/test.
-- Run now on synthetic data: `node eval_strategy.mjs --synthetic`
-- Run on real shadow data: `SNAPSHOTS=<export.json> node eval_strategy.mjs`
+- Run now on synthetic data: `node research/eval_strategy.mjs --synthetic`
+- Run on real shadow data: `SNAPSHOTS=<export.json> node research/eval_strategy.mjs`
 
 **Tests** (`test_diurnal.js`, wired into `npm test`): 17 assertions proving the lock-in
 logic is correct and never asserts a false certainty.
@@ -83,7 +83,7 @@ logic is correct and never asserts a false certainty.
 ## The go/no-go for Strategy A
 
 Deploy the shadow logger to production → let it collect a few weeks of book+settlement →
-`?mode=export` → run `eval_strategy.mjs`. Promote to a real-money pilot **only if**:
+`?mode=export` → run `research/eval_strategy.mjs`. Promote to a real-money pilot **only if**:
 realized lock-in win rate ≈ 100%, net ROI > 0 after real fills, in **both** train and test
 splits, at n ≥ ~30/side. Otherwise widen the bounds (the harness names the offending bets)
 or conclude the market reprices too fast for a retail lock-in and move to B or C.
