@@ -319,11 +319,34 @@ function localMidnightUTC(tz, now = new Date()) {
   return new Date(now.getTime() - offsetMs);
 }
 
-function hoursToPeak(tz, now = new Date()) {
+// Hours until the day's peak. The peak hour used to be hardcoded at 15:00 local for
+// every city and every day, which is roughly right for the Eastern/Central summer
+// diurnal cycle but 1.5-2.5h too early on the Pacific coast — KSEA/KLAX/KPHX peak
+// 16:00-17:00 local in late July. The consequence was severe, not cosmetic: at 14:11
+// PDT on 2026-07-23 all three Pacific cities got hrsToPeak=0.7, which trips the
+// `hrsToPeak < 1.0` peak-realized branch. That branch declares the day's max
+// essentially observed and pins mean = maxSoFar + 0.2 + 0.3*hrsToPeak. Seattle was
+// 73F at 13:53 PDT climbing ~2F/hr with the NWS grid forecasting a 79F peak at 17:00,
+// and the model served 74.1F. The resulting fake edge ranked #1 and #2 on the Kalshi
+// board (B78.5 NO @74c, T76 YES @8c) — both wrong-way.
+//
+// Fix: derive the peak hour per city per day from the forecast hourly series itself
+// (see forecastPeakHourToday). That is self-calibrating across season, latitude and
+// synoptic regime, and needs no per-city table. Guarded to a plausible daytime window
+// — outside it we fall back to the long-standing 15:00 assumption rather than invent
+// new untested behavior. Notably an early-morning forecast argmax (cold advection,
+// max at 02:00) falls OUTSIDE the window and keeps the shipped behavior; the existing
+// cold-front / warm-front branches own those days.
+const PEAK_HOUR_DEFAULT = 15;
+const PEAK_HOUR_WINDOW = [11, 19];
+export function hoursToPeak(tz, now = new Date(), peakHourLocal = null) {
   const p = localDateParts(tz, now);
   const decimalHr = p.hour + p.minute / 60;
-  if (decimalHr >= 15) return 0;
-  return Math.max(0, 15 - decimalHr);
+  const peakHr = (peakHourLocal != null
+      && peakHourLocal >= PEAK_HOUR_WINDOW[0] && peakHourLocal <= PEAK_HOUR_WINDOW[1])
+    ? peakHourLocal : PEAK_HOUR_DEFAULT;
+  if (decimalHr >= peakHr) return 0;
+  return Math.max(0, peakHr - decimalHr);
 }
 // For LOW prediction: hours until typical morning trough (~6 AM local).
 // After 7 AM local, trough is essentially realized — return 0.
@@ -573,6 +596,25 @@ function forecastPeakToday(hourly, tzMidnight) {
   const todayPeriods = hourly.filter(p => p.ts >= tzMidnight && p.ts < tomorrowMidnight);
   if (!todayPeriods.length) return null;
   return Math.max(...todayPeriods.map(p => p.tempF));
+}
+// Local decimal hour at which the forecast hourly series maxes today. Feeds
+// hoursToPeak() so the peak-realized branch fires when the day's heating is actually
+// done rather than at a hardcoded clock time — see the hoursToPeak header.
+// Ties resolve to the EARLIEST hour at the max: forecast grids often plateau across
+// 2-4 hours near the peak, and taking the late edge of a plateau would hold the model
+// out of peak-realized well past the point the max is effectively locked.
+export function forecastPeakHourToday(hourly, tzMidnight, tz) {
+  if (!hourly?.length) return null;
+  const tomorrowMidnight = new Date(tzMidnight.getTime() + 24 * 3600 * 1000);
+  const todayPeriods = hourly.filter(p => p.ts >= tzMidnight && p.ts < tomorrowMidnight);
+  if (!todayPeriods.length) return null;
+  let best = null;
+  for (const p of todayPeriods) {
+    if (best == null || p.tempF > best.tempF) best = p;
+  }
+  if (best == null) return null;
+  const parts = localDateParts(tz, best.ts);
+  return parts.hour + parts.minute / 60;
 }
 function forecastTroughToday(hourly, tzMidnight) {
   if (!hourly?.length) return null;
@@ -886,7 +928,10 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       currentTempTime = new Date(oneMin.latestTs).toISOString();
     }
   }
-  const hrsToPeak = hoursToPeak(city.tz, now);
+  // Peak hour from the NWS hourly grid (the ensemble hourlies are fetched below, but
+  // NWS alone is enough to time the diurnal max and is the freshest single source).
+  const forecastPeakHour = forecastPeakHourToday(forecast?.hourly, localMidnight, city.tz);
+  const hrsToPeak = hoursToPeak(city.tz, now, forecastPeakHour);
 
   // === Multi-model ensemble forecast ===
   // Build per-source { peak today, value at current obs time }. Equal-weight available models.
@@ -1460,6 +1505,9 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     forecastPeakHourly: ensemblePeak != null ? Math.round(ensemblePeak) : null,
     biasF: biasF != null ? round(biasF) : null,
     hrsToPeak: Math.round(hrsToPeak * 10) / 10,
+    // Forecast-derived local peak hour actually used by hoursToPeak (null => the
+    // 15:00 default applied, either no hourly grid or an argmax outside the window).
+    peakHourLocal: forecastPeakHour != null ? Math.round(forecastPeakHour * 10) / 10 : null,
     method,
     sigmaFrontal: Math.round(sigmaFrontal * 100) / 100,
     mean: round(mean),
