@@ -2294,7 +2294,15 @@ export default async () => {
   try {
     const _ac = new AbortController();
     const _t = setTimeout(() => _ac.abort(), 3000);
-    await fetch(`${SITE_BASE}/.netlify/functions/paper_trader`, {
+    // MUST be the /api route, not /.netlify/functions/paper_trader: paper_trader.js
+    // declares `export const config = { path: "/api/paper_trader" }`, and a v2 function
+    // with a custom path is served ONLY there — the legacy URL 404s. This kick had been
+    // 404ing every cycle since the paper shadow was seeded 2026-06-16, which is the real
+    // reason it had placed zero bets in five weeks (its log store held 4 entries, all
+    // from manual invocations). The sibling kicks above use /.netlify/functions/ legally:
+    // those two background functions declare no custom path. Verified 2026-07-23:
+    // /api/paper_trader → 200, /.netlify/functions/paper_trader → 404.
+    await fetch(`${SITE_BASE}/api/paper_trader`, {
       headers: { authorization: "Basic " + btoa("internal:hydro") }, signal: _ac.signal
     }).finally(() => clearTimeout(_t));
   } catch { /* paper is best-effort; never block or fail the live cycle */ }
