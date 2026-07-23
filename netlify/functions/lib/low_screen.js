@@ -34,6 +34,28 @@
 //     a trade.
 //
 // All temps °F. Everything here is pure — no fetching, no side effects.
+//
+// HIGH-side mirror (added 2026-07-22, same evening): no dewpoint anchor exists
+// for the daily max, so the HIGH heuristics bound *heating rate* instead:
+//
+//   HIGH-CLOUD-CAPPED (mirror of physics floor) — a HIGH YES bucket entirely
+//     above the observed max needs (bucket_lo − maxObs) of further warming
+//     before the peak. Credible warming rate in the final approach (≤4 h to
+//     peak) tops out ~4 F/h clear, ~2.5 F/h under overcast/precip. Buckets
+//     needing more are unreachable → skip.
+//
+//   HIGH-SPIKE-NO (mirror of jagged-trace) — gusty mixing under strong
+//     insolation spikes the continuous/5-min trace 1-2 F above hourly
+//     displays. Selling NO on a bucket just above the observed max while
+//     gusts ≥ 20 kt and the peak isn't passed is selling into that spike.
+//     (DEN 2026-07-22 outflow: hourly showed 69 F min, the 6-hr group read
+//     19.4 C = 66.9 F — same trace physics, LOW direction.)
+//
+//   LATE-SURGE advisory (mirror of undercut-live) — after the nominal peak,
+//     current temp within 2 F of the max with a rising 3 h trend means warm
+//     advection (downslope / warm sector) may still beat the afternoon max
+//     before local midnight. Advisory only, joined offline against gates that
+//     block HIGH YES above maxSoFar.
 
 const SKY_RANK = { CLR: 0, SKC: 0, FEW: 1, SCT: 2, BKN: 3, OVC: 4, VV: 4 };
 
@@ -185,6 +207,62 @@ export function lowScreenCheck(bet, cityWeather, minObsF) {
   if (floor != null && cityWeather.lowMean != null && cityWeather.lowMean < floor - 1) {
     out.advisories.push({ flag: "low-mean-below-dewpoint-floor",
                           lowMean: cityWeather.lowMean, floorF: floor });
+  }
+  return out;
+}
+
+// HIGH mirror. bet/cityWeather as in lowScreenCheck; maxObsF = CLI-grade
+// observed max (trader's cliMaxObs). Returns the same { skips, advisories }.
+export function highScreenCheck(bet, cityWeather, maxObsF) {
+  const out = { skips: [], advisories: [] };
+  if (!bet || bet.variable !== "high" || !cityWeather?.surfaceObs) return out;
+  const s = cityWeather.surfaceObs;
+  const maxObs = maxObsF ?? cityWeather.maxSoFar ?? null;
+  const hrsToPeak = cityWeather.hrsToPeak ?? null;
+
+  // 1. HIGH-CLOUD-CAPPED — YES on a bucket entirely above the observed max in
+  //    the final approach to the peak, where the needed warming rate exceeds
+  //    what the sky state supports. Not applied earlier than 4 h out (morning
+  //    heating ramps ARE steep) or to tail bounds without a lower edge.
+  if (bet.side === "yes" && maxObs != null && bet.loInt != null && s.ageMin <= 180
+      && hrsToPeak != null && hrsToPeak > 0 && hrsToPeak <= 4
+      && bet.loInt - 0.5 > maxObs) {
+    const needF = bet.loInt - 0.5 - maxObs;
+    const capped = s.precipNow || s.skyWorst >= 4;
+    const maxRateF = capped ? 2.5 : 4.0;
+    const rateF = needF / hrsToPeak;
+    if (rateF > maxRateF) {
+      out.skips.push({ reason: "high-cloud-capped",
+                       needF: Math.round(needF * 10) / 10,
+                       rateFPerHr: Math.round(rateF * 10) / 10,
+                       maxRateFPerHr: maxRateF, hrsToPeak,
+                       sky: s.sky, precipNow: s.precipNow });
+    }
+  }
+
+  // 2. HIGH-SPIKE-NO — NO on a bucket intersecting the turbulent spike zone
+  //    just above the observed max (maxObs − 1 to maxObs + 2) while gusts
+  //    ≥ 20 kt and the peak isn't clearly passed. The continuous trace
+  //    settles above hourly displays in exactly this zone.
+  if (bet.side === "no" && maxObs != null && (s.gustKt ?? 0) >= 20
+      && (hrsToPeak == null || hrsToPeak > -1)) {
+    const lo = bet.loInt ?? -999, hi = bet.hiInt ?? 999;
+    if (hi >= maxObs - 1 && lo <= maxObs + 2) {
+      out.skips.push({ reason: "high-spike-no", maxObsF: maxObs,
+                       gustKt: s.gustKt, bucket: [bet.loInt, bet.hiInt] });
+    }
+  }
+
+  // 3. LATE-SURGE — advisory. Post-peak warm advection still climbing toward
+  //    the max: log so blocks on HIGH YES above maxSoFar can be audited.
+  if (s.tempF != null && maxObs != null
+      && (hrsToPeak == null || hrsToPeak <= 0)
+      && s.tempF >= maxObs - 2 && (s.trend3F ?? -99) >= 1
+      && (s.hrsToLocalMidnight ?? 0) >= 1) {
+    out.advisories.push({ flag: "late-high-surge-conditions",
+                          tempF: s.tempF, maxObsF: maxObs,
+                          trend3F: s.trend3F,
+                          hrsToLocalMidnight: s.hrsToLocalMidnight });
   }
   return out;
 }

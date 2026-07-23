@@ -13,7 +13,7 @@
 import { kalshiAuthedFetch, getBalance, getPositions, getRecentFills, getMarketResult } from "./jackson.js";
 import { getStore } from "@netlify/blobs";
 import { normCdf01 } from "./lib/stats.js";
-import { lowScreenCheck } from "./lib/low_screen.js";
+import { lowScreenCheck, highScreenCheck } from "./lib/low_screen.js";
 
 const SITE_BASE = "https://weatherbot-mf.netlify.app";
 // No concurrent-position cap. Threshold gates (EV / halfKelly / Kelly-LCB), tile
@@ -195,6 +195,10 @@ const LOW_HARD_OFF = false;
 // shadow: like every calibrated gate before it, it earns enforce on logged
 // evidence, not on the night it was written (2026-07-22).
 const LOW_SCREEN_MODE = (process.env.LOW_SCREEN_MODE || "shadow").trim().toLowerCase();
+// HIGH-side mirror (high-cloud-capped, high-spike-no, late-surge advisory).
+// Independent flag so HIGH — the validated live side — flips on its own
+// evidence, not LOW's.
+const HIGH_SCREEN_MODE = (process.env.HIGH_SCREEN_MODE || "shadow").trim().toLowerCase();
 // (b) AGGREGATE_EXPOSURE_CAP: total open exposure / equity ceiling. Per-position
 // concentration (above) doesn't help when N small positions all sink together. 50%
 // keeps half of equity in cash reserve. Heuristic — needs its own backtest. Skips new
@@ -1894,13 +1898,17 @@ export async function runTraderCycle(isPaper = false) {
         // margin/obs gates so undercut-live advisories are recorded even for bets
         // those gates go on to skip — that join is the evidence base for ever
         // relaxing them. Shadow mode records and never acts.
-        if (b.variable === "low" && LOW_SCREEN_MODE !== "off" && cityWeather?.surfaceObs) {
-          const ls = lowScreenCheck(b, cityWeather, cliMinObs(cityWeather));
+        const screenMode = b.variable === "low" ? LOW_SCREEN_MODE
+                         : b.variable === "high" ? HIGH_SCREEN_MODE : "off";
+        if (screenMode !== "off" && cityWeather?.surfaceObs) {
+          const ls = b.variable === "low"
+            ? lowScreenCheck(b, cityWeather, cliMinObs(cityWeather))
+            : highScreenCheck(b, cityWeather, cliMaxObs(cityWeather));
           if (ls.skips.length || ls.advisories.length) {
-            lowScreen.push({ ticker: b.ticker, city: b.city, side: b.side,
-                             mode: LOW_SCREEN_MODE, skips: ls.skips, advisories: ls.advisories });
+            lowScreen.push({ ticker: b.ticker, city: b.city, side: b.side, variable: b.variable,
+                             mode: screenMode, skips: ls.skips, advisories: ls.advisories });
           }
-          if (LOW_SCREEN_MODE === "enforce" && ls.skips.length) {
+          if (screenMode === "enforce" && ls.skips.length) {
             skipped.push({ ...briefBet(b), reason: ls.skips[0].reason, lowScreenDetail: ls.skips[0] });
             continue;
           }
@@ -2227,7 +2235,7 @@ export async function runTraderCycle(isPaper = false) {
       stake_floor: STAKE_FLOOR,
       stake_ceil_dollars: stakeCeil,
       cal_blocked: calBlocked, cal_age_min: calAgeMin,
-      low_screen_mode: LOW_SCREEN_MODE,
+      low_screen_mode: LOW_SCREEN_MODE, high_screen_mode: HIGH_SCREEN_MODE,
       sales, placements, pyramids, skipped, errors, lowScreen
     };
 
@@ -2265,7 +2273,7 @@ export async function runTraderCycle(isPaper = false) {
         })),
         skipped: skipped.slice(0, 30),  // cap to avoid huge blobs
         lowScreen: lowScreen.slice(0, 30),
-        low_screen_mode: LOW_SCREEN_MODE,
+        low_screen_mode: LOW_SCREEN_MODE, high_screen_mode: HIGH_SCREEN_MODE,
         errors: errors.slice(0, 10)
       });
     } catch (logErr) {
