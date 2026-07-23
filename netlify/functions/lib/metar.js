@@ -1,4 +1,5 @@
-// metar.js — minimal METAR decoder to build an ObsSnapshot for claude_analog.js
+// metar.js — minimal METAR decoder to build an ObsSnapshot for the analog engine
+// (claude_analog_v3.js; the original claude_analog.js was deleted 2026-07-23)
 // from aviationweather.gov raw METAR text. Parses temp/dewpoint (prefers the RMK
 // tenths T-group), wind dir/speed, sea-level pressure (SLP group, else altimeter),
 // visibility (statute miles), and obstruction codes (HZ/FU/BR/FG/DU/SA).
