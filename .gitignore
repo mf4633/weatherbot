@@ -37,3 +37,6 @@ __pycache__/
 _cli_cache/
 data/ticks/
 _build_stamp.json
+
+# Deno edge-function lockfile (Netlify build artifact, not source)
+deno.lock
