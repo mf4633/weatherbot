@@ -111,6 +111,30 @@ export default async () => {
     else if (ageMin >= 45) warnings.push(`calibration_state is ${ageMin} min old (>= 45 min trips the trader's cal-stale gate; it will self-kick, but first cycle may skip)`);
   } catch (e) { warnings.push(`calibration check failed: ${String(e?.message || e)}`); }
 
+  // --- observation-chain health (2026-07-23) -------------------------------------
+  // The 1-minute Synoptic feed died silently: the token returns 403 "Unauthorized"
+  // and fetch1MinObs swallowed it with `return null`, so every station fell back to
+  // hourly METAR — a mean 0.78°F BELOW the CLI settled high — while the dashboard
+  // still implied sub-hourly precision. Sub-hourly observation is the ONE axis where
+  // this bot could hold information the market doesn't, so its health belongs on the
+  // go/no-go board. Checked via /api/weather because module state isn't shared across
+  // function instances.
+  let obs_chain = null;
+  try {
+    const wx = await getJSON(`${SITE}/api/weather`, { authorization: AUTH });
+    const cities = wx.cities || wx || [];
+    const served = cities.filter(c => c.station && c.maxSoFar != null);
+    const withOneMin = served.filter(c => c.oneMinAsos != null).length;
+    const withIem = served.filter(c => c.iemDailyMaxF != null).length;
+    obs_chain = { served: served.length, with_1min: withOneMin, with_iem: withIem };
+    if (served.length && withOneMin === 0)
+      warnings.push(`1-minute ASOS feed DOWN for all ${served.length} served cities (Synoptic auth/quota?) — maxSoFar falls back to hourly METAR, which runs ~0.78°F below CLI settlement. IEM fold covers most of the gap; sub-hourly latency edge is unavailable.`);
+    else if (served.length && withOneMin < served.length / 2)
+      warnings.push(`1-minute ASOS present for only ${withOneMin}/${served.length} cities`);
+    if (served.length && withIem === 0)
+      blockers.push("IEM daily extremes missing for all cities — the CLI-settlement-grade floor is gone, leaving only hourly METAR");
+  } catch (e) { warnings.push(`observation-chain check failed: ${String(e?.message || e)}`); }
+
   const ready = blockers.length === 0;
   // `ready` has only ever meant INFRASTRUCTURE readiness (creds, quotes, tickers, cal age).
   // Reported alone next to arming instructions it reads as a green light to trade, which
@@ -130,7 +154,7 @@ export default async () => {
     to_go_live: ready
       ? "BLOCKED BY STRATEGY HALT (see strategy_halt). Infrastructure is otherwise ready: arming would be KALSHI_TRADING_RESUME=true + KALSHI_TRADING_LIVE=dryrun for an instrumentation-only rehearsal, review /api/trader_log, then LIVE=true — but do not do that until a strategy clears STRATEGY.md's go/no-go bar."
       : "Resolve blockers first.",
-    blockers, warnings, quotes, tickers, calibration,
+    blockers, warnings, quotes, tickers, calibration, obs_chain,
     asof: new Date().toISOString(),
   }, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 };

@@ -880,6 +880,39 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
       console.log(`[iem-divergence] ${city.station}: bot_max=${maxSoFar.toFixed(1)} iem_max=${iem.dailyMaxF.toFixed(1)} delta=${delta.toFixed(1)}F`);
     }
   }
+  // IEM fold-in (2026-07-23). Previously IEM was fetched, alarmed on, and DISCARDED —
+  // the bot floored on its own hourly-METAR max while the settlement-grade number sat
+  // unused in the same object. Measured against the CLI archive over 2026-06-01..07-22:
+  // IEM's max_dayairtemp EQUALS the CLI settled high on 364/364 station-days across
+  // KLAX/KSEA/KDEN/KMDW/KDCA/KBOS/KPHX (100%, mean gap 0.00). By contrast the hourly
+  // METAR max runs a mean 0.78°F BELOW CLI (analyze_cli_gap.js, n=7343/hour) because
+  // the :53 snapshot misses the intra-hour peak.
+  //
+  // This matters most exactly where the bot was losing: the lower floor on late-day
+  // HIGH buckets. On 2026-07-23 the bot floored Chicago at 75 while IEM already read
+  // 77, and Boston at 80 while IEM read 81.
+  //
+  // IEM's daily window is the LOCAL calendar day (proved by the 100% match at the
+  // western stations — a UTC window would roll over mid-afternoon there and destroy
+  // the agreement). Guarded on observation freshness so a stalled feed can't fold in
+  // yesterday's extreme: max_dayairtemp is only trusted while its own last_ob is
+  // recent. Folds like DSM — it can only RAISE maxSoFar / LOWER minSoFar.
+  const IEM_FRESH_MAX_MIN = 90;
+  const iemAgeMin_ = iem?.latestTs ? (Date.now() - iem.latestTs.getTime()) / 60000 : null;
+  const iemFresh = iemAgeMin_ != null && iemAgeMin_ <= IEM_FRESH_MAX_MIN;
+  if (iem && !iemFresh && iem.dailyMaxF != null) {
+    console.log(`[iem-stale] ${city.station}: last_ob ${iemAgeMin_ == null ? "unknown" : Math.round(iemAgeMin_) + "min"} old — not folding`);
+  }
+  if (iemFresh) {
+    if (iem.dailyMaxF != null && (maxSoFar == null || iem.dailyMaxF > maxSoFar)) {
+      console.log(`[iem-fold] ${city.station}: maxSoFar ${maxSoFar?.toFixed(1) ?? "null"} -> ${iem.dailyMaxF.toFixed(1)}`);
+      maxSoFar = iem.dailyMaxF;
+    }
+    if (iem.dailyMinF != null && (minSoFar == null || iem.dailyMinF < minSoFar)) {
+      console.log(`[iem-fold] ${city.station}: minSoFar ${minSoFar?.toFixed(1) ?? "null"} -> ${iem.dailyMinF.toFixed(1)}`);
+      minSoFar = iem.dailyMinF;
+    }
+  }
   // DSM fold-in: the NWS Daily Summary Message reports max/min from ASOS DI-1
   // internal continuous data — the same source the official CLI is generated from.
   // When DSM exceeds maxSoFar (or undershoots minSoFar), it has captured a
@@ -1238,9 +1271,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // while the live METAR read 93.9) must not DRAG the floor below settlement-grade
   // reality — the legitimate 5-min-vs-raw smoothing discount is ~1°F, so clamp the
   // CLI floor basis to ≥ maxSoFar − 1.
+  // IEM included as a settlement-grade basis: measured EQUAL to the CLI settled high on
+  // 364/364 station-days (2026-06-01..07-22, 7 stations). Freshness-guarded above.
   const cliMaxCandidates = [
     oneMin?.max5MinSoFar,
-    dsmCoversToday ? dsm?.dailyMaxF : null
+    dsmCoversToday ? dsm?.dailyMaxF : null,
+    iemFresh ? iem?.dailyMaxF : null
   ].filter(v => v != null);
   let cliMaxObs = cliMaxCandidates.length ? Math.max(...cliMaxCandidates) : maxSoFar;
   if (cliMaxObs != null && maxSoFar != null && cliMaxObs < maxSoFar - 1) {
@@ -1384,7 +1420,8 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // (which can dip below CLI's actual min on a sub-minute 1-min ASOS undershoot).
   const cliMinCandidates = [
     oneMin?.min5MinSoFar,
-    dsmCoversToday ? dsm?.dailyMinF : null
+    dsmCoversToday ? dsm?.dailyMinF : null,
+    iemFresh ? iem?.dailyMinF : null
   ].filter(v => v != null);
   let cliMinObs = cliMinCandidates.length ? Math.min(...cliMinCandidates) : minSoFar;
   // Mirror of the max-side stale-feed clamp: don't let a partial 1-min window

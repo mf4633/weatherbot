@@ -41,6 +41,11 @@ export const COVERAGE_NEIGHBORS = {
 const UA = "weatherbot.netlify.app (contact: github.com/mf4633)";
 
 let CACHE = { ts: 0, byStation: null };
+// Last upstream failure, surfaced by /api/preflight so a dead feed is a visible
+// go/no-go blocker rather than a silent degradation. null when healthy.
+let lastError = null;
+export function asos1minLastError() { return lastError; }
+export function asos1minTokenPresent() { return !!process.env.SYNOPTIC_API_TOKEN; }
 // 60s matches 1-min ASOS cadence; the bot's outer cache is 3 min, so this
 // inner cache resets at most ~3 times per outer fetch but typically once.
 const CACHE_MS = 60 * 1000;
@@ -67,9 +72,26 @@ export async function fetch1MinObs() {
 
   try {
     const r = await fetch(url, { headers: { "User-Agent": UA } });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      // LOUD (2026-07-23): this used to `return null` silently. The token was returning
+      // 403 "Unauthorized. Review your account access settings" — the entire 1-minute
+      // feed had been dead across all 28 stations with no alarm anywhere, so the bot
+      // was floored on hourly METAR (a mean 0.78°F below CLI) while believing it had
+      // sub-hourly precision. A silent null on an edge-critical feed is not acceptable.
+      console.error(`[asos1min] FEED DOWN: Synoptic HTTP ${r.status} — falling back to hourly METAR. `
+        + `1-min precision LOST for all stations. Check SYNOPTIC_API_TOKEN / account access.`);
+      lastError = { at: new Date().toISOString(), status: r.status };
+      return null;
+    }
     const j = await r.json();
-    if (!j?.STATION) return null;
+    if (!j?.STATION) {
+      // Synoptic answers 200 with {status,message} on auth/quota problems too.
+      console.error(`[asos1min] FEED DOWN: Synoptic returned no STATION block `
+        + `(status=${j?.status ?? "?"} message=${JSON.stringify(j?.message ?? null)}). Falling back to hourly METAR.`);
+      lastError = { at: new Date().toISOString(), status: j?.status ?? "no-station", message: j?.message ?? null };
+      return null;
+    }
+    lastError = null;
 
     const byStation = {};
     for (const s of j.STATION) {
@@ -94,6 +116,8 @@ export async function fetch1MinObs() {
     CACHE = { ts: now, byStation };
     return byStation;
   } catch (e) {
+    console.error(`[asos1min] FEED DOWN: ${e?.message ?? e} — falling back to hourly METAR.`);
+    lastError = { at: new Date().toISOString(), status: "exception", message: String(e?.message ?? e) };
     return null;
   }
 }
