@@ -200,8 +200,9 @@ async function computeCalibration() {
 
   const cHigh = calibrate(zHigh);
   const cLow  = calibrate(zLow);
-  const pHigh = predictive(zHigh);
-  const pLow  = predictive(zLow);
+  // pHigh / pLow are computed AFTER the sigma posteriors below — they now fit on the
+  // unselected prediction population, which needs sigmaHighPost / sigmaLowPost as the
+  // z denominator. See the block following sigmaLowPost.
 
   // ADAPTIVE sigma_high (calibrated parameter). Posterior predictive σ for HIGH, fit from
   // the UNSELECTED prediction population (errors actual−pred, NOT bet-matched — that
@@ -239,6 +240,48 @@ async function computeCalibration() {
     (SIGMA_LOW_NU0 * SIGMA_LOW_PRIOR ** 2 + sumErr2Low) / (SIGMA_LOW_NU0 + nErrLow));
   const sigmaLowPost = Math.min(SIGMA_LOW_CAP, Math.max(SIGMA_LOW_FLOOR, sigmaLowRaw));
 
+  // Posterior-predictive (ν, scale), fit on the UNSELECTED prediction population rather
+  // than on settled bets (2026-07-24).
+  //
+  // predictive() sets ν = PRIOR_DOF + n, so ν is a direct function of SAMPLE SIZE. The
+  // settled-bet population is both selection-biased and starving: with the trader halted
+  // nothing new settles, and the actuals join was matching only 30/176 HIGH and 1/42 LOW
+  // — the file's own "eligible≫matched ⇒ broken pipe" criterion, tripped and unnoticed.
+  // LOW was therefore publishing ν=5 (a Student-t on FIVE dof, derived from ONE
+  // observation) into every LOW bucket probability in kalshi.js. That fattens the tails
+  // exactly where the edge audit found the losses: buckets priced under 5¢ realize 0.6%
+  // against 1.0% priced (z=−5.5, diagnose_edge.js). A broken join was funding cheap-tail
+  // bets.
+  //
+  // The unselected population already drives sigma_high / sigma_low successfully (n=566
+  // and 416 today vs 30 and 1). Reuse it, with the SERVED posterior σ as the denominator
+  // — "given the σ we actually publish, how do the residuals behave" is precisely what ν
+  // parameterises. This keeps calibration learning while the trader is halted and removes
+  // the selection bias that inflated the old scale to 2.775 and cost ~$415.
+  //
+  // Falls back to the bet-matched population when the unselected one is too small, so a
+  // cold start is never worse than before.
+  const POP_MIN_N = 50;
+  const popZ = (errs, sigma) =>
+    (Number.isFinite(sigma) && sigma > 0) ? errs.map(e => e / sigma).filter(Number.isFinite) : [];
+  const zHighPop = popZ(highErrs, sigmaHighPost);
+  const zLowPop  = popZ(lowErrs,  sigmaLowPost);
+  const useHighPop = zHighPop.length >= POP_MIN_N && zHighPop.length > zHigh.length;
+  const useLowPop  = zLowPop.length  >= POP_MIN_N && zLowPop.length  > zLow.length;
+  const pHigh = predictive(useHighPop ? zHighPop : zHigh);
+  const pLow  = predictive(useLowPop  ? zLowPop  : zLow);
+
+  // Broken-pipe alarm. This condition was already true and silent; make it loud so a
+  // degraded join surfaces instead of quietly steering ν.
+  const joinHigh = eligibleHigh ? zHigh.length / eligibleHigh : null;
+  const joinLow  = eligibleLow  ? zLow.length  / eligibleLow  : null;
+  if (joinHigh != null && joinHigh < 0.5)
+    console.error(`[calibration] HIGH actuals join DEGRADED: ${zHigh.length}/${eligibleHigh} `
+      + `(${(joinHigh * 100).toFixed(0)}%) — ν now fit on the unselected population instead`);
+  if (joinLow != null && joinLow < 0.5)
+    console.error(`[calibration] LOW actuals join DEGRADED: ${zLow.length}/${eligibleLow} `
+      + `(${(joinLow * 100).toFixed(0)}%) — ν now fit on the unselected population instead`);
+
   return {
     updated_at: new Date().toISOString(),
     prior_dof: PRIOR_DOF,
@@ -264,6 +307,10 @@ async function computeCalibration() {
       // Posterior-predictive params consumed by kalshi.js (Student-t bucket probs).
       predictive_nu: pHigh.nu,
       predictive_scale: pHigh.scale,
+      // Which population ν/scale came from, and the join health that decided it.
+      predictive_source: useHighPop ? "unselected-population" : "settled-bets",
+      predictive_n: useHighPop ? zHighPop.length : zHigh.length,
+      join_rate: joinHigh != null ? Math.round(joinHigh * 1000) / 1000 : null,
       inflation_factor: cHigh.factor,    // retained for dashboard continuity
       shrunk_estimate: cHigh.shrunk,
       adaptive_cap: cHigh.cap,
@@ -279,6 +326,9 @@ async function computeCalibration() {
       coverage_95: coverageFraction(zLow, 1.96),
       predictive_nu: pLow.nu,
       predictive_scale: pLow.scale,
+      predictive_source: useLowPop ? "unselected-population" : "settled-bets",
+      predictive_n: useLowPop ? zLowPop.length : zLow.length,
+      join_rate: joinLow != null ? Math.round(joinLow * 1000) / 1000 : null,
       inflation_factor: cLow.factor,
       shrunk_estimate: cLow.shrunk,
       adaptive_cap: cLow.cap,
