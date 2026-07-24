@@ -1029,14 +1029,23 @@ export async function runTraderCycle(isPaper = false) {
     // calibration_state blob is stale (cron dark). Returns {ok, reason} per side.
     const calAgeMin = calState?.updated_at
       ? Math.round((Date.now() - new Date(calState.updated_at).getTime()) / 60000) : null;
-    // Self-heal stale calibration off the trader's reliable */5 cron (see CAL_REFRESH_MIN).
+    // Self-heal stale calibration (see CAL_REFRESH_MIN).
     // The background fn returns 202 in ~200ms and writes within ~15s, so THIS cycle still
     // gates on the current (stale) cal age — the refresh lands for the NEXT cycle. We AWAIT
     // (not fire-and-forget) with a bounded timeout: an un-awaited fetch can be discarded when
     // the serverless instance freezes before the request is even sent, so the kick would
     // silently never fire. The AbortController caps the wait so a hung endpoint can't stall
     // the trade cycle; any failure is swallowed (refresh is best-effort, never blocks trading).
-    if (!isPaper && (calAgeMin == null || calAgeMin >= CAL_REFRESH_MIN)) {
+    //
+    // 2026-07-24: kick from EITHER cycle, not just live. The live jackson_trader only fires
+    // on the throttled GitHub-Actions/Netlify schedules (~every 2h in practice), so a
+    // live-only kick let calibration_state drift to 106min and flip /api/health to FAILED.
+    // The PAPER cycle, by contrast, is driven directly by the reliable cron-job.org */5 job
+    // (that's why paper_shadow stays ~2min fresh while the live cycle lags). calibration_state
+    // is computed from REAL settled bets (jackson_settled_bets) — it is paper/live-agnostic,
+    // so a paper-driven kick produces the identical, correct blob the LIVE trader consumes.
+    // Riding the reliable paper cadence keeps cal fresh regardless of the live trader's lag.
+    if (calAgeMin == null || calAgeMin >= CAL_REFRESH_MIN) {
       try {
         const _ac = new AbortController();
         const _t = setTimeout(() => _ac.abort(), 3000);
