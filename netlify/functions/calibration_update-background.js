@@ -9,6 +9,19 @@
 // Computed separately for HIGH and LOW so each side's σ_eff inflates by its own
 // empirical factor. Trader / kalshi.js read the blob each cycle — closed-loop
 // calibration: settled bet → blob update → next prediction inflates σ.
+//
+// 2026-07-24 join repair (see test_calibration_join.js for the measured decomposition):
+//   - the actuals index is now DEMAND-DRIVEN — it fetches exactly the `${cli}/${date}`
+//     records the settled bets ask for, so the join no longer depends on the retention
+//     window happening to contain those days (that cost 50 of 176 HIGH matches);
+//   - the retention window itself is sorted by keyDate(), not by raw key, because the
+//     store is keyed CLI-first and a lexicographic cap was slicing by city, not by date;
+//   - settled bets targeting a day older than the store's first record are reported as
+//     out_of_coverage rather than counted as eligible, so join_rate measures the pipe.
+// What remains broken is producer-side and out of this file's reach: prediction records
+// settled before 2026-06-01 have actualHigh but no actualLow (logger.js runSettle only
+// began writing pred.actualLow that day) and May was never backfilled, so every LOW bet
+// from May stays unmatched.
 
 import { getStore } from "@netlify/blobs";
 
@@ -67,11 +80,10 @@ async function loadAllBlobEntries(storeName, maxEntries = Infinity) {
   const store = getStore(storeName);
   const { blobs } = await store.list().catch(() => ({ blobs: [] }));
   let keys = (blobs || []).map(b => b.key);
-  // 2026-06-04: cap the load to the most-recent maxEntries. Keys are date-prefixed
-  // (CLI/YYYY-MM-DD/…) so sort-desc = newest first — same pattern snapshots.js uses to
-  // handle the 8k+ store. Loading ALL blobs OOM'd/timed-out the function on HTTP invocation
-  // (the cause of the cal-cron's 502 → calibration_state going stale → cal-stale halting the
-  // bot). A recent window is all the calibration needs.
+  // 2026-06-04: cap the load to the most-recent maxEntries. Loading ALL blobs OOM'd/
+  // timed-out the function on HTTP invocation (the cause of the cal-cron's 502 →
+  // calibration_state going stale → cal-stale halting the bot). A recent window is all
+  // the calibration needs.
   if (keys.length > maxEntries) { keys.sort().reverse(); keys = keys.slice(0, maxEntries); }
   const entries = await Promise.all(
     keys.map(k => store.get(k, { type: "json" }).catch(() => null))
@@ -79,8 +91,43 @@ async function loadAllBlobEntries(storeName, maxEntries = Infinity) {
   return entries.filter(Boolean);
 }
 
+// 2026-07-24: the predictions store is keyed `${cli}/${date}` — CLI FIRST, not date.
+// loadAllBlobEntries' sort-desc-then-slice therefore ordered by CITY: the 600-key cap
+// kept 100% of TPA…NYC and 0% of AUS…MDW (10 of 28 cities in the store). Measured
+// consequences: 50 of 176 settled HIGH bets whose prediction record existed and carried
+// actualHigh were simply not loaded, and σ_high/σ_low were fit on a fixed Sunbelt/West
+// subset (σ_high raw 2.139 vs 1.895 on an unbiased same-size window).
+// keyDate() pulls the date segment so "most recent N" means a recent window across all
+// cities. The `.json` strip covers 16 legacy keys from 2026-05-03/04.
+export function keyDate(key) {
+  const s = String(key);
+  const i = s.indexOf("/");
+  return (i < 0 ? s : s.slice(i + 1)).replace(/\.json$/, "");
+}
+
+async function listKeys(storeName) {
+  const store = getStore(storeName);
+  const { blobs } = await store.list().catch(() => ({ blobs: [] }));
+  return (blobs || []).map(b => b.key);
+}
+
+// Chunked parallel get — same shape as loadAllBlobEntries' Promise.all but bounded so a
+// large key list can't open thousands of sockets at once.
+async function getMany(storeName, keys, chunkSize = 100) {
+  const store = getStore(storeName);
+  const out = new Map();
+  for (let i = 0; i < keys.length; i += chunkSize) {
+    const chunk = keys.slice(i, i + chunkSize);
+    const vals = await Promise.all(
+      chunk.map(k => store.get(k, { type: "json" }).catch(() => null))
+    );
+    chunk.forEach((k, j) => { if (vals[j]) out.set(k, vals[j]); });
+  }
+  return out;
+}
+
 // Build {cli/date → actualHigh, actualLow} index from the predictions blob.
-function indexActualsByCliDate(predictions) {
+export function indexActualsByCliDate(predictions) {
   const idx = {};
   for (const p of predictions) {
     if (!p.cli || !p.date) continue;
@@ -94,7 +141,7 @@ function indexActualsByCliDate(predictions) {
 // We use placedAtUTC (more reliable than settledAtUTC for date arithmetic):
 // the bet was placed during local day D — extract D in the city's TZ. The
 // predictions blob is keyed by local-date string.
-function targetLocalDate(bet, tz) {
+export function targetLocalDate(bet, tz) {
   if (!bet.placedAtUTC) return null;
   try {
     const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -119,39 +166,111 @@ const CITY_TZ = {
   "Washington DC": "America/New_York", "Boston": "America/New_York"
 };
 
-async function computeCalibration() {
-  const [settled, predictions] = await Promise.all([
-    loadAllBlobEntries(SETTLED_STORE, 1500),
-    loadAllBlobEntries(PREDICTIONS_STORE, 600),
-  ]);
-  const actuals = indexActualsByCliDate(predictions);
+// A settled bet reduced to what the join needs, or null if it can't be joined at all.
+export function betJoinTarget(b) {
+  if (!b) return null;
+  if (b.variable !== "high" && b.variable !== "low") return null;
+  if (b.modelMean == null || b.modelStd == null || b.modelStd <= 0) return null;
+  const cli = CITY_TO_CLI[b.city];
+  const tz  = CITY_TZ[b.city];
+  if (!cli || !tz) return null;
+  const date = targetLocalDate(b, tz);
+  if (!date) return null;
+  return { cli, date, key: `${cli}/${date}`, variable: b.variable };
+}
 
+// Join settled bets against the actuals index.
+//
+// `coverageStart` = the oldest date present in the predictions store. Bets targeting a
+// day before that can NEVER join (the store simply doesn't go back that far — its first
+// record is 2026-05-11, while the ledger starts 2026-05-05), so they are counted
+// separately instead of being folded into `eligible`. Otherwise the broken-pipe alarm
+// stays permanently tripped by prehistory and stops meaning anything — which is exactly
+// how the real degradation went unnoticed.
+export function joinSettledToActuals(settled, actuals, coverageStart = null) {
   const zHigh = [], zLow = [];
   let matched = 0, unmatched = 0;
-  // Per-side "eligible" = join was attempted (valid variable/σ/city/date) regardless
-  // of whether an actual was found. eligible≫matched on a side ⇒ the actuals join is
-  // broken for that side (the exact failure that killed LOW: actualLow never written).
-  // This is the only hard liveness check the trader keeps — it's a broken-pipe
-  // detector, not a statistical threshold.
+  // Per-side "eligible" = join was attempted against a day the predictions store covers.
+  // eligible≫matched on a side ⇒ the actuals join is broken for that side (the exact
+  // failure that killed LOW: actualLow never written). This is the only hard liveness
+  // check the trader keeps — it's a broken-pipe detector, not a statistical threshold.
   let eligibleHigh = 0, eligibleLow = 0;
+  let outOfCoverageHigh = 0, outOfCoverageLow = 0;
 
   for (const b of settled) {
-    if (b.variable !== "high" && b.variable !== "low") continue;
-    if (b.modelMean == null || b.modelStd == null || b.modelStd <= 0) continue;
-    const cli = CITY_TO_CLI[b.city];
-    const tz  = CITY_TZ[b.city];
-    if (!cli || !tz) continue;
-    const date = targetLocalDate(b, tz);
-    if (!date) continue;
-    if (b.variable === "high") eligibleHigh++; else eligibleLow++;
-    const a = actuals[`${cli}/${date}`];
-    const actual = b.variable === "high" ? a?.actualHigh : a?.actualLow;
+    const t = betJoinTarget(b);
+    if (!t) continue;
+    if (coverageStart && t.date < coverageStart) {
+      if (t.variable === "high") outOfCoverageHigh++; else outOfCoverageLow++;
+      continue;
+    }
+    if (t.variable === "high") eligibleHigh++; else eligibleLow++;
+    const a = actuals[t.key];
+    const actual = t.variable === "high" ? a?.actualHigh : a?.actualLow;
     if (actual == null) { unmatched++; continue; }
     const z = (actual - b.modelMean) / b.modelStd;
     if (!Number.isFinite(z)) continue;
-    if (b.variable === "high") zHigh.push(z); else zLow.push(z);
+    if (t.variable === "high") zHigh.push(z); else zLow.push(z);
     matched++;
   }
+  return { zHigh, zLow, matched, unmatched, eligibleHigh, eligibleLow,
+           outOfCoverageHigh, outOfCoverageLow };
+}
+
+// How many prediction records to load for the population fit (σ_high/σ_low, ν/scale),
+// and how many extra targeted gets the actuals join may spend on days that fall outside
+// that window. The join is demand-driven so it no longer depends on the retention window
+// happening to contain the days the settled bets need.
+const PRED_POPULATION_MAX = 600;
+const JOIN_FETCH_MAX      = 800;
+// Current predictions key shape, `${cli}/${YYYY-MM-DD}` (logger.js runCapture).
+export const PRED_KEY_RE = /^[A-Z]{3}\/\d{4}-\d{2}-\d{2}$/;
+
+// Exported so the join can be exercised read-only against the live blobs (it never
+// writes — only the handler below does).
+export async function computeCalibration() {
+  const [settled, allPredKeys] = await Promise.all([
+    loadAllBlobEntries(SETTLED_STORE, 1500),
+    listKeys(PREDICTIONS_STORE),
+  ]);
+
+  // logger.js runCapture writes `${cli}/${date}`. 16 surviving `${cli}/${date}.json` keys
+  // from 2026-05-03/04 are a previous generation with a different schema (localDate/mean,
+  // no cli/date/predHigh) — inert for the index and misleading for the coverage floor.
+  const predKeys = allPredKeys.filter(k => PRED_KEY_RE.test(k));
+  const predKeySet = new Set(predKeys);
+  const predDates  = predKeys.map(keyDate).sort();
+  const coverageStart = predDates.length ? predDates[0] : null;
+
+  // Population window: most recent PRED_POPULATION_MAX records BY DATE (see keyDate).
+  const popKeys = [...predKeys]
+    .sort((a, b) => keyDate(b).localeCompare(keyDate(a)) || a.localeCompare(b))
+    .slice(0, PRED_POPULATION_MAX);
+  const popKeySet = new Set(popKeys);
+
+  // Demand-driven join keys: exactly the `${cli}/${date}` records the settled bets ask
+  // for, minus the ones the population window already loads. Filtered against the store's
+  // real key list so prehistoric days cost zero gets.
+  const wanted = new Set();
+  for (const b of settled) {
+    const t = betJoinTarget(b);
+    if (t && predKeySet.has(t.key) && !popKeySet.has(t.key)) wanted.add(t.key);
+  }
+  const joinKeys = [...wanted].sort((a, b) => keyDate(b).localeCompare(keyDate(a)))
+    .slice(0, JOIN_FETCH_MAX);
+
+  const [popRecs, joinRecs] = await Promise.all([
+    getMany(PREDICTIONS_STORE, popKeys),
+    getMany(PREDICTIONS_STORE, joinKeys),
+  ]);
+  // Population fit uses ONLY the recent window; the join index also sees the older
+  // records the settled bets pointed at.
+  const predictions = [...popRecs.values()];
+  const actuals = indexActualsByCliDate([...popRecs.values(), ...joinRecs.values()]);
+
+  const { zHigh, zLow, matched, unmatched, eligibleHigh, eligibleLow,
+          outOfCoverageHigh, outOfCoverageLow } =
+    joinSettledToActuals(settled, actuals, coverageStart);
 
   // Learning calibration factor:
   //   - shrunk: Bayesian-shrunk empirical stdev (smooths the n→0 transition)
@@ -277,14 +396,25 @@ async function computeCalibration() {
   const joinLow  = eligibleLow  ? zLow.length  / eligibleLow  : null;
   if (joinHigh != null && joinHigh < 0.5)
     console.error(`[calibration] HIGH actuals join DEGRADED: ${zHigh.length}/${eligibleHigh} `
-      + `(${(joinHigh * 100).toFixed(0)}%) — ν now fit on the unselected population instead`);
+      + `(${(joinHigh * 100).toFixed(0)}%) in-coverage (+${outOfCoverageHigh} bets predate `
+      + `${coverageStart}) — ν now fit on the unselected population instead`);
   if (joinLow != null && joinLow < 0.5)
     console.error(`[calibration] LOW actuals join DEGRADED: ${zLow.length}/${eligibleLow} `
-      + `(${(joinLow * 100).toFixed(0)}%) — ν now fit on the unselected population instead`);
+      + `(${(joinLow * 100).toFixed(0)}%) in-coverage (+${outOfCoverageLow} bets predate `
+      + `${coverageStart}) — ν now fit on the unselected population instead`);
 
   return {
     updated_at: new Date().toISOString(),
     prior_dof: PRIOR_DOF,
+    // Join plumbing, so a degraded window/coverage is visible instead of inferred.
+    predictions_window: {
+      store_keys: allPredKeys.length,
+      usable_keys: predKeys.length,
+      population_n: predictions.length,
+      population_cap: PRED_POPULATION_MAX,
+      join_keys_fetched: joinKeys.length,
+      coverage_start: coverageStart
+    },
     sigma_high: {
       posterior: Math.round(sigmaHighPost * 1000) / 1000,
       raw_posterior: Math.round(sigmaHighRaw * 1000) / 1000,
@@ -300,6 +430,7 @@ async function computeCalibration() {
     high: {
       n: zHigh.length,
       eligible: eligibleHigh,
+      out_of_coverage: outOfCoverageHigh,
       mean_z: zHigh.length ? Math.round(mean(zHigh) * 1000) / 1000 : null,
       stdev_z: zHigh.length ? Math.round(stdev(zHigh) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zHigh, 1.0),
@@ -320,6 +451,7 @@ async function computeCalibration() {
     low: {
       n: zLow.length,
       eligible: eligibleLow,
+      out_of_coverage: outOfCoverageLow,
       mean_z: zLow.length ? Math.round(mean(zLow) * 1000) / 1000 : null,
       stdev_z: zLow.length ? Math.round(stdev(zLow) * 1000) / 1000 : null,
       coverage_68: coverageFraction(zLow, 1.0),
