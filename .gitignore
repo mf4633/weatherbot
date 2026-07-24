@@ -36,3 +36,4 @@ __pycache__/
 *.pyc
 _cli_cache/
 data/ticks/
+_build_stamp.json

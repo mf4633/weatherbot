@@ -52,23 +52,33 @@ jobs:
             jq -r '.failed[]? | "- " + .' health.json
             echo EOF
           } >> "$GITHUB_OUTPUT"
-          echo "deployed=$(jq -r '.deployed_commit // "unknown"' health.json)" >> "$GITHUB_OUTPUT"
           jq -r '.checks[] | "\(.status | ascii_upcase)\t\(.name)\t\(.detail)\tmeasured=\(.measured)\tbudget=\(.budget)"' health.json
 
-      # A failed Netlify build leaves the LAST GOOD deploy serving happily — every
-      # endpoint returns 200 and nothing looks wrong. Comparing the running build's
-      # commit against origin/master is the only way to see it from outside.
+      # A failed Netlify build leaves the LAST GOOD deploy serving happily — every endpoint
+      # returns 200 and nothing looks wrong (2026-07-24: 560089a errored while the site
+      # kept serving c4deb6d). The commit is not observable from inside a function — only
+      # SITE_NAME is injected at runtime, verified — and Netlify posts no GitHub commit
+      # status for this repo either. So the build emits _build_stamp.json into the publish
+      # dir and we read that.
       - name: Check for deploy drift
         id: drift
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
         run: |
           set -uo pipefail
           head=$(git rev-parse HEAD)
-          deployed="${{ steps.health.outputs.deployed }}"
-          echo "head=$head deployed=$deployed"
-          if [ "$deployed" = "unknown" ] || [ -z "$deployed" ]; then
+          deployed=$(curl -sS -u "$BASIC_AUTH" --max-time 30 \
+            "https://weatherbot-mf.netlify.app/_build_stamp.json" 2>/dev/null \
+            | jq -r '.commit // empty' 2>/dev/null || true)
+          echo "head=$head deployed=${deployed:-<none>}"
+          echo "deployed=${deployed:-unknown}" >> "$GITHUB_OUTPUT"
+          if [ -z "$deployed" ]; then
+            # Absent stamp is not proof of drift — the first deploy carrying the build
+            # command may simply not have landed yet.
+            echo "::warning::no _build_stamp.json served — drift undetermined"
             echo "drift=unknown" >> "$GITHUB_OUTPUT"
           elif [ "${deployed:0:8}" != "${head:0:8}" ]; then
-            echo "::error::deploy drift — master is $head but production is serving $deployed (auto-deploy failing?)"
+            echo "::error::deploy drift — master is ${head:0:8} but production is serving ${deployed:0:8} (auto-deploy failing?)"
             echo "drift=yes" >> "$GITHUB_OUTPUT"
           else
             echo "drift=no" >> "$GITHUB_OUTPUT"

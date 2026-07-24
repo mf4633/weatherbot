@@ -1,5 +1,10 @@
 [build]
   publish = "."
+  # Emits _build_stamp.json (served statically, since publish = ".") so the health cron
+  # can see WHICH commit is actually serving. A failed build otherwise leaves the previous
+  # deploy answering 200 on everything — invisible from outside. The script is wrapped and
+  # force-exits 0, so it cannot fail a deploy; see scripts/write_build_stamp.js.
+  command = "node scripts/write_build_stamp.js || true"
 
 [functions]
   directory = "netlify/functions"

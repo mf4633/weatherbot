@@ -172,19 +172,11 @@ export default async () => {
     status,
     summary: `${checks.length - failed.length - warned.length} pass / ${warned.length} warn / ${failed.length} fail`,
     failed: failed.map(c => `${c.name}: ${c.detail} (measured ${c.measured}, budget ${c.budget})`),
-    // Which commit is actually SERVING. A failed Netlify build leaves the previous
-    // deploy answering 200 on everything, so drift is invisible from outside without
-    // this. Netlify's build-time vars are not uniformly exposed to function runtime, so
-    // try the documented spellings in order rather than assuming one.
-    deployed_commit: process.env.COMMIT_REF
-      ?? process.env.CACHED_COMMIT_REF
-      ?? process.env.NETLIFY_COMMIT_REF
-      ?? null,
-    // Names only, never values — tells us which spelling this site actually injects so
-    // the drift check can be made reliable instead of silently inert.
-    deploy_env_seen: ["COMMIT_REF", "CACHED_COMMIT_REF", "NETLIFY_COMMIT_REF", "DEPLOY_ID",
-                      "BUILD_ID", "BRANCH", "CONTEXT", "SITE_NAME", "DEPLOY_PRIME_URL"]
-      .filter(k => process.env[k] != null && process.env[k] !== ""),
+    // NOTE: the serving commit is NOT observable from here. Only SITE_NAME is injected
+    // at function runtime on this site (probed 2026-07-24), and Netlify posts no GitHub
+    // commit status for this repo. Deploy drift is therefore detected by the health cron
+    // reading /_build_stamp.json, which the build command emits into the publish dir.
+    // See scripts/write_build_stamp.js and .github/workflows/health-cron.yml.
     checks,
     asof: new Date().toISOString(),
   }, null, 2), {
