@@ -40,3 +40,5 @@ _build_stamp.json
 
 # Deno edge-function lockfile (Netlify build artifact, not source)
 deno.lock
+
+data/backfill/
