@@ -1,0 +1,37 @@
+# Fly.io deployment for the 60-second book poller.
+# Deploy from this directory:
+#   fly launch --no-deploy --name weatherbot-poller     (once, to create the app)
+#   fly volumes create poller_data --size 1 --region ewr
+#   fly deploy
+# Retrieve ticks:
+#   fly ssh sftp get /data/ticks/ticks-2026-07-24.jsonl
+#
+# Sizing: 5 series x ~7 markets x 1440 ticks/day is roughly 50k rows/day, about 12 MB/day
+# of JSONL. A 1 GB volume holds months. shared-cpu-1x/256mb is ample for one fetch/minute.
+
+app = "weatherbot-poller"
+primary_region = "ewr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  INTERVAL_MS = "60000"
+  OUT_DIR = "/data/ticks"
+  SERIES = "KXHIGHNY,KXHIGHLAX,KXHIGHDEN,KXHIGHTBOS,KXHIGHTHOU"
+
+[mounts]
+  source = "poller_data"
+  destination = "/data"
+
+# No [http_service] block on purpose: this app serves nothing and must not be reachable
+# from the internet. It is a pure collector.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# Always-on. Autostop would defeat the entire point — the value is uniform sampling.
+[machine]
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1

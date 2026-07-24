@@ -35,3 +35,4 @@ analyze*.log
 __pycache__/
 *.pyc
 _cli_cache/
+data/ticks/
