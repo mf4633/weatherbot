@@ -1,0 +1,111 @@
+name: Health check
+
+# Makes silent failures loud. On 2026-07-23/24 a single session found five independent
+# pipelines that had been broken for days or weeks — the Synoptic 403, the calibration
+# join at 17%/2%, actualLow never written, /api/claude?mode=export timing out since
+# 07-19, and the paper shadow's kick URL 404ing for 37 days — plus a Netlify auto-deploy
+# failing at exit 2 while the site served stale code. Every one returned null / 202 / []
+# / stale-but-valid and nothing asserted otherwise.
+#
+# This job asserts. It opens a GitHub issue (which emails the owner — no new secrets
+# needed, same channel the trading-gate ping already uses) and fails the run, which is
+# itself a second notification.
+
+on:
+  schedule:
+    - cron: "37 */6 * * *"     # every 6h, offset off the other crons
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Query /api/health
+        id: health
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          set -uo pipefail
+          # --max-time is itself an assertion: an endpoint that stops answering is the
+          # failure mode that hid the scoreboard breakage for four days.
+          code=$(curl -sS -u "$BASIC_AUTH" --max-time 60 \
+            -o health.json -w '%{http_code}' \
+            "https://weatherbot-mf.netlify.app/api/health" || echo 000)
+          echo "http=$code"
+          if [ "$code" != "200" ]; then
+            echo "::error::/api/health returned HTTP $code — the health endpoint itself is down"
+            echo "status=ENDPOINT_DOWN" >> "$GITHUB_OUTPUT"
+            echo "detail=/api/health returned HTTP $code" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          status=$(jq -r '.status' health.json)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo 'detail<<EOF'
+            jq -r '.summary' health.json
+            jq -r '.failed[]? | "- " + .' health.json
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+          echo "deployed=$(jq -r '.deployed_commit // "unknown"' health.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.checks[] | "\(.status | ascii_upcase)\t\(.name)\t\(.detail)\tmeasured=\(.measured)\tbudget=\(.budget)"' health.json
+
+      # A failed Netlify build leaves the LAST GOOD deploy serving happily — every
+      # endpoint returns 200 and nothing looks wrong. Comparing the running build's
+      # commit against origin/master is the only way to see it from outside.
+      - name: Check for deploy drift
+        id: drift
+        run: |
+          set -uo pipefail
+          head=$(git rev-parse HEAD)
+          deployed="${{ steps.health.outputs.deployed }}"
+          echo "head=$head deployed=$deployed"
+          if [ "$deployed" = "unknown" ] || [ -z "$deployed" ]; then
+            echo "drift=unknown" >> "$GITHUB_OUTPUT"
+          elif [ "${deployed:0:8}" != "${head:0:8}" ]; then
+            echo "::error::deploy drift — master is $head but production is serving $deployed (auto-deploy failing?)"
+            echo "drift=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open an issue on failure
+        if: steps.health.outputs.status == 'FAILED' || steps.health.outputs.status == 'ENDPOINT_DOWN' || steps.drift.outputs.drift == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          title="Health check FAILED — $(date -u +%F)"
+          # Reuse a single open issue rather than filing one every 6h.
+          existing=$(gh issue list --repo "${{ github.repository }}" --state open \
+            --search "Health check FAILED in:title" --json number --jq '.[0].number // empty')
+          body="@${{ github.repository_owner }} one or more pipelines are silently broken.
+
+          **Status:** ${{ steps.health.outputs.status }}
+          **Deploy drift:** ${{ steps.drift.outputs.drift }} (master \`$(git rev-parse --short HEAD)\`, serving \`${{ steps.health.outputs.deployed }}\`)
+
+          \`\`\`
+          ${{ steps.health.outputs.detail }}
+          \`\`\`
+
+          Full board: \`curl -u x:hydro https://weatherbot-mf.netlify.app/api/health\`
+
+          Each line reports the measured value against its budget. These checks exist because
+          five pipelines ran broken for days or weeks in July 2026 with nothing reporting it —
+          if a check is noisy, fix the budget deliberately rather than deleting the assertion."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body "$body"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$title" --body "$body"
+          fi
+
+      - name: Fail the run
+        if: steps.health.outputs.status == 'FAILED' || steps.health.outputs.status == 'ENDPOINT_DOWN' || steps.drift.outputs.drift == 'yes'
+        run: |
+          echo "::error::health status=${{ steps.health.outputs.status }} drift=${{ steps.drift.outputs.drift }}"
+          exit 1
