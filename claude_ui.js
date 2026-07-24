@@ -84,14 +84,17 @@
     // v3 L2: informed-market tilt (sizing view — never scored).
     const sizing = cl.sizing && Math.abs((cl.sizing.point ?? cl.point) - cl.point) >= 0.1
       ? `<div class="ci muted" title="${(cl.sizing.note || "").replace(/"/g, "'")}">sizing (market-tilt): ${f1(cl.sizing.point)}°F</div>` : "";
-    // Served number = NWS-base morning blend when active (blend_w > 0); pure analog
-    // otherwise. The pure point stays visible as a subline so divergence is auditable.
+    // Served number = the fitted base blend (analog at its fitted weight on top of
+    // the Bayesian ensemble); pure analog when no base was available. The pure point
+    // stays visible as a subline so the divergence above it is auditable.
     const served = cl.point_blend ?? cl.point;
-    const blendNote = (cl.blend_w ?? 0) > 0
-      ? `<div class="ci muted">NWS base ${Math.round(cl.blend_w * 100)}% (${f1(cl.nws_base)}°F) · pure analog ${f1(cl.point)}°F</div>` : "";
+    const aw = cl.analog_w ?? null;
+    const baseLbl = cl.blend_base_src === "nws" ? "NWS grid" : "Bayesian";
+    const blendNote = aw != null && aw < 1
+      ? `<div class="ci muted">analog ${Math.round(aw * 100)}% on a ${baseLbl} base (${f1(cl.blend_base)}°F) · pure analog ${f1(cl.point)}°F</div>` : "";
     return `<div class="card">
       <h2>${c.city} <span class="cli">${c.station}</span></h2>
-      <div class="row"><span>Claude analog${(cl.blend_w ?? 0) > 0 ? ` <span class="muted" style="font-size:11px">NWS-based</span>` : ""}</span><span class="big cool" style="font-size:20px">${f1(served)}°F</span></div>
+      <div class="row"><span>Claude analog${aw != null && aw < 1 ? ` <span class="muted" style="font-size:11px">${Math.round(aw * 100)}% analog</span>` : ""}</span><span class="big cool" style="font-size:20px">${f1(served)}°F</span></div>
       ${blendNote}
       <div class="row"><span>Bayesian</span><span>${b ? f1(b.point) + "°F" : "—"}</span></div>
       <div class="row"><span>divergence</span><span>${flag}</span></div>

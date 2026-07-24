@@ -64,10 +64,11 @@ async function runLatest() {
     if (!rec.claude) continue;
     if (rec.asof && (!asof || rec.asof > asof)) asof = rec.asof;
     byStation[rec.station] = rec.claude;
-    // Divergence vs the SERVED point (NWS-base blend when active) — the pure-model
-    // divergence is recoverable from claude.point, but the dashboard should compare
-    // the number it actually displays against the Bayesian.
-    const divergence = rec.bayes ? round1((rec.claude.point_blend ?? rec.claude.point) - rec.bayes.point) : null;
+    // Divergence is the INDEPENDENT analog read against the Bayesian, so it uses the
+    // PURE (guarded) point, not the served blend. Since 2026-07-23 the served point
+    // is anchored ON the Bayesian at fitted weights, so blend-minus-bayes would be
+    // ~0 by construction and the panel would report agreement that means nothing.
+    const divergence = rec.bayes ? round1((rec.claude.guarded_point ?? rec.claude.point) - rec.bayes.point) : null;
     cities.push({ city: rec.city || rec.station, station: rec.station, claude: rec.claude, bayes: rec.bayes || null, market: rec.market || null, divergence, nofloor: rec.nofloor || null });
   }
   cities.sort((a, b) => a.city.localeCompare(b.city));

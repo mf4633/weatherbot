@@ -7,7 +7,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { buildSnapshotV2, parseMetar } from "./metar.js";
-import { predict, UPSTREAM_STATIONS, gradeAnalogBelief, thinAnalogGuard, nwsBaseBlend } from "./claude_analog_v3.js";
+import { predict, UPSTREAM_STATIONS, gradeAnalogBelief, thinAnalogGuard, baseBlend } from "./claude_analog_v3.js";
 import { accuCityAllowed, accuHourAllowed, accuImpliedHigh, scoreAccuDecisions } from "./accuweather.js";
 import { scanNoFloor, scoreNoFloor, MIN_RETURN, MIN_WIN_PROB } from "./nofloor.js";
 
@@ -132,15 +132,21 @@ export async function runPredict(doLog) {
     // stays the PURE model for continuity; scoreboard's blend prefers guarded_point.
     const hrsToPeak = Math.max(0, 16 - localHour(c.tz));
     const guard = thinAnalogGuard(d.mean(), snap, card.components["R_analog(eff)"], hrsToPeak);
-    // NWS-base morning blend (2026-07-22): served/display point stands on the NWS
-    // forecast high early and hands over to the analog near peak. `point` stays
-    // the PURE model for ledger continuity; point_blend is what dashboards show.
+    // Fitted base blend (2026-07-23, research/analyze_stack.js): the served/display
+    // point is anchored on the strongest available estimate — the Bayesian ensemble,
+    // NOT the NWS grid, which earns w=0.00 at every hour once the ensemble is in the
+    // stack — and the analog carries its FITTED weight (0.30 near peak → 0.05 far
+    // out). `point` stays the PURE model for ledger continuity; point_blend is what
+    // dashboards show.
     const nwsHigh = c.forecastHighF ?? c.nwsHighF ?? null;
-    const blend = nwsBaseBlend(guard.point, nwsHigh, hrsToPeak, snap.max_so_far_f);
+    const baseSrc = bayes?.point != null ? "bayes" : (nwsHigh != null ? "nws" : null);
+    const basePoint = bayes?.point ?? nwsHigh ?? null;
+    const blend = baseBlend(guard.point, basePoint, hrsToPeak, snap.max_so_far_f);
     const claude = {
       point: round1(d.mean()), mu: round1(d.mu), sigma: round1(d.sigma), floor: round1(d.floor),
       guarded_point: round1(guard.point), guarded: guard.guarded,
-      point_blend: round1(blend.point), blend_w: round1(blend.w),
+      point_blend: round1(blend.point), analog_w: round1(blend.w),
+      blend_base: basePoint != null ? round1(basePoint) : null, blend_base_src: baseSrc,
       nws_base: nwsHigh != null ? round1(nwsHigh) : null,
       ci68: [round1(d.quantile(0.16)), round1(d.quantile(0.84))],
       p_trunc: round1(d.pTrunc), depth: round1(d.depth),

@@ -395,26 +395,64 @@ export function thinAnalogGuard(point, snap, rampEff, hrsToPeak) {
   return { point: floor, guarded: true };
 }
 
-// --- NWS-base morning blend (2026-07-22) -----------------------------------------
-// The pure analog point is anchored on T_now + ramp, which systematically reads
-// LOW in the morning: the ramp only knows the obs trace so far, while the gridded
-// forecast has already integrated the synoptic day. Session evidence 2026-07-22:
-// morning served points ran 2-7°F under eventual CLI highs in NYC/HOU/AUS while
-// the NWS grid (bias-corrected) was close. Serve a point that stands on the NWS
-// forecast high as the BASE early and hands over to the obs-analog as the day's
-// own evidence accumulates:
-//   w_nws = clamp((hrsToPeak - 2) / 10, 0, 0.7)
-//   9h to peak (early morning): 70% NWS / 30% analog
-//   5h to peak: 30% NWS  ·  <=2h to peak: pure analog (obs dominate near peak)
+// --- fitted base blend (2026-07-23; replaces the hand-tuned NWS ramp) -------------
+// The pure analog point is anchored on T_now + ramp, which systematically reads LOW
+// away from peak: the ramp only knows the obs trace so far, while a gridded/ensemble
+// forecast has already integrated the synoptic day. Measured on 4,414 matched-pair
+// logged decisions (363 settled station-days, 28 stations, 2026-07-10..22) the pure
+// analog's bias runs -0.5°F within an hour of peak and -6.5°F at 5h+ out.
+//
+// The 2026-07-22 fix for that was a hand-chosen ramp toward the NWS grid,
+// w_nws = clamp((hrsToPeak-2)/10, 0, 0.7). research/analyze_stack.js replaced the
+// hand-tuning with a fit: all three independent daily-high estimators (obs-analog,
+// the 6-model Bayesian ensemble, the raw NWS grid) stacked against settled CLI
+// truth, weights constrained to the simplex, fit on a TRAIN date window and scored
+// on a held-out TEST window. Two results:
+//
+//   1. The NWS grid earns w = 0.00 at EVERY hour once the Bayesian ensemble is in
+//      the stack — the grid is already an ensemble member and its residual
+//      correlates 0.91-0.97 with the blend. The old base was the redundant leg.
+//   2. The analog's fitted weight FALLS with hours-to-peak — roughly the opposite
+//      of the old ramp, which handed the analog 100% at peak and 30% nine hours out.
+//      Leave-one-day-out refits: 0.25-0.30 at hrs<=1, 0.10-0.15 at 2-3, 0.00-0.05
+//      beyond. ANALOG_W below is that fit.
+//
+// Held out (train <=07-19 / test 07-20..22, 83 station-days, n=1215): served point
+// RMSE 3.19 -> 1.60°F and 68/95% coverage under the card's own sigma 0.66/0.88 ->
+// 0.88/0.97. Day-block bootstrap of the RMSE delta: -1.60°F, 90% CI [-1.81, -1.31];
+// stable across every train/test split from 07-17 to 07-20. Pacific cities
+// mid-afternoon (hrs 1-4), the reported failure mode: 4.30 -> 2.19°F.
+//
+// Honest limit, so nobody reads more into this than it says: the blend is NOT
+// measurably better than simply serving the Bayesian point (delta +0.02°F, 90% CI
+// [-0.06, +0.07]). The ORACLE ceiling on stacking the analog in at all — exact
+// debias, exact weights, in-sample — is 0.02-0.07°F. The analog keeps its fitted
+// weight in the served card because it is a genuinely independent read (residual
+// correlation with the ensemble only 0.20-0.54), not because it moves the number.
+//
 // Floored at max-so-far (the served number can never sit under an observed max).
-// DISPLAY/GATING ONLY — the scored ledger keeps the pure `point` for continuity;
-// this is the number the dashboard shows next to the Bayesian.
-export function nwsBaseBlend(analogPoint, nwsHigh, hrsToPeak, maxSoFar) {
-  if (nwsHigh == null || !Number.isFinite(+nwsHigh)) return { point: analogPoint, w: 0 };
-  const w = Math.min(0.7, Math.max(0, ((hrsToPeak ?? 0) - 2) / 10));
-  const point = Math.max(w * (+nwsHigh) + (1 - w) * analogPoint,
-                         Number.isFinite(+maxSoFar) ? +maxSoFar : -Infinity);
-  return { point, w };
+// DISPLAY/GATING ONLY — the scored ledger keeps the pure `point` for continuity.
+export const ANALOG_W = [
+  { maxHrs: 1, w: 0.30 },
+  { maxHrs: 3, w: 0.12 },
+  { maxHrs: Infinity, w: 0.05 },
+];
+
+export function analogWeight(hrsToPeak) {
+  const h = Number.isFinite(+hrsToPeak) ? Math.max(0, +hrsToPeak) : 0;
+  return ANALOG_W.find(s => h <= s.maxHrs).w;
+}
+
+// basePoint: the strongest available estimate to anchor on — the Bayesian ensemble
+// point when there is one, else the NWS grid high (fitted weights are insensitive
+// to which: held-out RMSE 1.60 on a Bayesian base, 1.79 on an NWS base, vs 3.19
+// for the old ramp). Null base → the pure analog, floored.
+export function baseBlend(analogPoint, basePoint, hrsToPeak, maxSoFar) {
+  const floor = Number.isFinite(+maxSoFar) ? +maxSoFar : -Infinity;
+  if (basePoint == null || !Number.isFinite(+basePoint))
+    return { point: Math.max(analogPoint, floor), w: 1 };
+  const w = analogWeight(hrsToPeak);
+  return { point: Math.max(w * analogPoint + (1 - w) * (+basePoint), floor), w };
 }
 
 // --- belief grade (2026-07-10) ---------------------------------------------------

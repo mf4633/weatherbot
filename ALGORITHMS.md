@@ -121,6 +121,29 @@ The standard deviation of the predicted-max distribution is modeled as:
 
 Tuned via grid search on TRAIN set, scored by `|cov68 - 0.68| + |cov95 - 0.95|` (calibration). Held-out coverage: 70% / 93% (target 68% / 95%).
 
+### 2.6 Fitted analog weight for the served card (2026-07-23)
+
+The obs-analog card serves a blended point, not its raw one. The blend used to be a hand-chosen ramp toward the NWS grid (`w_nws = clamp((hrsToPeak−2)/10, 0, 0.7)`, added 2026-07-22 because the pure analog read 2–7 °F low every morning). §5.8's fit replaced both the *anchor* and the *shape*:
+
+```
+served = analogWeight(h)·analog + (1 − analogWeight(h))·bayesianPoint,   floored at maxSoFar
+analogWeight(h) = 0.30  (h ≤ 1)   0.12  (h ≤ 3)   0.05  (h > 3)
+```
+
+Two corrections. **The anchor**: the NWS grid earns w = 0.00 at every hour once the ensemble is present, so the old base was the redundant leg. **The shape**: the analog's fitted weight *falls* with hours-to-peak — the old ramp had it backwards, handing the analog 100% at peak and 30% nine hours out. Leave-one-day-out refits: 0.25–0.30 / 0.10–0.15 / 0.00–0.05.
+
+Held out (train ≤07-19, test 07-20..22, n=1215 over 83 station-days):
+
+| | RMSE | MAE | bias | cov68 / cov95 (own σ) |
+|---|---|---|---|---|
+| old hand-tuned NWS ramp | 3.19 | 2.26 | −1.40 | 0.66 / 0.88 |
+| **fitted base blend** | **1.60** | **1.06** | **−0.18** | **0.88 / 0.97** |
+| Bayesian point (reference) | 1.58 | 1.06 | −0.01 | 0.88 / 0.98 |
+
+Day-block bootstrap of the RMSE delta: **−1.60 °F, 90% CI [−1.81, −1.31]**, stable across every split. Pacific cities mid-afternoon — the reported failure mode — 4.30 → 2.19 °F. Robust to ±2 h of error in the `hrsToPeak` definition (1.58–1.64).
+
+Read honestly: this is not a *better forecast* than the Bayesian point (Δ +0.02 °F, CI [−0.06, +0.07]); it is the removal of a 1.6 °F self-inflicted degradation. The analog keeps its fitted weight because it is an independent read worth displaying, not because it moves the number. This also matters beyond the card — `kalshi.js` prices HIGH buckets on `(bayesian + claudeHigh)/2`, so the old ramp was shifting every bucket probability cold by ~0.7 °F and mis-shaping it (coverage 0.81/0.95 vs 0.88/0.98).
+
 ---
 
 ## 3. Statistical inference — what we do
@@ -236,6 +259,24 @@ Pulled forecast cloud cover and observed cloud cover, computed deviation as addi
 ### 5.7 Detrending for global warming — tested, doesn't matter
 
 Linear regression of model residuals on time over 5 years showed slope = −0.04°F/year, statistically insignificant. The forecast (NWS / GFS) warms with reality, so the *residual* doesn't trend. Correcting wouldn't help.
+
+### 5.8 Stacking the estimators (obs-analog / NWS grid) onto the ensemble — tested, ceiling is ~0.02°F
+
+`research/analyze_stack.js`. All three independent daily-high estimators — the obs-analog card, the 6-model Bayesian ensemble, and the raw NWS grid — combined against settled CLI truth on **4,414 matched-pair logged decisions (363 settled station-days, 28 stations, 2026-07-10..22)**, weights constrained to the simplex, fit on a TRAIN date window and scored on a genuinely held-out TEST window (every split from 07-17 through 07-20).
+
+| leg | fitted weight (all hours) | held-out RMSE alone |
+|---|---|---|
+| Bayesian ensemble | **0.94 – 1.00** | 1.58 °F |
+| obs-analog | 0.00 – 0.06 (0.30 within 1h of peak) | 6.02 °F |
+| raw NWS grid | **0.00 at every hour** | 1.76 °F |
+
+**Held-out gain over the ensemble alone: +0.02 °F (worse), day-block bootstrap 90% CI [−0.05, +0.07].** Unconstrained OLS with a free per-bucket intercept — the most generous possible fit — is worse still in every bucket.
+
+The reason is an information ceiling, not an estimation failure. With the bias removed *exactly* and the weights known *exactly* (oracle, in-sample, zero estimation error) the best a convex combination can do is **0.023 °F** overall and **0.066 °F** at its most favourable hour. The NWS grid contributes exactly **0.000 °F**: it is already an ensemble member and its residual correlates 0.91–0.97 with the blend. The analog *is* genuinely independent (residual correlation only 0.20–0.54) but its residual sd is 2–3× the ensemble's, which caps its optimal weight near 0.06.
+
+Corollary — **AccuWeather is not worth wiring** (`lib/accuweather.js` stays dormant; `ACCUWEATHER_API_KEY` unset). A vendor post-process of the same global NWP must correlate with the ensemble *at least* as strongly as the raw NWS grid, which earns zero. Its ceiling is therefore below the 0.02 °F an estimator with a genuinely different information source achieves. The free tier independently makes it unaffordable: 50 calls/day against 28 cities is one snapshot per city per day with no hourly resolution; the existing quota code covers 6 cities × 6 slots = 36 calls, i.e. 21% of the fleet.
+
+What the exercise *did* find is that the analog card's served point was anchored on the wrong leg — see §2.6.
 
 ---
 

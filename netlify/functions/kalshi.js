@@ -572,13 +572,27 @@ export default async () => {
       cities.push({ name: city.name, station: city.station, kalshi: "no market" });
       continue;
     }
-    // HIGH edges price the BLEND — equal-weight average of the Bayesian mean and the
-    // Claude analog high (2026-07-10). Rationale: the two engines' errors are largely
-    // decorrelated (model-guidance-driven vs pure-obs-driven), and forecast combination
-    // beats components when errors decorrelate. Falls back to pure Bayesian when the
-    // analog is unavailable for a city. LOW stays Bayesian-only (no analog for lows).
-    // The scoreboard's five-engine table (claude/bayes/blend/nws/market) verifies this
-    // choice continuously against settled CLI truth.
+    // HIGH edges price a blend of the Bayesian mean and the Claude analog high.
+    // The 2026-07-10 rationale for the 50/50 was "the two engines' errors are largely
+    // decorrelated". Half of that is true and half is not, and the difference cost
+    // real accuracy — measured in research/analyze_stack.js on 4,414 matched-pair
+    // logged decisions (363 settled station-days, 28 stations, 2026-07-10..22):
+    //   · decorrelated, yes — analog-vs-ensemble residual correlation is only
+    //     0.20 (morning) to 0.54 (at peak);
+    //   · BUT the analog's residual sd is 2-3x the ensemble's (5.3 vs 1.9°F overall),
+    //     so the variance-minimising weight on it is 0.05-0.33, nowhere near 0.50.
+    // Held-out, this line's output carried: RMSE 3.25 vs the Bayesian's 1.58 with a
+    // -1.44°F cold bias while claudeHigh was the pure analog (to 07-22), then 2.05
+    // with -0.71°F under the hand-tuned NWS ramp (07-22..23). Its 68/95% coverage
+    // under the served σ was 0.64/0.86 and 0.81/0.95 against a 0.68/0.95 nominal —
+    // the bucket probabilities were shifted cold AND mis-shaped, not just noisier.
+    // Since 2026-07-23 claudeHigh is itself anchored on the Bayesian at the FITTED
+    // analog weight (claude_analog_v3.analogWeight: 0.30 near peak → 0.05 far out),
+    // so the 0.5 here composes to a total analog weight of 0.15 → 0.025 — inside the
+    // fitted band, and measured back at RMSE 1.577 / bias -0.09 / coverage
+    // 0.886/0.975 vs the Bayesian point's 1.580 / -0.01 / 0.879/0.976.
+    // DO NOT restore an unblended claudeHigh here without re-running that harness.
+    // LOW stays Bayesian-only (no analog for lows).
     const highMu = city.claudeHigh != null ? (city.mean + city.claudeHigh) / 2 : city.mean;
     const cityRecord = { name: city.name, station: city.station,
                          model: { highMean: highMu, highBasis: city.claudeHigh != null ? "blend" : "bayes",

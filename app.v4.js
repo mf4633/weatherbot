@@ -178,13 +178,13 @@ function renderCard(c) {
           ${cl && cl.point != null
             ? `<div class="big claude-num">${(+cl.point).toFixed(1)}°F${gradeChip}${cl.peak_locked ? ` <span class="lock-chip" title="peak locked — day's max is in">🔒</span>` : ""}</div>`
             : `<div class="big claude-num" style="opacity:.5">n/a</div>`}
-          <div class="model-cap">Claude analog${(c.claudeBlendW ?? 0) > 0 ? ` · NWS base ${Math.round(c.claudeBlendW * 100)}%` : ""}${c.claudeGrade ? ` · belief ${c.claudeGrade}` : ""}</div>
+          <div class="model-cap">Claude analog${(c.claudeAnalogW ?? 1) < 1 ? ` · ${Math.round(c.claudeAnalogW * 100)}% analog` : ""}${c.claudeGrade ? ` · belief ${c.claudeGrade}` : ""}</div>
         </div>
       </div>
       ${c.claudeComponents ? `<div class="ci">claude: T_now ${(+c.claudeComponents.T_now).toFixed(1)}  ${
         Object.entries(c.claudeComponents).filter(([k]) => k !== "T_now" && k !== "R_analog(raw)")
           .map(([k, v]) => `${k.replace("A_", "").replace("R_", "").replace("(eff)", "")} ${v >= 0 ? "+" : ""}${(+v).toFixed(1)}`)
-          .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}${(c.claudeBlendW ?? 0) > 0 && c.claudePure != null ? `  · pure analog ${(+c.claudePure).toFixed(1)} / NWS ${c.claudeNwsBase != null ? (+c.claudeNwsBase).toFixed(0) : "—"}` : ""}</div>` : ""}
+          .join("  ")}${c.claudeGuarded ? `  · <span class="warm">persistence floor</span>` : ""}${(c.claudeAnalogW ?? 1) < 1 && c.claudePure != null ? `  · pure analog ${(+c.claudePure).toFixed(1)} / ${c.claudeBlendBaseSrc === "nws" ? "NWS" : "Bayes"} base ${c.claudeBlendBase != null ? (+c.claudeBlendBase).toFixed(1) : "—"}` : ""}</div>` : ""}
       ${c.climate && c.climate.flags && c.climate.flags.length ? `<div class="ci" title="${c.climate.flags.map(f => f.note).join(" | ").replace(/"/g, "'")}">${
         c.climate.regime === "capped-lean" ? `<span class="cool">regime: capped</span>` : c.climate.regime === "hot-lean" ? `<span class="warm">regime: hot</span>` : `regime: ${c.climate.regime}`
       } — ${c.climate.flags.map(f => `${f.lean === "cap" ? "▽" : f.lean === "hot" ? "▲" : "·"}${f.code}`).join("  ")}</div>` : ""}
