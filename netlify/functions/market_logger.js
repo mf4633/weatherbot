@@ -46,6 +46,12 @@ async function record() {
       currentTemp: w.currentTemp ?? w.temp ?? null,
       maxSoFar: w.maxSoFarCli ?? w.maxSoFar ?? null,
       minSoFar: w.minSoFarCli ?? w.minSoFar ?? null,
+      // obs-vs-forecast bias trajectory (2026-07-24): biasF = currentTemp − ensemble
+      // forecast-at-this-hour (weather.js). currentTemp − biasF reconstructs the hourly
+      // forecast. forecastHighF/LowF = the ensemble daily extrema. Logged so the shadow
+      // export is self-contained for testing the obs-forecast-bias signal against the book.
+      biasF: w.biasF ?? null,
+      forecastHighF: w.forecastHighF ?? null, forecastLowF: w.forecastLowF ?? null,
       modelMean: c.mean ?? w.mean ?? null, modelStd: c.std ?? w.std ?? null };
     if (Array.isArray(c.highBuckets) && c.highBuckets.length)
       records.push({ ...base, variable: "high", buckets: c.highBuckets.map(slimBucket) });
