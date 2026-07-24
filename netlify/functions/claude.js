@@ -87,6 +87,44 @@ async function runExport() {
            gate: evaluateGate(records), gateFirst: evaluateGate(records, { pick: "first" }), records };
 }
 
+// Slim, date-filtered decision export. The full runExport() GETs every blob in the
+// store in one edge invocation and now TIMES OUT (thousands of dec/ + settle/ keys).
+// This projects only the fields an intraday-edge scan needs and, given ?date=, GETs
+// only that local date's decisions + settlements — a few hundred blobs, well under the
+// edge timeout. Client loops the dates. Isolates the Claude v3 card (nws base + physical
+// modifiers) from the Bayesian layer: `point` = pure obs-analog mean, `blend` = the
+// served NWS-base blend, `sigma`, `nws`, `market_pt`; joinable to the market_logger
+// book export on (cli, date, hour).
+async function runExportSlim(dateFilter) {
+  const store = getStore(STORE);
+  const { blobs } = await store.list();
+  const decKeys = [], setKeys = [];
+  for (const b of (blobs || [])) {
+    if (b.key.startsWith("dec/")) {
+      const p = b.key.split("/");                       // dec / station / date / HH.json
+      if (!dateFilter || p[2] === dateFilter) decKeys.push({ key: b.key, station: p[1], date: p[2], hour: +(p[3] || "").replace(".json", "") });
+    } else if (b.key.startsWith("settle/")) {
+      const p = b.key.split("/");                       // settle / station / date.json
+      const date = (p[2] || "").replace(".json", "");
+      if (!dateFilter || date === dateFilter) setKeys.push({ key: b.key, station: p[1], date });
+    }
+  }
+  const decs = (await Promise.all(decKeys.map(async d => {
+    const r = await store.get(d.key, { type: "json" }).catch(() => null);
+    if (!r) return null;
+    const c = r.claude || {};
+    return { station: d.station, cli: r.cli || null, city: r.city || null, date: d.date, hour: d.hour,
+             point: c.point ?? null, blend: c.point_blend ?? null, guarded: c.guarded_point ?? null,
+             sigma: c.sigma ?? null, nws: r.nws ?? c.nws_base ?? null, market_pt: c.market_pt ?? null,
+             components: c.components ?? null };
+  }))).filter(Boolean);
+  const settles = (await Promise.all(setKeys.map(async s => {
+    const r = await store.get(s.key, { type: "json" }).catch(() => null);
+    return r ? { station: r.station, date: r.contract_date, cli_max: r.cli_max ?? null } : null;
+  }))).filter(Boolean);
+  return { ok: true, mode: "export_slim", date: dateFilter || "all", nDec: decs.length, nSettle: settles.length, decs, settles };
+}
+
 const json = (o, s = 200) => new Response(JSON.stringify(o, null, 2), { status: s, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 export default async (req) => {
@@ -95,6 +133,7 @@ export default async (req) => {
     if (mode === "settle") return json(await runSettle());
     if (mode === "scoreboard") return json(await runScoreboard());
     if (mode === "export") return json(await runExport());
+    if (mode === "export_slim") return json(await runExportSlim(new URL(req.url).searchParams.get("date") || null));
     if (mode === "latest") return json(await runLatest());
     if (mode === "status") return json(await runStatus());
     if (mode === "backtest") return json(await runBacktest());
