@@ -172,10 +172,19 @@ export default async () => {
     status,
     summary: `${checks.length - failed.length - warned.length} pass / ${warned.length} warn / ${failed.length} fail`,
     failed: failed.map(c => `${c.name}: ${c.detail} (measured ${c.measured}, budget ${c.budget})`),
-    // Netlify injects COMMIT_REF at build time. The cron compares it to origin/master to
-    // catch a failed auto-deploy — the site serves the LAST GOOD build indefinitely and
-    // otherwise looks perfectly healthy.
-    deployed_commit: process.env.COMMIT_REF ?? null,
+    // Which commit is actually SERVING. A failed Netlify build leaves the previous
+    // deploy answering 200 on everything, so drift is invisible from outside without
+    // this. Netlify's build-time vars are not uniformly exposed to function runtime, so
+    // try the documented spellings in order rather than assuming one.
+    deployed_commit: process.env.COMMIT_REF
+      ?? process.env.CACHED_COMMIT_REF
+      ?? process.env.NETLIFY_COMMIT_REF
+      ?? null,
+    // Names only, never values — tells us which spelling this site actually injects so
+    // the drift check can be made reliable instead of silently inert.
+    deploy_env_seen: ["COMMIT_REF", "CACHED_COMMIT_REF", "NETLIFY_COMMIT_REF", "DEPLOY_ID",
+                      "BUILD_ID", "BRANCH", "CONTEXT", "SITE_NAME", "DEPLOY_PRIME_URL"]
+      .filter(k => process.env[k] != null && process.env[k] !== ""),
     checks,
     asof: new Date().toISOString(),
   }, null, 2), {
