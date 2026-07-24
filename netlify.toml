@@ -68,6 +68,23 @@
   path = "/*"
   function = "auth"
 
+# compare_log was written but NEVER WIRED — no schedule, no route, nothing invoked it, so
+# getStore("compare") stayed empty and /api/compare reported n_settled: 0 indefinitely.
+# It self-gates on each city's local 05:00 (capture) and 07:00 (settle), so hourly is right.
+[[redirects]]
+  from = "/api/compare_log"
+  to = "/.netlify/functions/compare_log"
+  status = 200
+
+# One-shot + ongoing repair of missing actualHigh/actualLow on prediction records, from
+# the IEM CLI archive. runSettle only looks at `yesterday` and skips anything already
+# flagged `settled`, so a transient CLI miss is permanent and pre-2026-06-01 records can
+# never gain actualLow. Background fn: 202 + 15 min.
+[[redirects]]
+  from = "/api/backfill_actuals"
+  to = "/.netlify/functions/backfill_actuals-background"
+  status = 200
+
 [[redirects]]
   from = "/api/weather"
   to = "/.netlify/functions/weather"

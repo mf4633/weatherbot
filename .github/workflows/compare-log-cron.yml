@@ -1,0 +1,41 @@
+name: Compare log cron
+
+# compare_log.js captures the bot's HIGH/LOW alongside the NWS-only forecast at each
+# city's local 05:00 (before either has intra-day observations, so it is apples-to-apples)
+# and settles both against the CLI at local 07:00 the next day.
+#
+# It was written and NEVER WIRED — no Netlify schedule, no HTTP route, no workflow. So
+# getStore("compare") stayed empty and /api/compare has reported n_settled: 0 for its
+# entire existence. Nothing anywhere said so until /api/health started asserting it.
+#
+# Hourly, because the function self-gates on each city's local hour and the fleet spans
+# Eastern through Pacific. Netlify's own scheduler is throttled on this site (measured:
+# a declared */15 fires ~107 min median), which is why every reliable cron here is a
+# GitHub Action.
+
+on:
+  schedule:
+    - cron: "18 * * * *"     # hourly at :18, offset off the other crons
+  workflow_dispatch:
+
+jobs:
+  compare-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit compare_log
+        env:
+          BASIC_AUTH: ${{ secrets.WEATHERBOT_BASIC_AUTH }}
+        run: |
+          set -uo pipefail
+          code=$(curl -sS -u "$BASIC_AUTH" --max-time 120 \
+            -o out.json -w '%{http_code}' \
+            "https://weatherbot-mf.netlify.app/api/compare_log" || echo 000)
+          echo "http=$code"
+          head -c 800 out.json || true
+          echo
+          # A non-2xx here is a real failure — surface it rather than exiting 0 quietly,
+          # which is the habit that let this function sit dead for months.
+          case "$code" in
+            2*) ;;
+            *) echo "::error::compare_log returned HTTP $code"; exit 1 ;;
+          esac
