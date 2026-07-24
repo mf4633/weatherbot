@@ -8,7 +8,7 @@ import { fetchDsmExtremes } from "./lib/dsm.js";
 import { normCdf as _Phi } from "./lib/stats.js";
 import { buildSnapshotV2, parseMetar } from "./lib/metar.js";
 import { surfaceObsFromMetars } from "./lib/low_screen.js";
-import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, nwsBaseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
+import { predict as claudePredict, thinAnalogGuard, gradeAnalogBelief, baseBlend, UPSTREAM_STATIONS } from "./lib/claude_analog_v3.js";
 import { adviseClimate } from "./lib/station_climate.js";
 import { kalmanCorrection, KALMAN_FLOOR_F,
          kalmanGlobalCorrection, KALMAN_GLOBAL_FLOOR_F } from "./lib/regime.js";
@@ -830,6 +830,55 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // a `$` maintenance flag → Synoptic returned 4 obs in 240 min (hourly snapshots),
   // but the dashboard surfaced no warning. Trader could have sized full Kelly into
   // a bucket bet whose monitor was effectively offline.
+  // === Day-boundary fold guard (2026-07-24) ===================================
+  // A "daily extremum" field — DSM max/min, IEM max_dayairtemp, a 1-min running max —
+  // can still carry YESTERDAY's value in the first hours of the local climate day.
+  // Folding one in produces an already-impossible observation floor, and that floor is
+  // consumed by kalshi.js as a HARD certainty (bucket probabilities below it are zeroed),
+  // so the bot bets a claimed certainty on an observation that is simply wrong. Measured
+  // over the logged snapshots: floor > settled extremum in 8.3% of local-hour-0 snapshots
+  // and 0.9% of hour-1, against 0 of 2831 at hours 2-16. Exemplar — KSAT 2026-07-11 01:xx
+  // local carried maxSoFar 95 on a day that settled 86, while the same city read 78 two
+  // hours later.
+  //
+  // This was already known for DSM (see the [dsm-stale] guard below) but that check
+  // FAILS OPEN: `dsm?.coversMonthDay == null || ...` treats an unparsed date stamp as
+  // "covers today". The IEM fold added earlier today has no day stamp at all — its only
+  // guard is last_ob freshness, which passes happily while max_dayairtemp is stale.
+  //
+  // So: corroborate against today's own METARs before letting ANY fold raise the max or
+  // lower the min during the early-morning window. A daily field claiming a value far
+  // outside what today's observations support is yesterday's, not a spike we missed.
+  // After EARLY_FOLD_HR the day has enough obs to stand on its own and folds pass freely
+  // (they exist to catch real between-METAR extremes, which is their whole point).
+  const EARLY_FOLD_HR = 3;        // local hours after midnight where staleness is plausible
+  const EARLY_FOLD_MAX_GAP_F = 3; // tolerance vs today's observed METARs in that window
+  const foldLocalHr = (() => {
+    const p = localDateParts(city.tz, now);
+    return p.hour + p.minute / 60;
+  })();
+  // Baseline = today's own METAR-derived extremes (incl. the today-windowed RMK 6-hour
+  // groups folded above), captured BEFORE any daily-field fold mutates them.
+  const metarMaxToday = maxSoFar, metarMinToday = minSoFar;
+  const foldGuard = (candidate, kind, source) => {
+    if (foldLocalHr >= EARLY_FOLD_HR) return true;
+    const base = kind === "max" ? metarMaxToday : metarMinToday;
+    if (base == null) {
+      console.warn(`[fold-guard] ${city.station}: rejecting ${source} ${kind} ${candidate} at `
+        + `${foldLocalHr.toFixed(1)}h local — no METAR today to corroborate against`);
+      return false;
+    }
+    const ok = kind === "max"
+      ? candidate <= base + EARLY_FOLD_MAX_GAP_F
+      : candidate >= base - EARLY_FOLD_MAX_GAP_F;
+    if (!ok) {
+      console.warn(`[fold-guard] ${city.station}: rejecting ${source} ${kind} ${candidate} at `
+        + `${foldLocalHr.toFixed(1)}h local — today's METAR ${kind} is ${base}, gap exceeds `
+        + `${EARLY_FOLD_MAX_GAP_F}F (stale previous-day extremum?)`);
+    }
+    return ok;
+  };
+
   let synopticCoverage = "none";
   if (oneMin) {
     const ageMin = oneMin.latestTs ? (Date.now() - new Date(oneMin.latestTs).getTime()) / 60000 : null;
@@ -839,10 +888,12 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     else if (ageMin > 10) synopticCoverage = "5min";
     else synopticCoverage = "1min";
 
-    if (oneMin.maxSoFar != null && (maxSoFar == null || oneMin.maxSoFar > maxSoFar)) {
+    if (oneMin.maxSoFar != null && (maxSoFar == null || oneMin.maxSoFar > maxSoFar)
+        && foldGuard(oneMin.maxSoFar, "max", "asos1min")) {
       maxSoFar = oneMin.maxSoFar;
     }
-    if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)) {
+    if (oneMin.minSoFar != null && (minSoFar == null || oneMin.minSoFar < minSoFar)
+        && foldGuard(oneMin.minSoFar, "min", "asos1min")) {
       minSoFar = oneMin.minSoFar;
     }
     // Observability: log every invocation so we can grep `[asos1min] <station>: n=0`
@@ -904,11 +955,13 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
     console.log(`[iem-stale] ${city.station}: last_ob ${iemAgeMin_ == null ? "unknown" : Math.round(iemAgeMin_) + "min"} old — not folding`);
   }
   if (iemFresh) {
-    if (iem.dailyMaxF != null && (maxSoFar == null || iem.dailyMaxF > maxSoFar)) {
+    if (iem.dailyMaxF != null && (maxSoFar == null || iem.dailyMaxF > maxSoFar)
+        && foldGuard(iem.dailyMaxF, "max", "iem")) {
       console.log(`[iem-fold] ${city.station}: maxSoFar ${maxSoFar?.toFixed(1) ?? "null"} -> ${iem.dailyMaxF.toFixed(1)}`);
       maxSoFar = iem.dailyMaxF;
     }
-    if (iem.dailyMinF != null && (minSoFar == null || iem.dailyMinF < minSoFar)) {
+    if (iem.dailyMinF != null && (minSoFar == null || iem.dailyMinF < minSoFar)
+        && foldGuard(iem.dailyMinF, "min", "iem")) {
       console.log(`[iem-fold] ${city.station}: minSoFar ${minSoFar?.toFixed(1) ?? "null"} -> ${iem.dailyMinF.toFixed(1)}`);
       minSoFar = iem.dailyMinF;
     }
@@ -926,16 +979,24 @@ function computePrediction(city, metars, forecast, ensemble, lastCLI, regimeBlob
   // that settled 86. Only fold a DSM whose own MM/DD stamp is today (local).
   const todayMonthDay = new Intl.DateTimeFormat("en-US",
     { timeZone: city.tz, month: "2-digit", day: "2-digit" }).format(now).replace(/\//, "/");
-  const dsmCoversToday = dsm?.coversMonthDay == null || dsm.coversMonthDay === todayMonthDay;
+  // 2026-07-24: FAIL CLOSED. This used to read `coversMonthDay == null || ...`, so a DSM
+  // whose date stamp failed to parse was treated as covering today — the exact hole that
+  // let yesterday's extremum through the guard that was written to stop it. An undated DSM
+  // is now trusted only once the local day is underway.
+  const dsmCoversToday = dsm?.coversMonthDay != null
+    ? dsm.coversMonthDay === todayMonthDay
+    : foldLocalHr >= EARLY_FOLD_HR;
   if (dsm && !dsmCoversToday)
     console.log(`[dsm-stale] ${city.station}: DSM covers ${dsm.coversMonthDay}, today is ${todayMonthDay} — ignored`);
   if (dsm && dsmCoversToday) {
-    if (dsm.dailyMaxF != null && (maxSoFar == null || dsm.dailyMaxF > maxSoFar)) {
+    if (dsm.dailyMaxF != null && (maxSoFar == null || dsm.dailyMaxF > maxSoFar)
+        && foldGuard(dsm.dailyMaxF, "max", "dsm")) {
       const dsmGain = maxSoFar != null ? dsm.dailyMaxF - maxSoFar : 0;
       console.log(`[dsm-fold] ${city.station}: maxSoFar ${maxSoFar?.toFixed(1) ?? "null"} -> ${dsm.dailyMaxF} (+${dsmGain.toFixed(1)}F at ${dsm.maxTimeLocal} local, issued ${dsm.issuedAt})`);
       maxSoFar = dsm.dailyMaxF;
     }
-    if (dsm.dailyMinF != null && (minSoFar == null || dsm.dailyMinF < minSoFar)) {
+    if (dsm.dailyMinF != null && (minSoFar == null || dsm.dailyMinF < minSoFar)
+        && foldGuard(dsm.dailyMinF, "min", "dsm")) {
       const dsmDrop = minSoFar != null ? minSoFar - dsm.dailyMinF : 0;
       console.log(`[dsm-fold] ${city.station}: minSoFar ${minSoFar?.toFixed(1) ?? "null"} -> ${dsm.dailyMinF} (-${dsmDrop.toFixed(1)}F at ${dsm.minTimeLocal} local)`);
       minSoFar = dsm.dailyMinF;
@@ -1663,14 +1724,20 @@ export default async (req) => {
         // because the analog was too sparse to yield a ramp (KLAX 8:53 AM read
         // high = current temp). Floors at damped persistence; flagged on the card.
         const g = thinAnalogGuard(card.dist.mean(), snap, card.components["R_analog(eff)"], result.hrsToPeak);
-        // NWS-base morning blend (2026-07-22): the served number stands on the NWS
-        // forecast high early (analog mornings read low) and hands over to the
-        // obs-analog approaching peak. Pure guarded point kept in claudePure.
+        // Fitted base blend (2026-07-23, research/analyze_stack.js): the served
+        // analog number is anchored on the Bayesian ensemble point — the NWS grid
+        // earns w=0.00 at every hour once the ensemble is in the stack — with the
+        // analog at its FITTED weight (0.30 near peak → 0.05 far out). Pure guarded
+        // point kept in claudePure so the divergence panel stays honest.
         const nwsBase = result.forecastHighF ?? result.nwsHighF ?? null;
-        const blend = nwsBaseBlend(g.point, nwsBase, result.hrsToPeak, result.maxSoFarCli ?? result.maxSoFar);
+        const baseSrc = Number.isFinite(result.mean) ? "bayes" : (nwsBase != null ? "nws" : null);
+        const basePoint = Number.isFinite(result.mean) ? result.mean : nwsBase;
+        const blend = baseBlend(g.point, basePoint, result.hrsToPeak, result.maxSoFarCli ?? result.maxSoFar);
         result.claudeHigh = Math.round(blend.point * 10) / 10;
         result.claudePure = Math.round(g.point * 10) / 10;
-        result.claudeBlendW = Math.round(blend.w * 100) / 100;
+        result.claudeAnalogW = Math.round(blend.w * 100) / 100;
+        result.claudeBlendBase = basePoint != null ? Math.round(basePoint * 10) / 10 : null;
+        result.claudeBlendBaseSrc = baseSrc;
         result.claudeNwsBase = nwsBase;
         result.claudeGuarded = g.guarded;
         result.claudePeakLocked = !!card.peak_locked;
