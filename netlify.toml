@@ -11,7 +11,7 @@
   node_bundler = "esbuild"
 
 [functions."jackson_trader"]
-  schedule = "*/5 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "*/5 * * * *"
 
 # Paper shadow trader — faithful $100 virtual mirror of jackson_trader's entry
 # engine. HTTP-triggered (Netlify schedules are throttled here); jackson_trader's
@@ -25,30 +25,30 @@
 # already dead under the throttle anyway). Drop to */3 instead of */5 if fast-sell needs
 # restoring once the scheduler is healthy.
 [functions."jackson_react"]
-  schedule = "*/5 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "*/5 * * * *"
 
 [functions."jackson_rain_trader"]
-  schedule = "7,37 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "7,37 * * * *"
 
 [functions."logger"]
-  schedule = "*/5 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "*/5 * * * *"
 
 # Shadow market-data logger (STRATEGY.md Step 0). Records the full Kalshi book + obs
 # every 15 min; places NO trades. Settle/export are triggered out-of-band via the route
 # below (external cron or manual): ?mode=settle joins CLI outcomes, ?mode=export emits the
 # eval_strategy.mjs dataset.
 [functions."market_logger"]
-  schedule = "*/15 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "*/15 * * * *"
 
 # Claude obs-analog engine (/api/claude). Default mode logs a Claude/Bayes/Market
 # decision per city to the verification scoreboard; ?mode=settle joins CLI outcomes,
 # ?mode=scoreboard scores. Places no trades. Hourly logging is plenty (obs move slowly).
 [functions."claude"]
-  schedule = "0 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "0 * * * *"
 
 # combo is a paper-only meta-strategy — hourly is plenty (was */30).
 [functions."combo_trader"]
-  schedule = "0 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "0 * * * *"
 
 # balance_snapshot + combo_balance_snapshot run daily via GitHub Actions
 # (.github/workflows/{balance,combo}-snapshot-cron.yml), so their Netlify schedules
@@ -62,7 +62,7 @@
 
 # pWin calibration drifts slowly — hourly is enough (was */30).
 [functions."pwin_calibration_fit"]
-  schedule = "0 * * * *"
+  # PAUSED 2026-07 (pause all crons): schedule = "0 * * * *"
 
 [[edge_functions]]
   path = "/*"
