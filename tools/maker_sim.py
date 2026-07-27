@@ -131,3 +131,9 @@ run(improve=0.00, reimbursed=True)
 run(improve=0.00, reimbursed=False)
 run(improve=0.01, reimbursed=True)
 run(improve=0.01, reimbursed=False)
+
+# --- divergence-threshold sweep: does a large-|nowcast-implied| niche beat adverse
+#     selection with limits? Best maker config (bid+1c, fees reimbursed). ------------
+print("\nDIVERGENCE SWEEP (best maker: bid+1c, fees reimbursed) — does extreme divergence help?")
+for em in (1.0, 2.0, 3.0, 4.0, 5.0):
+    run(improve=0.01, reimbursed=True, edge_min=em)
